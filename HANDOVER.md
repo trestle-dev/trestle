@@ -12,10 +12,25 @@ github.com/trestle-dev/trestle
 ```
 
 The project is at product-definition/scaffold stage. Do not describe planned
-capabilities as implemented. `PLAN.md` records the delivery order and exit
-evidence. `ARCHITECTURE.md`, `API.md`, `UI.md`, `FUNCTIONS.md`, and
-`SECURITY.md` define the initial contracts. Keep them aligned as implementation
-turns decisions into tested behaviour.
+capabilities as implemented. `CHECKPOINTS.md` is the step-by-step execution
+handover; `PLAN.md` is the higher-level phase map. `ARCHITECTURE.md`, `API.md`,
+`UI.md`, `FUNCTIONS.md`, and `SECURITY.md` define the initial contracts. Keep
+them aligned as implementation turns decisions into tested behaviour.
+
+## Implementation handover
+
+Work through `CHECKPOINTS.md` in order. A checkpoint is not complete merely
+because its code exists: the dashboard slice, public website/documentation
+slice, tests, evidence record, and repository commits listed there are part of
+the same definition of done. Do not silently combine checkpoints or mark later
+work complete because an early abstraction appears capable of supporting it.
+
+The public site is developed continuously in the sibling
+`../trestle-dev.github.io` repository. It must be a substantial multi-page Nift
+site using minimalist dark-mode design and vanilla CSS/JavaScript. Add or deepen
+the relevant documentation when each product capability becomes real. Do not
+write the whole future manual at the beginning, and do not defer the website to
+the end. Planned features may be explained only when visibly labelled planned.
 
 ## Product position
 
@@ -98,8 +113,11 @@ For every coherent checkpoint:
 3. Run formatting, static analysis, tests, race checks, production builds, and
    frontend/Nift checks.
 4. Inspect the complete diff and repository status.
-5. Update `PLAN.md` with evidence and remaining uncertainty.
-6. Commit the coherent checkpoint. Commit generated website output separately
+5. Update `CHECKPOINTS.md` with evidence and remaining uncertainty; update
+   `PLAN.md` only when the phase-level plan changes.
+6. Complete the checkpoint's website/documentation slice and verify its claims
+   against the implementation.
+7. Commit the coherent checkpoint. Commit generated website output separately
    where a nested output repository requires it.
 
 Expected Go-era baseline gates once implementation exists:

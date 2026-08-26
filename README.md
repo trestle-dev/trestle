@@ -13,6 +13,7 @@ The repository is currently at product-definition/scaffold stage.
 Start with:
 
 - [HANDOVER.md](HANDOVER.md) — product invariants and engineering workflow
+- [CHECKPOINTS.md](CHECKPOINTS.md) — step-by-step implementation handover
 - [PLAN.md](PLAN.md) — ordered implementation programme
 - [ARCHITECTURE.md](ARCHITECTURE.md) — system and persistence boundaries
 - [API.md](API.md) — language-neutral API contract direction

@@ -5,6 +5,9 @@ only when its exit evidence exists; a UI mock or happy-path handler alone is
 not completion. Dogfood the evolving platform with a small issue and incident
 tracker so schema, auth, files, realtime, jobs, and backups meet a real use case.
 
+`CHECKPOINTS.md` decomposes these phases into the authoritative execution order,
+including dashboard and continuously maintained public-website deliverables.
+
 ## 0. Contracts and test harness
 
 - Establish Go module, package boundaries, configuration precedence, structured
