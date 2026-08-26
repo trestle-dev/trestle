@@ -12,7 +12,7 @@ import (
 	_ "modernc.org/sqlite"
 )
 
-const CurrentVersion = 5
+const CurrentVersion = 6
 
 type Store struct {
 	db   *sql.DB
@@ -111,6 +111,20 @@ CREATE TABLE _trestle_app_sessions (
   replaced_by TEXT
 ) STRICT;
 CREATE INDEX _trestle_app_sessions_user ON _trestle_app_sessions(user_id);
+`}, {6, "scoped backend credentials", `
+CREATE TABLE _trestle_credentials (
+  id TEXT PRIMARY KEY,
+  kind TEXT NOT NULL CHECK(kind IN ('service','personal')),
+  name TEXT NOT NULL,
+  owner_admin_id TEXT REFERENCES _trestle_admins(id) ON DELETE CASCADE,
+  secret_hash BLOB NOT NULL UNIQUE,
+  scopes TEXT NOT NULL,
+  created_at TEXT NOT NULL,
+  expires_at TEXT,
+  revoked_at TEXT,
+  last_used_at TEXT
+) STRICT;
+CREATE INDEX _trestle_credentials_kind ON _trestle_credentials(kind);
 `}}
 
 func Open(ctx context.Context, dataDir string) (*Store, error) {

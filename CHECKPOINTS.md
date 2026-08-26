@@ -392,7 +392,7 @@ revocation, disabled-user, timing, and cross-identity confusion tests pass.
 
 ## CP10 — Service accounts and administrative tokens
 
-Status: pending
+Status: complete
 
 Application:
 

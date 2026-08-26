@@ -15,13 +15,15 @@ import (
 	"github.com/trestle-dev/trestle/internal/adminauth"
 	"github.com/trestle-dev/trestle/internal/collections"
 	"github.com/trestle-dev/trestle/internal/httperr"
+	"github.com/trestle-dev/trestle/internal/identities"
 	querylang "github.com/trestle-dev/trestle/internal/query"
 )
 
 type Handler struct {
-	db   *sql.DB
-	auth *adminauth.Handler
-	now  func() time.Time
+	db          *sql.DB
+	auth        *adminauth.Handler
+	credentials *identities.Handler
+	now         func() time.Time
 }
 type field struct {
 	id, name, kind string
@@ -44,12 +46,25 @@ type createInput struct {
 	Values map[string]any `json:"values"`
 }
 
-func New(db *sql.DB, auth *adminauth.Handler) *Handler {
-	return &Handler{db: db, auth: auth, now: time.Now}
+func New(db *sql.DB, auth *adminauth.Handler, credentials ...*identities.Handler) *Handler {
+	h := &Handler{db: db, auth: auth, now: time.Now}
+	if len(credentials) > 0 {
+		h.credentials = credentials[0]
+	}
+	return h
 }
 func (h *Handler) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 	mutation := r.Method != http.MethodGet
-	if _, ok := h.auth.Authorize(r, mutation); !ok {
+	_, adminOK := h.auth.Authorize(r, mutation)
+	credentialOK := false
+	if !adminOK && h.credentials != nil {
+		scope := "records:read"
+		if mutation {
+			scope = "records:write"
+		}
+		_, credentialOK = h.credentials.Authenticate(r, scope)
+	}
+	if !adminOK && !credentialOK {
 		status := 401
 		if mutation {
 			status = 403

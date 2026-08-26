@@ -15,6 +15,7 @@ import (
 	"github.com/trestle-dev/trestle/internal/buildinfo"
 	"github.com/trestle-dev/trestle/internal/collections"
 	"github.com/trestle-dev/trestle/internal/config"
+	"github.com/trestle-dev/trestle/internal/identities"
 	"github.com/trestle-dev/trestle/internal/records"
 	"github.com/trestle-dev/trestle/internal/server"
 	"github.com/trestle-dev/trestle/internal/store"
@@ -50,7 +51,8 @@ func main() {
 	}
 	admin := adminauth.New(database.DB())
 	collectionAdmin := collections.New(database.DB(), admin)
-	recordAPI := records.New(database.DB(), admin)
+	credentials := identities.New(database.DB(), admin)
+	recordAPI := records.New(database.DB(), admin, credentials)
 	applicationAuth := appauth.New(database.DB(), admin)
 	apiRoutes := http.NewServeMux()
 	apiRoutes.Handle("/api/v1/auth/", applicationAuth)
@@ -61,6 +63,8 @@ func main() {
 	adminRoutes.Handle("/admin/v1/data/", recordAPI)
 	adminRoutes.Handle("/admin/v1/app-users", applicationAuth)
 	adminRoutes.Handle("/admin/v1/app-users/", applicationAuth)
+	adminRoutes.Handle("/admin/v1/credentials", credentials)
+	adminRoutes.Handle("/admin/v1/credentials/", credentials)
 	adminRoutes.Handle("/", admin)
 	app := server.NewWithHandlers(logger, dashboard, apiRoutes, adminRoutes)
 	httpServer := &http.Server{Addr: cfg.Listen, Handler: app.Handler(), ReadHeaderTimeout: 5_000_000_000, IdleTimeout: 60_000_000_000}
