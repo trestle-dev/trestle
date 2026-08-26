@@ -65,16 +65,16 @@ Known limits: <honest remaining limits or none>
 
 ## CP00 — Baseline, contracts, and repository gates
 
-Status: implemented; Go CI verification pending
+Status: complete
 
 Application commit: recorded in Git history for CP00
 Website output commit: recorded in the nested website repository for CP00
 Website source commit: recorded in the website source repository for CP00
-Verified: Nift build/status 11/11; website local-link check 9 HTML pages;
-JavaScript syntax; JSON parsing; Git diff checks. Go sources and tests are wired
-into CI, but the handoff runtime has no Go executable.
-Known limits: Go test, race, vet, and six-target compilation require CI or a Go
-toolchain. Trestle is still a scaffold and is not an installable server.
+Verified: Go tests, race tests, vet, six release-target builds; Nift build/status
+11/11; website local-link check 9 HTML pages; JavaScript syntax; JSON parsing;
+Git diff checks.
+Known limits: Trestle is still pre-release; later checkpoints supply persistence,
+administration, collections, and release packaging.
 
 Application:
 
@@ -108,7 +108,17 @@ contradict one another.
 
 ## CP01 — Process lifecycle and configuration
 
-Status: pending
+Status: complete
+
+Application commit: recorded in Git history for CP01
+Website output commit: recorded in the nested website repository for CP01
+Website source commit: recorded in the website source repository for CP01
+Verified: configuration unit matrix; health/readiness/request-ID integration
+tests; Go tests, race tests, vet, six release-target builds; Nift build/status;
+website local links and JavaScript syntax.
+Known limits: configuration files and deployment service definitions arrive in
+later operational checkpoints; readiness currently represents process readiness
+because database startup belongs to CP02.
 
 Application:
 
