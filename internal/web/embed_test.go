@@ -50,3 +50,16 @@ func TestMissingAssetDoesNotFallback(t *testing.T) {
 		t.Fatalf("got %d", w.Code)
 	}
 }
+
+func TestDashboardRetainsTopLevelAndCollectionRoutes(t *testing.T) {
+	script, err := embedded.ReadFile("public/assets/js/script.js")
+	if err != nil {
+		t.Fatal(err)
+	}
+	source := string(script)
+	for _, required := range []string{"restoreDashboardRoute", "openCollectionRoute", "/collections/${encodeURIComponent(collection)}", "trestle:authenticated", "popstate"} {
+		if !strings.Contains(source, required) {
+			t.Errorf("dashboard routing is missing %q", required)
+		}
+	}
+}
