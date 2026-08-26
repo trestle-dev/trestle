@@ -555,7 +555,7 @@ Gate: rollback, crash-after-claim, lease expiry/theft, duplicate execution,
 
 ## CP17 — Signed webhooks
 
-Status: pending
+Status: complete
 
 Application:
 

@@ -25,6 +25,7 @@ import (
 	"github.com/trestle-dev/trestle/internal/server"
 	"github.com/trestle-dev/trestle/internal/store"
 	"github.com/trestle-dev/trestle/internal/web"
+	"github.com/trestle-dev/trestle/internal/webhooks"
 )
 
 func main() {
@@ -65,6 +66,12 @@ func main() {
 	recordAPI.ConfigureEvents(eventAPI)
 	auditAPI := audit.New(database.DB(), admin)
 	jobAPI := jobs.New(database.DB(), admin)
+	webhookAPI, err := webhooks.New(database.DB(), admin, jobAPI, cfg.DataDir)
+	if err != nil {
+		logger.Error("webhook initialization failed", "error", err)
+		os.Exit(1)
+	}
+	eventAPI.ConfigureDispatcher(webhookAPI)
 	recordAPI.ConfigureAudit(auditAPI)
 	fileAPI, err := filestore.New(database.DB(), admin, credentials, cfg.DataDir, filestore.Options{Backend: cfg.StorageBackend, S3Endpoint: cfg.S3Endpoint, S3Region: cfg.S3Region, S3Bucket: cfg.S3Bucket, S3AccessKey: cfg.S3AccessKey, S3SecretKey: cfg.S3SecretKey})
 	if err != nil {
@@ -94,6 +101,8 @@ func main() {
 	adminRoutes.Handle("/admin/v1/operations", auditAPI)
 	adminRoutes.Handle("/admin/v1/jobs", jobAPI)
 	adminRoutes.Handle("/admin/v1/jobs/", jobAPI)
+	adminRoutes.Handle("/admin/v1/webhooks", webhookAPI)
+	adminRoutes.Handle("/admin/v1/webhooks/", webhookAPI)
 	adminRoutes.Handle("/", admin)
 	app := server.NewWithHandlers(logger, dashboard, apiRoutes, adminRoutes)
 	httpServer := &http.Server{Addr: cfg.Listen, Handler: app.Handler(), ReadHeaderTimeout: 5_000_000_000, IdleTimeout: 60_000_000_000}

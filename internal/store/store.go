@@ -12,7 +12,7 @@ import (
 	_ "modernc.org/sqlite"
 )
 
-const CurrentVersion = 11
+const CurrentVersion = 12
 
 type Store struct {
 	db   *sql.DB
@@ -182,6 +182,13 @@ CREATE TABLE _trestle_jobs (
   updated_at TEXT NOT NULL
 ) STRICT;
 CREATE INDEX _trestle_jobs_claim ON _trestle_jobs(status,available_at,id);
+`}, {12, "signed webhooks", `
+CREATE TABLE _trestle_webhooks (
+ id TEXT PRIMARY KEY, name TEXT NOT NULL, url TEXT NOT NULL,
+ topics TEXT NOT NULL, secret_cipher BLOB NOT NULL,
+ enabled INTEGER NOT NULL DEFAULT 1 CHECK(enabled IN (0,1)),
+ created_at TEXT NOT NULL, updated_at TEXT NOT NULL
+) STRICT;
 `}}
 
 func Open(ctx context.Context, dataDir string) (*Store, error) {

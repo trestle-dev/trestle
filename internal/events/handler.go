@@ -14,12 +14,19 @@ import (
 	"github.com/trestle-dev/trestle/internal/identities"
 )
 
+type Dispatcher interface {
+	Dispatch(context.Context, *sql.Tx, string, string, string, any) error
+}
 type Handler struct {
 	db          *sql.DB
 	admin       *adminauth.Handler
 	credentials *identities.Handler
 	now         func() time.Time
+	dispatcher  Dispatcher
 }
+
+func (h *Handler) ConfigureDispatcher(dispatcher Dispatcher) { h.dispatcher = dispatcher }
+
 type Event struct {
 	Sequence   int64  `json:"sequence"`
 	OccurredAt string `json:"occurredAt"`
@@ -38,6 +45,9 @@ func (h *Handler) Emit(ctx context.Context, tx *sql.Tx, topic, collection, recor
 		return err
 	}
 	_, err = tx.ExecContext(ctx, "INSERT INTO _trestle_events(occurred_at,topic,collection_name,record_id,payload_json) VALUES(?,?,?,?,?)", h.now().UTC().Format(time.RFC3339Nano), topic, null(collection), null(recordID), string(encoded))
+	if err == nil && h.dispatcher != nil {
+		err = h.dispatcher.Dispatch(ctx, tx, topic, collection, recordID, payload)
+	}
 	return err
 }
 func (h *Handler) ServeHTTP(w http.ResponseWriter, r *http.Request) {

@@ -23,7 +23,8 @@
     "content/assets/js/rules.js",
     "content/assets/js/script.js",
     "content/assets/js/selects.js",
-    "content/assets/js/users.js"
+    "content/assets/js/users.js",
+    "content/assets/js/webhooks.js"
   ],
   "reqs": []
 }
