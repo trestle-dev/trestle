@@ -485,7 +485,7 @@ credential leakage, signing-expiry, and interrupted multipart tests pass.
 
 ## CP14 — Durable event journal and realtime SSE
 
-Status: pending
+Status: complete
 
 Application:
 

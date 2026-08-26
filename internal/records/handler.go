@@ -17,6 +17,7 @@ import (
 	"github.com/trestle-dev/trestle/internal/adminauth"
 	"github.com/trestle-dev/trestle/internal/appauth"
 	"github.com/trestle-dev/trestle/internal/collections"
+	"github.com/trestle-dev/trestle/internal/events"
 	"github.com/trestle-dev/trestle/internal/httperr"
 	"github.com/trestle-dev/trestle/internal/identities"
 	querylang "github.com/trestle-dev/trestle/internal/query"
@@ -29,6 +30,7 @@ type Handler struct {
 	credentials *identities.Handler
 	users       *appauth.Handler
 	ruleHandler *rules.Handler
+	events      *events.Handler
 	now         func() time.Time
 }
 type field struct {
@@ -62,6 +64,7 @@ func New(db *sql.DB, auth *adminauth.Handler, credentials ...*identities.Handler
 func (h *Handler) ConfigureAccess(users *appauth.Handler, ruleHandler *rules.Handler) {
 	h.users, h.ruleHandler = users, ruleHandler
 }
+func (h *Handler) ConfigureEvents(eventHandler *events.Handler) { h.events = eventHandler }
 func (h *Handler) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 	mutation := r.Method != http.MethodGet
 	_, adminOK := h.auth.Authorize(r, mutation)
@@ -335,6 +338,11 @@ func (h *Handler) insert(r *http.Request, tx *sql.Tx, s schema, in createInput) 
 	if err != nil {
 		return Record{}, nil, err
 	}
+	if h.events != nil {
+		if err = h.events.Emit(r.Context(), tx, "record.created", s.name, id, map[string]any{"values": values}); err != nil {
+			return Record{}, nil, err
+		}
+	}
 	return Record{ID: id, Version: 1, CreatedAt: now, UpdatedAt: now, Values: values}, nil, nil
 }
 func (h *Handler) list(w http.ResponseWriter, r *http.Request, s schema, rowRule string, actor rules.Actor) {
@@ -547,7 +555,13 @@ func (h *Handler) update(w http.ResponseWriter, r *http.Request, s schema, id st
 		args = append(args, encodeValue(f, values[f.name]))
 	}
 	args = append(args, id, version)
-	result, err := h.db.ExecContext(r.Context(), "UPDATE "+quote(s.table)+" SET "+strings.Join(sets, ",")+" WHERE _id=? AND _version=?", args...)
+	tx, err := h.db.BeginTx(r.Context(), nil)
+	if err != nil {
+		writeError(w, 500, "internal_error", "The request could not be completed.")
+		return
+	}
+	defer tx.Rollback()
+	result, err := tx.ExecContext(r.Context(), "UPDATE "+quote(s.table)+" SET "+strings.Join(sets, ",")+" WHERE _id=? AND _version=?", args...)
 	if err != nil {
 		writeError(w, 409, "record_conflict", "The record conflicts with the collection schema.")
 		return
@@ -555,6 +569,16 @@ func (h *Handler) update(w http.ResponseWriter, r *http.Request, s schema, id st
 	n, _ := result.RowsAffected()
 	if n == 0 {
 		writeError(w, 412, "version_conflict", "The record changed since it was read.")
+		return
+	}
+	if h.events != nil {
+		if err = h.events.Emit(r.Context(), tx, "record.updated", s.name, id, map[string]any{"values": values, "version": version + 1}); err != nil {
+			writeError(w, 500, "internal_error", "The request could not be completed.")
+			return
+		}
+	}
+	if err = tx.Commit(); err != nil {
+		writeError(w, 500, "internal_error", "The request could not be completed.")
 		return
 	}
 	current.Version = version + 1
@@ -568,7 +592,13 @@ func (h *Handler) remove(w http.ResponseWriter, r *http.Request, s schema, id st
 	if !ok {
 		return
 	}
-	result, err := h.db.ExecContext(r.Context(), "DELETE FROM "+quote(s.table)+" WHERE _id=? AND _version=?", id, version)
+	tx, err := h.db.BeginTx(r.Context(), nil)
+	if err != nil {
+		writeError(w, 500, "internal_error", "The request could not be completed.")
+		return
+	}
+	defer tx.Rollback()
+	result, err := tx.ExecContext(r.Context(), "DELETE FROM "+quote(s.table)+" WHERE _id=? AND _version=?", id, version)
 	if err != nil {
 		writeError(w, 500, "internal_error", "The request could not be completed.")
 		return
@@ -576,6 +606,16 @@ func (h *Handler) remove(w http.ResponseWriter, r *http.Request, s schema, id st
 	n, _ := result.RowsAffected()
 	if n == 0 {
 		writeError(w, 412, "version_conflict", "The record was missing or changed since it was read.")
+		return
+	}
+	if h.events != nil {
+		if err = h.events.Emit(r.Context(), tx, "record.deleted", s.name, id, map[string]any{"version": version}); err != nil {
+			writeError(w, 500, "internal_error", "The request could not be completed.")
+			return
+		}
+	}
+	if err = tx.Commit(); err != nil {
+		writeError(w, 500, "internal_error", "The request could not be completed.")
 		return
 	}
 	w.WriteHeader(204)

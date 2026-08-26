@@ -14,6 +14,7 @@
   "dependencies": [
     "content/assets/css/auth.css",
     "content/assets/css/collections.css",
+    "content/assets/css/events.css",
     "content/assets/css/forms.css",
     "content/assets/css/records.css",
     "content/assets/css/style.css"

@@ -16,6 +16,7 @@
     "content/assets/js/credentials.js",
     "content/assets/js/files.js",
     "content/assets/js/logout.js",
+    "content/assets/js/realtime.js",
     "content/assets/js/records.js",
     "content/assets/js/rules.js",
     "content/assets/js/script.js",

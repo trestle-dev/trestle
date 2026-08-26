@@ -12,7 +12,7 @@ import (
 	_ "modernc.org/sqlite"
 )
 
-const CurrentVersion = 8
+const CurrentVersion = 9
 
 type Store struct {
 	db   *sql.DB
@@ -152,6 +152,16 @@ CREATE TABLE _trestle_files (
   created_at TEXT NOT NULL
 ) STRICT;
 CREATE INDEX _trestle_files_record ON _trestle_files(collection_name,record_id);
+`}, {9, "durable event journal", `
+CREATE TABLE _trestle_events (
+  sequence INTEGER PRIMARY KEY AUTOINCREMENT,
+  occurred_at TEXT NOT NULL,
+  topic TEXT NOT NULL,
+  collection_name TEXT,
+  record_id TEXT,
+  payload_json TEXT NOT NULL
+) STRICT;
+CREATE INDEX _trestle_events_topic_sequence ON _trestle_events(topic,sequence);
 `}}
 
 func Open(ctx context.Context, dataDir string) (*Store, error) {
