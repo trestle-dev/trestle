@@ -28,9 +28,12 @@ type Handler struct {
 	admin       *adminauth.Handler
 	credentials *identities.Handler
 	root        string
+	storage     objectStorage
+	provider    string
 	now         func() time.Time
 	quota       int64
 }
+type Options struct{ Backend, S3Endpoint, S3Region, S3Bucket, S3AccessKey, S3SecretKey string }
 type Metadata struct {
 	ID          string `json:"id"`
 	Name        string `json:"name"`
@@ -42,12 +45,18 @@ type Metadata struct {
 	CreatedAt   string `json:"createdAt"`
 }
 
-func New(db *sql.DB, admin *adminauth.Handler, credentials *identities.Handler, dataDir string) (*Handler, error) {
+func New(db *sql.DB, admin *adminauth.Handler, credentials *identities.Handler, dataDir string, options ...Options) (*Handler, error) {
 	root := filepath.Join(dataDir, "files")
 	if err := os.MkdirAll(filepath.Join(root, ".staging"), 0700); err != nil {
 		return nil, err
 	}
-	return &Handler{db: db, admin: admin, credentials: credentials, root: root, now: time.Now, quota: DefaultQuota}, nil
+	var storage objectStorage = &localStorage{root: root}
+	provider := "local"
+	if len(options) > 0 && options[0].Backend == "s3" {
+		storage = newS3Storage(options[0])
+		provider = "s3"
+	}
+	return &Handler{db: db, admin: admin, credentials: credentials, root: root, storage: storage, provider: provider, now: time.Now, quota: DefaultQuota}, nil
 }
 func (h *Handler) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 	mutation := r.Method != http.MethodGet
@@ -66,6 +75,8 @@ func (h *Handler) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 		h.cleanup(w, r)
 	case r.Method == http.MethodGet && r.URL.Path == "/admin/v1/files":
 		h.list(w, r)
+	case r.Method == http.MethodGet && r.URL.Path == "/admin/v1/storage/status":
+		h.status(w, r)
 	default:
 		http.NotFound(w, r)
 	}
@@ -106,7 +117,6 @@ func (h *Handler) upload(w http.ResponseWriter, r *http.Request) {
 	id := "fil_" + token(18)
 	key := token(24)
 	staged := filepath.Join(h.root, ".staging", key)
-	target := filepath.Join(h.root, key)
 	out, err := os.OpenFile(staged, os.O_CREATE|os.O_EXCL|os.O_WRONLY, 0600)
 	if err != nil {
 		writeError(w, 500, "internal_error", "The request could not be completed.")
@@ -127,7 +137,7 @@ func (h *Handler) upload(w http.ResponseWriter, r *http.Request) {
 	if contentType == "" {
 		contentType = "application/octet-stream"
 	}
-	if err = os.Rename(staged, target); err != nil {
+	if err = h.storage.Put(r.Context(), key, staged, contentType); err != nil {
 		os.Remove(staged)
 		writeError(w, 500, "internal_error", "The request could not be completed.")
 		return
@@ -136,7 +146,7 @@ func (h *Handler) upload(w http.ResponseWriter, r *http.Request) {
 	digest := hex.EncodeToString(hash.Sum(nil))
 	_, err = h.db.ExecContext(r.Context(), "INSERT INTO _trestle_files(id,storage_key,original_name,content_type,size,sha256,collection_name,record_id,created_at) VALUES(?,?,?,?,?,?,?,?,?)", id, key, name, contentType, size, digest, nullForm(r, "collection"), nullForm(r, "recordId"), now)
 	if err != nil {
-		os.Remove(target)
+		_ = h.storage.Delete(r.Context(), key)
 		writeError(w, 409, "file_binding_failed", "The file could not be associated.")
 		return
 	}
@@ -161,22 +171,9 @@ func (h *Handler) download(w http.ResponseWriter, r *http.Request, id string) {
 		writeError(w, 404, "file_not_found", "The file was not found.")
 		return
 	}
-	path := filepath.Join(h.root, key)
-	info, err := os.Lstat(path)
-	if err != nil || !info.Mode().IsRegular() {
+	if err = h.storage.Serve(w, r, key, m); err != nil {
 		writeError(w, 404, "file_not_found", "The file was not found.")
-		return
 	}
-	file, err := os.Open(path)
-	if err != nil {
-		writeError(w, 404, "file_not_found", "The file was not found.")
-		return
-	}
-	defer file.Close()
-	w.Header().Set("Content-Type", m.ContentType)
-	w.Header().Set("Content-Disposition", `inline; filename="download"`)
-	w.Header().Set("X-Content-Type-Options", "nosniff")
-	http.ServeContent(w, r, m.Name, info.ModTime(), file)
 }
 func (h *Handler) remove(w http.ResponseWriter, r *http.Request, id string) {
 	_, key, err := h.lookup(r, id)
@@ -187,7 +184,7 @@ func (h *Handler) remove(w http.ResponseWriter, r *http.Request, id string) {
 	tx, _ := h.db.BeginTx(r.Context(), nil)
 	defer tx.Rollback()
 	tx.ExecContext(r.Context(), "DELETE FROM _trestle_files WHERE id=?", id)
-	if err = os.Remove(filepath.Join(h.root, key)); err != nil && !errors.Is(err, os.ErrNotExist) {
+	if err = h.storage.Delete(r.Context(), key); err != nil {
 		writeError(w, 500, "internal_error", "The file could not be removed.")
 		return
 	}
@@ -218,16 +215,7 @@ func (h *Handler) cleanup(w http.ResponseWriter, r *http.Request) {
 		known[key] = true
 	}
 	rows.Close()
-	entries, _ := os.ReadDir(h.root)
-	removed := 0
-	for _, entry := range entries {
-		if entry.IsDir() || known[entry.Name()] {
-			continue
-		}
-		if os.Remove(filepath.Join(h.root, entry.Name())) == nil {
-			removed++
-		}
-	}
+	removed, _ := h.storage.Cleanup(r.Context(), known)
 	staged, _ := os.ReadDir(filepath.Join(h.root, ".staging"))
 	for _, entry := range staged {
 		info, _ := entry.Info()
@@ -238,6 +226,9 @@ func (h *Handler) cleanup(w http.ResponseWriter, r *http.Request) {
 		}
 	}
 	writeJSON(w, 200, map[string]int{"removed": removed})
+}
+func (h *Handler) status(w http.ResponseWriter, r *http.Request) {
+	writeJSON(w, 200, map[string]any{"provider": h.provider, "configured": true, "quota": h.quota})
 }
 func nullForm(r *http.Request, key string) any {
 	if value := strings.TrimSpace(r.FormValue(key)); value != "" {

@@ -462,7 +462,7 @@ range, quota, unauthorized URL knowledge, and cleanup tests pass.
 
 ## CP13 — S3-compatible object storage
 
-Status: pending
+Status: complete
 
 Application:
 

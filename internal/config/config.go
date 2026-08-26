@@ -18,10 +18,16 @@ type Config struct {
 	ShutdownTimeout time.Duration
 	LogLevel        string
 	StaticDir       string
+	StorageBackend  string
+	S3Endpoint      string
+	S3Region        string
+	S3Bucket        string
+	S3AccessKey     string
+	S3SecretKey     string
 }
 
 func Defaults() Config {
-	return Config{Listen: "127.0.0.1:8090", DataDir: "./data", ShutdownTimeout: 10 * time.Second, LogLevel: "info"}
+	return Config{Listen: "127.0.0.1:8090", DataDir: "./data", ShutdownTimeout: 10 * time.Second, LogLevel: "info", StorageBackend: "local", S3Region: "us-east-1"}
 }
 
 func Load(args []string, getenv func(string) string) (Config, error) {
@@ -45,6 +51,16 @@ func Load(args []string, getenv func(string) string) (Config, error) {
 	if value := getenv("TRESTLE_STATIC_DIR"); value != "" {
 		cfg.StaticDir = value
 	}
+	if value := getenv("TRESTLE_STORAGE_BACKEND"); value != "" {
+		cfg.StorageBackend = value
+	}
+	cfg.S3Endpoint = getenv("TRESTLE_S3_ENDPOINT")
+	if value := getenv("TRESTLE_S3_REGION"); value != "" {
+		cfg.S3Region = value
+	}
+	cfg.S3Bucket = getenv("TRESTLE_S3_BUCKET")
+	cfg.S3AccessKey = getenv("TRESTLE_S3_ACCESS_KEY")
+	cfg.S3SecretKey = getenv("TRESTLE_S3_SECRET_KEY")
 
 	set := flag.NewFlagSet("trestle", flag.ContinueOnError)
 	set.SetOutput(io.Discard)
@@ -53,6 +69,7 @@ func Load(args []string, getenv func(string) string) (Config, error) {
 	set.DurationVar(&cfg.ShutdownTimeout, "shutdown-timeout", cfg.ShutdownTimeout, "graceful shutdown timeout")
 	set.StringVar(&cfg.LogLevel, "log-level", cfg.LogLevel, "debug, info, warn, or error")
 	set.StringVar(&cfg.StaticDir, "static-dir", cfg.StaticDir, "development static asset override")
+	set.StringVar(&cfg.StorageBackend, "storage-backend", cfg.StorageBackend, "local or s3")
 	if err := set.Parse(args); err != nil {
 		return Config{}, err
 	}
@@ -84,6 +101,17 @@ func (c Config) Validate() error {
 	case "debug", "info", "warn", "error":
 	default:
 		return errors.New("log level must be debug, info, warn, or error")
+	}
+	if c.StorageBackend != "local" && c.StorageBackend != "s3" {
+		return errors.New("storage backend must be local or s3")
+	}
+	if c.StorageBackend == "s3" {
+		if c.S3Endpoint == "" || c.S3Bucket == "" || c.S3AccessKey == "" || c.S3SecretKey == "" {
+			return errors.New("S3 endpoint, bucket, access key, and secret key are required")
+		}
+		if !strings.HasPrefix(c.S3Endpoint, "https://") && !strings.HasPrefix(c.S3Endpoint, "http://127.0.0.1") && !strings.HasPrefix(c.S3Endpoint, "http://localhost") {
+			return errors.New("S3 endpoint must use HTTPS except on loopback")
+		}
 	}
 	return nil
 }

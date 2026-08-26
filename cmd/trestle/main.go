@@ -58,7 +58,7 @@ func main() {
 	applicationAuth := appauth.New(database.DB(), admin)
 	accessRules := rules.New(database.DB(), admin)
 	recordAPI.ConfigureAccess(applicationAuth, accessRules)
-	fileAPI, err := filestore.New(database.DB(), admin, credentials, cfg.DataDir)
+	fileAPI, err := filestore.New(database.DB(), admin, credentials, cfg.DataDir, filestore.Options{Backend: cfg.StorageBackend, S3Endpoint: cfg.S3Endpoint, S3Region: cfg.S3Region, S3Bucket: cfg.S3Bucket, S3AccessKey: cfg.S3AccessKey, S3SecretKey: cfg.S3SecretKey})
 	if err != nil {
 		logger.Error("file storage initialization failed", "error", err)
 		os.Exit(1)
@@ -79,6 +79,7 @@ func main() {
 	adminRoutes.Handle("/admin/v1/collection-rules/", accessRules)
 	adminRoutes.Handle("/admin/v1/files", fileAPI)
 	adminRoutes.Handle("/admin/v1/files/", fileAPI)
+	adminRoutes.Handle("/admin/v1/storage/status", fileAPI)
 	adminRoutes.Handle("/", admin)
 	app := server.NewWithHandlers(logger, dashboard, apiRoutes, adminRoutes)
 	httpServer := &http.Server{Addr: cfg.Listen, Handler: app.Handler(), ReadHeaderTimeout: 5_000_000_000, IdleTimeout: 60_000_000_000}
