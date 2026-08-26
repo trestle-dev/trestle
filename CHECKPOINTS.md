@@ -252,7 +252,18 @@ and redaction tests pass; browser flows are keyboard-complete.
 
 ## CP05 — Base collection metadata
 
-Status: pending
+Status: complete
+
+Application commit: recorded in Git history for CP05
+Website output commit: recorded in the nested website repository for CP05
+Website source commit: recorded in the website source repository for CP05
+Verified: authenticated metadata create/list/get/update/delete; duplicate
+transaction rollback; naming/reserved/duplicate-field/type/default validation;
+unauthorized read and CSRF-denied mutation; dashboard JS syntax; Go tests, race,
+vet, six target builds; both Nift builds/status and website-link checks.
+Known limits: CP05 intentionally stores metadata only. Physical tables, type-aware
+default compatibility, relation targets, indexes, and destructive-change previews
+arrive in CP06.
 
 Application:
 

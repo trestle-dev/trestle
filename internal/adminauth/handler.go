@@ -34,6 +34,12 @@ type sessionResponse struct {
 	CSRFToken     string `json:"csrfToken,omitempty"`
 }
 
+type Principal struct {
+	AdminID   string
+	Email     string
+	SessionID string
+}
+
 func New(db *sql.DB) *Handler {
 	return &Handler{db: db, now: time.Now, limiter: newLimiter(10, time.Minute)}
 }
@@ -151,12 +157,29 @@ func (h *Handler) issueSession(w http.ResponseWriter, r *http.Request, adminID, 
 }
 
 func (h *Handler) current(w http.ResponseWriter, r *http.Request) {
-	id, email, _, ok := h.authenticate(r)
+	id, email, sessionID, ok := h.authenticate(r)
 	if !ok {
 		writeJSON(w, 200, sessionResponse{})
 		return
 	}
-	writeJSON(w, 200, sessionResponse{Authenticated: true, AdminID: id, Email: email})
+	csrf, _ := randomToken(24)
+	sum := sha256.Sum256([]byte(csrf))
+	if _, err := h.db.ExecContext(r.Context(), "UPDATE _trestle_admin_sessions SET csrf_hash=? WHERE id=?", sum[:], sessionID); err != nil {
+		writeError(w, 500, "internal_error", "The request could not be completed.")
+		return
+	}
+	writeJSON(w, 200, sessionResponse{Authenticated: true, AdminID: id, Email: email, CSRFToken: csrf})
+}
+
+func (h *Handler) Authorize(r *http.Request, mutation bool) (Principal, bool) {
+	id, email, sessionID, ok := h.authenticate(r)
+	if !ok {
+		return Principal{}, false
+	}
+	if mutation && !h.validCSRF(r, sessionID) {
+		return Principal{}, false
+	}
+	return Principal{AdminID: id, Email: email, SessionID: sessionID}, true
 }
 func (h *Handler) logout(w http.ResponseWriter, r *http.Request) {
 	_, _, sessionID, ok := h.authenticate(r)

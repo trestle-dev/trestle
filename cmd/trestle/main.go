@@ -12,6 +12,7 @@ import (
 
 	"github.com/trestle-dev/trestle/internal/adminauth"
 	"github.com/trestle-dev/trestle/internal/buildinfo"
+	"github.com/trestle-dev/trestle/internal/collections"
 	"github.com/trestle-dev/trestle/internal/config"
 	"github.com/trestle-dev/trestle/internal/server"
 	"github.com/trestle-dev/trestle/internal/store"
@@ -46,7 +47,12 @@ func main() {
 		logger.Warn("using development static override", "directory", cfg.StaticDir)
 	}
 	admin := adminauth.New(database.DB())
-	app := server.NewWithAdmin(logger, dashboard, admin)
+	collectionAdmin := collections.New(database.DB(), admin)
+	adminRoutes := http.NewServeMux()
+	adminRoutes.Handle("/admin/v1/collections", collectionAdmin)
+	adminRoutes.Handle("/admin/v1/collections/", collectionAdmin)
+	adminRoutes.Handle("/", admin)
+	app := server.NewWithAdmin(logger, dashboard, adminRoutes)
 	httpServer := &http.Server{Addr: cfg.Listen, Handler: app.Handler(), ReadHeaderTimeout: 5_000_000_000, IdleTimeout: 60_000_000_000}
 	ctx, stop := signal.NotifyContext(context.Background(), os.Interrupt, syscall.SIGTERM)
 	defer stop()
