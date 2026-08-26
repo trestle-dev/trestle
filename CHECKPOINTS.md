@@ -65,7 +65,16 @@ Known limits: <honest remaining limits or none>
 
 ## CP00 — Baseline, contracts, and repository gates
 
-Status: pending
+Status: implemented; Go CI verification pending
+
+Application commit: recorded in Git history for CP00
+Website output commit: recorded in the nested website repository for CP00
+Website source commit: recorded in the website source repository for CP00
+Verified: Nift build/status 11/11; website local-link check 9 HTML pages;
+JavaScript syntax; JSON parsing; Git diff checks. Go sources and tests are wired
+into CI, but the handoff runtime has no Go executable.
+Known limits: Go test, race, vet, and six-target compilation require CI or a Go
+toolchain. Trestle is still a scaffold and is not an installable server.
 
 Application:
 
