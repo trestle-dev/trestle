@@ -145,3 +145,64 @@ func TestDuplicateCollectionRollsBack(t *testing.T) {
 		t.Fatal(w.Body.String())
 	}
 }
+
+func TestPhysicalSchemaPreservesStableFieldData(t *testing.T) {
+	h, s := setupTest(t)
+	payload := input{Name: "notes", Fields: []Field{{Name: "body", Type: "text"}}}
+	w := call(t, h, s, "POST", "/admin/v1/collections", payload)
+	if w.Code != 201 {
+		t.Fatal(w.Body.String())
+	}
+	var created Collection
+	if json.Unmarshal(w.Body.Bytes(), &created) != nil {
+		t.Fatal("decode create")
+	}
+	table := PhysicalTableName(created.ID)
+	column := physicalColumn(created.Fields[0].ID)
+	if _, err := h.db.Exec("INSERT INTO " + quote(table) + "(_id,_created,_updated," + quote(column) + ") VALUES('rec_1','2026-01-01T00:00:00Z','2026-01-01T00:00:00Z','hello')"); err != nil {
+		t.Fatal(err)
+	}
+	payload.Fields[0].ID = created.Fields[0].ID
+	payload.Fields[0].Name = "content"
+	w = call(t, h, s, "PATCH", "/admin/v1/collections/notes", payload)
+	if w.Code != 200 {
+		t.Fatalf("rename: %d %s", w.Code, w.Body.String())
+	}
+	var value string
+	if err := h.db.QueryRow("SELECT " + quote(column) + " FROM " + quote(table) + " WHERE _id='rec_1'").Scan(&value); err != nil || value != "hello" {
+		t.Fatalf("preserved value=%q err=%v", value, err)
+	}
+}
+
+func TestDestructiveSchemaRequiresAcknowledgement(t *testing.T) {
+	h, s := setupTest(t)
+	payload := input{Name: "tasks", Fields: []Field{{Name: "title", Type: "text"}, {Name: "done", Type: "boolean"}}}
+	w := call(t, h, s, "POST", "/admin/v1/collections", payload)
+	if w.Code != 201 {
+		t.Fatal(w.Body.String())
+	}
+	var created Collection
+	json.Unmarshal(w.Body.Bytes(), &created)
+	payload.Fields = created.Fields[:1]
+	w = call(t, h, s, "PATCH", "/admin/v1/collections/tasks", payload)
+	if w.Code != 409 || !strings.Contains(w.Body.String(), "schema_acknowledgement_required") {
+		t.Fatalf("unacknowledged: %d %s", w.Code, w.Body.String())
+	}
+	var count int
+	if err := h.db.QueryRow("SELECT count(*) FROM _trestle_fields WHERE collection_id=?", created.ID).Scan(&count); err != nil || count != 2 {
+		t.Fatalf("metadata changed before acknowledgement: %d %v", count, err)
+	}
+	var b bytes.Buffer
+	json.NewEncoder(&b).Encode(payload)
+	r := httptest.NewRequest("PATCH", "http://example.test/admin/v1/collections/tasks", &b)
+	r.Host = "example.test"
+	r.Header.Set("Origin", "http://example.test")
+	r.Header.Set("X-Trestle-CSRF", s.csrf)
+	r.Header.Set("X-Trestle-Acknowledge-Schema", "true")
+	r.AddCookie(s.cookie)
+	w = httptest.NewRecorder()
+	h.ServeHTTP(w, r)
+	if w.Code != 200 {
+		t.Fatalf("acknowledged: %d %s", w.Code, w.Body.String())
+	}
+}

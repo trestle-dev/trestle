@@ -118,6 +118,7 @@ func (h *Handler) create(w http.ResponseWriter, r *http.Request) {
 	}
 	now := h.now().UTC().Format(time.RFC3339Nano)
 	id := newID("col_")
+	resolveFieldIDs(in.Fields, nil)
 	tx, err := h.db.BeginTx(r.Context(), nil)
 	if err != nil {
 		writeError(w, 500, "internal_error", "The request could not be completed.")
@@ -128,8 +129,12 @@ func (h *Handler) create(w http.ResponseWriter, r *http.Request) {
 		writeError(w, 409, "collection_exists", "A collection with that name already exists.")
 		return
 	}
-	if err = insertFields(r, tx, id, now, in.Fields, nil); err != nil {
+	if err = insertFields(r, tx, id, now, in.Fields); err != nil {
 		writeError(w, 500, "internal_error", "The request could not be completed.")
+		return
+	}
+	if err = createPhysical(r.Context(), tx, id, in.Fields); err != nil {
+		writeError(w, 422, "schema_change_failed", "The physical schema could not be created.")
 		return
 	}
 	if err = tx.Commit(); err != nil {
@@ -140,6 +145,14 @@ func (h *Handler) create(w http.ResponseWriter, r *http.Request) {
 	writeJSON(w, 201, item)
 }
 func (h *Handler) update(w http.ResponseWriter, r *http.Request, name string) {
+	before, loadErr := h.load(r, name)
+	if errors.Is(loadErr, sql.ErrNoRows) {
+		writeError(w, 404, "not_found", "The collection was not found.")
+		return
+	} else if loadErr != nil {
+		writeError(w, 500, "internal_error", "The request could not be completed.")
+		return
+	}
 	var in input
 	if !decode(w, r, &in) {
 		return
@@ -168,6 +181,7 @@ func (h *Handler) update(w http.ResponseWriter, r *http.Request, name string) {
 		return
 	}
 	existing := map[string]string{}
+	existingIDs := map[string]bool{}
 	rows, err := tx.QueryContext(r.Context(), "SELECT name,id FROM _trestle_fields WHERE collection_id=?", id)
 	if err != nil {
 		writeError(w, 500, "internal_error", "The request could not be completed.")
@@ -181,17 +195,33 @@ func (h *Handler) update(w http.ResponseWriter, r *http.Request, name string) {
 			return
 		}
 		existing[fieldName] = fieldID
+		existingIDs[fieldID] = true
 	}
 	if err = rows.Close(); err != nil {
 		writeError(w, 500, "internal_error", "The request could not be completed.")
+		return
+	}
+	resolveFieldIDs(in.Fields, existing)
+	for i := range in.Fields {
+		if in.Fields[i].ID != "" && !existingIDs[in.Fields[i].ID] && existing[in.Fields[i].Name] == "" {
+			in.Fields[i].ID = newID("fld_")
+		}
+	}
+	changes := destructiveChanges(before.Fields, in.Fields)
+	if len(changes) > 0 && r.Header.Get("X-Trestle-Acknowledge-Schema") != "true" {
+		writeJSON(w, 409, map[string]any{"error": map[string]any{"code": "schema_acknowledgement_required", "message": "The schema change requires explicit acknowledgement.", "changes": changes}})
 		return
 	}
 	if _, err = tx.ExecContext(r.Context(), "DELETE FROM _trestle_fields WHERE collection_id=?", id); err != nil {
 		writeError(w, 500, "internal_error", "The request could not be completed.")
 		return
 	}
-	if err = insertFields(r, tx, id, now, in.Fields, existing); err != nil {
+	if err = insertFields(r, tx, id, now, in.Fields); err != nil {
 		writeError(w, 500, "internal_error", "The request could not be completed.")
+		return
+	}
+	if err = rebuildPhysical(r.Context(), tx, id, before.Fields, in.Fields); err != nil {
+		writeError(w, 422, "schema_change_failed", "Existing records are incompatible with the requested schema.")
 		return
 	}
 	if err = tx.Commit(); err != nil {
@@ -202,7 +232,25 @@ func (h *Handler) update(w http.ResponseWriter, r *http.Request, name string) {
 	writeJSON(w, 200, item)
 }
 func (h *Handler) remove(w http.ResponseWriter, r *http.Request, name string) {
-	result, err := h.db.ExecContext(r.Context(), "DELETE FROM _trestle_collections WHERE name=?", name)
+	tx, err := h.db.BeginTx(r.Context(), nil)
+	if err != nil {
+		writeError(w, 500, "internal_error", "The request could not be completed.")
+		return
+	}
+	defer tx.Rollback()
+	var id string
+	if err = tx.QueryRowContext(r.Context(), "SELECT id FROM _trestle_collections WHERE name=?", name).Scan(&id); errors.Is(err, sql.ErrNoRows) {
+		writeError(w, 404, "not_found", "The collection was not found.")
+		return
+	} else if err != nil {
+		writeError(w, 500, "internal_error", "The request could not be completed.")
+		return
+	}
+	if _, err = tx.ExecContext(r.Context(), "DROP TABLE "+quote(PhysicalTableName(id))); err != nil {
+		writeError(w, 500, "internal_error", "The request could not be completed.")
+		return
+	}
+	result, err := tx.ExecContext(r.Context(), "DELETE FROM _trestle_collections WHERE name=?", name)
 	if err != nil {
 		writeError(w, 500, "internal_error", "The request could not be completed.")
 		return
@@ -210,6 +258,10 @@ func (h *Handler) remove(w http.ResponseWriter, r *http.Request, name string) {
 	n, _ := result.RowsAffected()
 	if n == 0 {
 		writeError(w, 404, "not_found", "The collection was not found.")
+		return
+	}
+	if err = tx.Commit(); err != nil {
+		writeError(w, 500, "internal_error", "The request could not be completed.")
 		return
 	}
 	w.WriteHeader(204)
@@ -243,17 +295,29 @@ func (h *Handler) load(r *http.Request, name string) (Collection, error) {
 	return item, rows.Err()
 }
 
-func insertFields(r *http.Request, tx *sql.Tx, collectionID, now string, fields []Field, existing map[string]string) error {
+func resolveFieldIDs(fields []Field, existing map[string]string) {
+	valid := map[string]bool{}
+	for _, id := range existing {
+		valid[id] = true
+	}
+	for i := range fields {
+		if valid[fields[i].ID] {
+			continue
+		}
+		if id := existing[fields[i].Name]; id != "" {
+			fields[i].ID = id
+		} else {
+			fields[i].ID = newID("fld_")
+		}
+	}
+}
+func insertFields(r *http.Request, tx *sql.Tx, collectionID, now string, fields []Field) error {
 	for i, f := range fields {
 		var def any
 		if len(f.Default) > 0 {
 			def = string(f.Default)
 		}
-		fieldID := existing[f.Name]
-		if fieldID == "" {
-			fieldID = newID("fld_")
-		}
-		_, err := tx.ExecContext(r.Context(), "INSERT INTO _trestle_fields(id,collection_id,position,name,type,required,is_unique,default_json,created_at) VALUES(?,?,?,?,?,?,?,?,?)", fieldID, collectionID, i, f.Name, f.Type, boolInt(f.Required), boolInt(f.Unique), def, now)
+		_, err := tx.ExecContext(r.Context(), "INSERT INTO _trestle_fields(id,collection_id,position,name,type,required,is_unique,default_json,created_at) VALUES(?,?,?,?,?,?,?,?,?)", f.ID, collectionID, i, f.Name, f.Type, boolInt(f.Required), boolInt(f.Unique), def, now)
 		if err != nil {
 			return err
 		}

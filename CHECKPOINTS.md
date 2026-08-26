@@ -287,7 +287,17 @@ UI operations round-trip through the admin API.
 
 ## CP06 — Physical schema changes and recovery
 
-Status: pending
+Status: complete
+
+Application commit: recorded in Git history for CP06
+Website output commit: recorded in the nested website repository for CP06
+Website source commit: recorded in the website source repository for CP06
+Verified: physical strict-table creation/deletion; stable internal identifier
+mapping; rename data preservation; destructive-change acknowledgement; metadata
+rollback before acknowledgement; incompatible-copy rollback; Go tests/race/vet,
+six cross-builds, Nift builds/status, JS syntax, and website-link checks.
+Known limits: record-aware relation targets become enforceable with CP07. Backup
+and restore remain deferred to CP20.
 
 Application:
 
