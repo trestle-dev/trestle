@@ -38,4 +38,16 @@ for (const file of html) {
 }
 
 if (missing.length) throw new Error(`broken local references:\n${missing.join("\n")}`);
+
+const scripts = files.filter((file) => file.endsWith(".js"));
+for (const file of scripts) {
+  const source = await readFile(file, "utf8");
+  const routeBindings = [...source.matchAll(/querySelector\(['"]\[data-route=[^\]]+\]['"]\)\.addEventListener\(['"]click['"]/g)];
+  const counts = new Map();
+  for (const binding of routeBindings) counts.set(binding[0], (counts.get(binding[0]) || 0) + 1);
+  const duplicates = [...counts.entries()].filter(([, count]) => count > 1);
+  if (duplicates.length) {
+    throw new Error(`duplicate route renderers in ${path.relative(root, file)}:\n${duplicates.map(([binding, count]) => `${count}x ${binding}`).join("\n")}`);
+  }
+}
 console.log(`checked ${html.length} HTML pages and ${files.length} files`);
