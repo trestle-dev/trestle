@@ -58,7 +58,8 @@ CP07 provides versioned CRUD at `/api/v1/collections/:collection/records` and
 the administrator equivalent at `/admin/v1/data/:collection/records`. Record
 updates and deletes require `If-Match`; creates accept `Idempotency-Key`.
 Lists are bounded to 100 items and support `fields` projection. Batch create is
-transactional and bounded to 100 records; request bodies are limited to 1 MiB.
+transactional and bounded to 1,000 records; record-write request bodies are
+limited to 8 MiB.
 
 Support bounded page size, deterministic sorting with an ID tie-breaker, field
 projection, and explicitly limited relation expansion. Cursor pagination is the

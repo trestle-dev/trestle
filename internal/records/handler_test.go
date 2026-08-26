@@ -6,6 +6,7 @@ import (
 	"encoding/json"
 	"net/http"
 	"net/http/httptest"
+	"strconv"
 	"strings"
 	"testing"
 
@@ -105,6 +106,18 @@ func TestValidationAndAtomicBatch(t *testing.T) {
 	w = invoke(t, h, s, "GET", "/api/v1/collections/issues/records", nil, nil)
 	if !strings.Contains(w.Body.String(), `"items":[]`) {
 		t.Fatalf("batch was not atomic: %s", w.Body.String())
+	}
+}
+
+func TestBatchAcceptsMoreThanOneHundredRecords(t *testing.T) {
+	h, s := setup(t)
+	records := make([]map[string]any, 101)
+	for i := range records {
+		records[i] = map[string]any{"values": map[string]any{"title": "batch-" + strconv.Itoa(i)}}
+	}
+	w := invoke(t, h, s, "POST", "/api/v1/collections/issues/records/batch", map[string]any{"records": records}, nil)
+	if w.Code != http.StatusCreated {
+		t.Fatalf("batch of 101 records: %d %s", w.Code, w.Body.String())
 	}
 }
 func TestMutationNeedsVersionAndCSRF(t *testing.T) {

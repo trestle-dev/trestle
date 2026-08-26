@@ -290,7 +290,7 @@ func (h *Handler) batchCreate(w http.ResponseWriter, r *http.Request, s schema) 
 	if !decode(w, r, &body) {
 		return
 	}
-	if len(body.Records) == 0 || len(body.Records) > 100 {
+	if len(body.Records) == 0 || len(body.Records) > 1000 {
 		writeValidation(w, []httperr.Field{{Path: "records", Code: "size"}})
 		return
 	}
@@ -755,7 +755,7 @@ func newID(prefix string) string {
 }
 func quote(identifier string) string { return `"` + strings.ReplaceAll(identifier, `"`, `""`) + `"` }
 func decode(w http.ResponseWriter, r *http.Request, out any) bool {
-	r.Body = http.MaxBytesReader(w, r.Body, 1<<20)
+	r.Body = http.MaxBytesReader(w, r.Body, 8<<20)
 	d := json.NewDecoder(r.Body)
 	d.DisallowUnknownFields()
 	if d.Decode(out) != nil {
