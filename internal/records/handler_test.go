@@ -143,3 +143,34 @@ func TestIdempotentCreateProjectionAndBounds(t *testing.T) {
 		t.Fatalf("limit %d %s", w.Code, w.Body.String())
 	}
 }
+
+func TestTypedFilterSortAndCursor(t *testing.T) {
+	h, s := setup(t)
+	for _, title := range []string{"alpha", "beta", "gamma"} {
+		w := invoke(t, h, s, "POST", "/api/v1/collections/issues/records", map[string]any{"values": map[string]any{"title": title}}, nil)
+		if w.Code != 201 {
+			t.Fatal(w.Body.String())
+		}
+	}
+	w := invoke(t, h, s, "GET", `/api/v1/collections/issues/records?filter=title%20~%20%22et%22`, nil, nil)
+	if w.Code != 200 || !strings.Contains(w.Body.String(), "beta") || strings.Contains(w.Body.String(), "alpha") {
+		t.Fatalf("filter %d %s", w.Code, w.Body.String())
+	}
+	w = invoke(t, h, s, "GET", `/api/v1/collections/issues/records?filter=title%20=%20%22x%27%20OR%201%3D1%20--%22`, nil, nil)
+	if w.Code != 200 || !strings.Contains(w.Body.String(), `"items":[]`) {
+		t.Fatalf("injection %d %s", w.Code, w.Body.String())
+	}
+	w = invoke(t, h, s, "GET", `/api/v1/collections/issues/records?limit=1`, nil, nil)
+	var page struct {
+		Items      []Record `json:"items"`
+		NextCursor string   `json:"nextCursor"`
+	}
+	json.Unmarshal(w.Body.Bytes(), &page)
+	if len(page.Items) != 1 || page.NextCursor == "" {
+		t.Fatalf("page: %s", w.Body.String())
+	}
+	w = invoke(t, h, s, "GET", `/api/v1/collections/issues/records?limit=1&cursor=`+page.NextCursor, nil, nil)
+	if w.Code != 200 || strings.Contains(w.Body.String(), page.Items[0].ID) {
+		t.Fatalf("cursor %d %s", w.Code, w.Body.String())
+	}
+}

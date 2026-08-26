@@ -15,6 +15,7 @@ import (
 	"github.com/trestle-dev/trestle/internal/adminauth"
 	"github.com/trestle-dev/trestle/internal/collections"
 	"github.com/trestle-dev/trestle/internal/httperr"
+	querylang "github.com/trestle-dev/trestle/internal/query"
 )
 
 type Handler struct {
@@ -264,8 +265,12 @@ func (h *Handler) list(w http.ResponseWriter, r *http.Request, s schema) {
 		}
 		limit = parsed
 	}
-	query, args := selectSQL(s, "", limit)
-	rows, err := h.db.QueryContext(r.Context(), query, args...)
+	statement, args, err := listSQL(s, r, limit)
+	if err != nil {
+		writeError(w, 400, "invalid_query", err.Error())
+		return
+	}
+	rows, err := h.db.QueryContext(r.Context(), statement, args...)
 	if err != nil {
 		writeError(w, 500, "internal_error", "The request could not be completed.")
 		return
@@ -280,7 +285,69 @@ func (h *Handler) list(w http.ResponseWriter, r *http.Request, s schema) {
 		}
 		items = append(items, projectRecord(record, projection(r)))
 	}
-	writeJSON(w, 200, map[string]any{"items": items})
+	next := ""
+	if len(items) == limit {
+		next = base64.RawURLEncoding.EncodeToString([]byte(items[len(items)-1].ID))
+	}
+	writeJSON(w, 200, map[string]any{"items": items, "nextCursor": next})
+}
+
+func listSQL(s schema, r *http.Request, limit int) (string, []any, error) {
+	columns := []string{"_id", "_version", "_created", "_updated"}
+	fields := map[string]querylang.Field{
+		"id": {Column: "_id", Type: "text"}, "createdAt": {Column: "_created", Type: "datetime"}, "updatedAt": {Column: "_updated", Type: "datetime"},
+	}
+	for _, f := range s.fields {
+		column := collections.PhysicalColumnName(f.id)
+		columns = append(columns, quote(column))
+		fields[f.name] = querylang.Field{Column: column, Type: f.kind}
+	}
+	expr, err := querylang.Parse(r.URL.Query().Get("filter"))
+	if err != nil {
+		return "", nil, err
+	}
+	where, args, err := querylang.Compile(expr, fields)
+	if err != nil {
+		return "", nil, err
+	}
+	sortName := strings.TrimSpace(r.URL.Query().Get("sort"))
+	direction := "ASC"
+	if strings.HasPrefix(sortName, "-") {
+		direction = "DESC"
+		sortName = strings.TrimPrefix(sortName, "-")
+	}
+	if sortName == "" {
+		sortName = "id"
+	}
+	sortField, ok := fields[sortName]
+	if !ok {
+		return "", nil, errors.New("unknown sort field")
+	}
+	if cursor := r.URL.Query().Get("cursor"); cursor != "" {
+		if sortName != "id" || direction != "ASC" {
+			return "", nil, errors.New("cursor currently requires ascending id sort")
+		}
+		decoded, decodeErr := base64.RawURLEncoding.DecodeString(cursor)
+		if decodeErr != nil || !validID(string(decoded)) {
+			return "", nil, errors.New("invalid cursor")
+		}
+		if where != "" {
+			where += " AND "
+		}
+		where += `"_id" > ?`
+		args = append(args, string(decoded))
+	}
+	statement := "SELECT " + strings.Join(columns, ",") + " FROM " + quote(s.table)
+	if where != "" {
+		statement += " WHERE " + where
+	}
+	statement += " ORDER BY " + quote(sortField.Column) + " " + direction
+	if sortField.Column != "_id" {
+		statement += `,"_id" ASC`
+	}
+	statement += " LIMIT ?"
+	args = append(args, limit)
+	return statement, args, nil
 }
 func (h *Handler) get(w http.ResponseWriter, r *http.Request, s schema, id string) {
 	record, err := h.fetch(r, s, id)

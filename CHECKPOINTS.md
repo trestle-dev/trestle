@@ -345,7 +345,7 @@ conflict, retry, and large-record bounds pass.
 
 ## CP08 — Query language and pagination
 
-Status: pending
+Status: complete
 
 Application:
 
