@@ -11,3 +11,5 @@
 @input("content/assets/css/jobs.css")
 @input("content/assets/css/api.css")
 @input("content/assets/css/backups.css")
+/* Route changes focus this non-interactive region for screen-reader context. */
+.workspace:focus-visible{outline:0}
