@@ -631,7 +631,7 @@ Gate: generated artifacts reproduce with no hand edits; a small application can
 
 ## CP20 — Backups, restore, export, and import
 
-Status: pending
+Status: complete
 
 Application:
 

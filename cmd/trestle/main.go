@@ -14,6 +14,7 @@ import (
 	"github.com/trestle-dev/trestle/internal/apidocs"
 	"github.com/trestle-dev/trestle/internal/appauth"
 	"github.com/trestle-dev/trestle/internal/audit"
+	"github.com/trestle-dev/trestle/internal/backup"
 	"github.com/trestle-dev/trestle/internal/buildinfo"
 	"github.com/trestle-dev/trestle/internal/collections"
 	"github.com/trestle-dev/trestle/internal/config"
@@ -76,6 +77,11 @@ func main() {
 	eventAPI.ConfigureDispatcher(webhookAPI)
 	functionAPI := functionapi.New(database.DB(), admin, jobAPI, functionapi.Options{Region: cfg.AWSRegion, AccessKey: cfg.AWSAccessKey, SecretKey: cfg.AWSSecretKey})
 	apiDocs := apidocs.New(database.DB(), admin)
+	backupAPI, err := backup.New(database.DB(), admin, cfg.DataDir, cfg.StorageBackend)
+	if err != nil {
+		logger.Error("backup initialization failed", "error", err)
+		os.Exit(1)
+	}
 	eventAPI.ConfigureDispatcher(functionAPI)
 	recordAPI.ConfigureAudit(auditAPI)
 	fileAPI, err := filestore.New(database.DB(), admin, credentials, cfg.DataDir, filestore.Options{Backend: cfg.StorageBackend, S3Endpoint: cfg.S3Endpoint, S3Region: cfg.S3Region, S3Bucket: cfg.S3Bucket, S3AccessKey: cfg.S3AccessKey, S3SecretKey: cfg.S3SecretKey})
@@ -113,6 +119,11 @@ func main() {
 	adminRoutes.Handle("/admin/v1/functions", functionAPI)
 	adminRoutes.Handle("/admin/v1/functions/", functionAPI)
 	adminRoutes.Handle("/admin/v1/api/schema", apiDocs)
+	adminRoutes.Handle("/admin/v1/backups", backupAPI)
+	adminRoutes.Handle("/admin/v1/backups/", backupAPI)
+	adminRoutes.Handle("/admin/v1/restores/preflight", backupAPI)
+	adminRoutes.Handle("/admin/v1/export", backupAPI)
+	adminRoutes.Handle("/admin/v1/imports/dry-run", backupAPI)
 	adminRoutes.Handle("/", admin)
 	app := server.NewWithHandlers(logger, dashboard, apiRoutes, adminRoutes)
 	httpServer := &http.Server{Addr: cfg.Listen, Handler: app.Handler(), ReadHeaderTimeout: 5_000_000_000, IdleTimeout: 60_000_000_000}

@@ -16,3 +16,4 @@ async function refreshCSRF(){try{const session=await jsonRequest("/admin/v1/sess
 @input("content/assets/js/webhooks.js")
 @input("content/assets/js/lambda.js")
 @input("content/assets/js/api-explorer.js")
+@input("content/assets/js/backups.js")

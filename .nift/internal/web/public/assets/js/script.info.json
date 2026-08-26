@@ -14,6 +14,7 @@
   "dependencies": [
     "content/assets/js/api-explorer.js",
     "content/assets/js/audit.js",
+    "content/assets/js/backups.js",
     "content/assets/js/collections.js",
     "content/assets/js/credentials.js",
     "content/assets/js/files.js",
