@@ -10,6 +10,7 @@ import (
 	"os/signal"
 	"syscall"
 
+	"github.com/trestle-dev/trestle/internal/adminauth"
 	"github.com/trestle-dev/trestle/internal/buildinfo"
 	"github.com/trestle-dev/trestle/internal/config"
 	"github.com/trestle-dev/trestle/internal/server"
@@ -44,7 +45,8 @@ func main() {
 	if cfg.StaticDir != "" {
 		logger.Warn("using development static override", "directory", cfg.StaticDir)
 	}
-	app := server.New(logger, dashboard)
+	admin := adminauth.New(database.DB())
+	app := server.NewWithAdmin(logger, dashboard, admin)
 	httpServer := &http.Server{Addr: cfg.Listen, Handler: app.Handler(), ReadHeaderTimeout: 5_000_000_000, IdleTimeout: 60_000_000_000}
 	ctx, stop := signal.NotifyContext(context.Background(), os.Interrupt, syscall.SIGTERM)
 	defer stop()

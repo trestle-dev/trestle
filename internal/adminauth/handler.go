@@ -1,0 +1,282 @@
+package adminauth
+
+import (
+	"crypto/rand"
+	"crypto/sha256"
+	"database/sql"
+	"encoding/base64"
+	"encoding/json"
+	"net"
+	"net/http"
+	"net/mail"
+	"strings"
+	"sync"
+	"time"
+
+	"github.com/trestle-dev/trestle/internal/httperr"
+)
+
+const cookieName = "trestle_admin_session"
+
+type Handler struct {
+	db      *sql.DB
+	now     func() time.Time
+	limiter *limiter
+}
+type credentials struct {
+	Email    string `json:"email"`
+	Password string `json:"password"`
+}
+type sessionResponse struct {
+	Authenticated bool   `json:"authenticated"`
+	AdminID       string `json:"adminId,omitempty"`
+	Email         string `json:"email,omitempty"`
+	CSRFToken     string `json:"csrfToken,omitempty"`
+}
+
+func New(db *sql.DB) *Handler {
+	return &Handler{db: db, now: time.Now, limiter: newLimiter(10, time.Minute)}
+}
+
+func (h *Handler) ServeHTTP(w http.ResponseWriter, r *http.Request) {
+	w.Header().Set("Cache-Control", "no-store")
+	switch {
+	case r.Method == http.MethodGet && r.URL.Path == "/admin/v1/setup/status":
+		h.setupStatus(w, r)
+	case r.Method == http.MethodPost && r.URL.Path == "/admin/v1/setup":
+		h.setup(w, r)
+	case r.Method == http.MethodPost && r.URL.Path == "/admin/v1/session":
+		h.login(w, r)
+	case r.Method == http.MethodGet && r.URL.Path == "/admin/v1/session":
+		h.current(w, r)
+	case r.Method == http.MethodDelete && r.URL.Path == "/admin/v1/session":
+		h.logout(w, r)
+	default:
+		http.NotFound(w, r)
+	}
+}
+
+func (h *Handler) setupStatus(w http.ResponseWriter, r *http.Request) {
+	var count int
+	if err := h.db.QueryRowContext(r.Context(), "SELECT count(*) FROM _trestle_admins").Scan(&count); err != nil {
+		writeError(w, 500, "internal_error", "The request could not be completed.")
+		return
+	}
+	writeJSON(w, 200, map[string]bool{"setupRequired": count == 0})
+}
+
+func (h *Handler) setup(w http.ResponseWriter, r *http.Request) {
+	if !sameOrigin(r) {
+		writeError(w, 403, "origin_denied", "The request origin is not allowed.")
+		return
+	}
+	var input credentials
+	if !decodeJSON(w, r, &input) {
+		return
+	}
+	email, ok := normalizeEmail(input.Email)
+	if !ok {
+		writeError(w, 422, "validation_failed", "The request could not be applied.")
+		return
+	}
+	hash, err := hashPassword(input.Password)
+	if err != nil {
+		writeError(w, 422, "validation_failed", err.Error())
+		return
+	}
+	tx, err := h.db.BeginTx(r.Context(), nil)
+	if err != nil {
+		writeError(w, 500, "internal_error", "The request could not be completed.")
+		return
+	}
+	defer tx.Rollback()
+	var count int
+	if err := tx.QueryRowContext(r.Context(), "SELECT count(*) FROM _trestle_admins").Scan(&count); err != nil || count != 0 {
+		writeError(w, 409, "setup_complete", "Initial setup has already been completed.")
+		return
+	}
+	id, _ := randomToken(18)
+	now := h.now().UTC().Format(time.RFC3339Nano)
+	if _, err := tx.ExecContext(r.Context(), "INSERT INTO _trestle_admins(id,email,password_hash,created_at) VALUES(?,?,?,?)", "adm_"+id, email, hash, now); err != nil {
+		writeError(w, 409, "setup_complete", "Initial setup has already been completed.")
+		return
+	}
+	if err := tx.Commit(); err != nil {
+		writeError(w, 409, "setup_complete", "Initial setup has already been completed.")
+		return
+	}
+	h.issueSession(w, r, "adm_"+id, email)
+}
+
+func (h *Handler) login(w http.ResponseWriter, r *http.Request) {
+	if !sameOrigin(r) {
+		writeError(w, 403, "origin_denied", "The request origin is not allowed.")
+		return
+	}
+	key := clientKey(r)
+	if !h.limiter.Allow(key, h.now()) {
+		writeError(w, 429, "rate_limited", "Too many attempts. Try again later.")
+		return
+	}
+	var input credentials
+	if !decodeJSON(w, r, &input) {
+		return
+	}
+	email, _ := normalizeEmail(input.Email)
+	var id, storedEmail, hash string
+	var disabled sql.NullString
+	err := h.db.QueryRowContext(r.Context(), "SELECT id,email,password_hash,disabled_at FROM _trestle_admins WHERE email=?", email).Scan(&id, &storedEmail, &hash, &disabled)
+	if err != nil || disabled.Valid || !verifyPassword(hash, input.Password) {
+		writeError(w, 401, "invalid_credentials", "The email or password is incorrect.")
+		return
+	}
+	h.limiter.Clear(key)
+	h.issueSession(w, r, id, storedEmail)
+}
+
+func (h *Handler) issueSession(w http.ResponseWriter, r *http.Request, adminID, email string) {
+	token, _ := randomToken(32)
+	csrf, _ := randomToken(24)
+	id, _ := randomToken(18)
+	now := h.now().UTC()
+	expires := now.Add(12 * time.Hour)
+	tokenHash := sha256.Sum256([]byte(token))
+	csrfHash := sha256.Sum256([]byte(csrf))
+	if _, err := h.db.ExecContext(r.Context(), "INSERT INTO _trestle_admin_sessions(id,admin_id,token_hash,csrf_hash,created_at,expires_at) VALUES(?,?,?,?,?,?)", "ses_"+id, adminID, tokenHash[:], csrfHash[:], now.Format(time.RFC3339Nano), expires.Format(time.RFC3339Nano)); err != nil {
+		writeError(w, 500, "internal_error", "The request could not be completed.")
+		return
+	}
+	http.SetCookie(w, &http.Cookie{Name: cookieName, Value: token, Path: "/", HttpOnly: true, Secure: r.TLS != nil, SameSite: http.SameSiteStrictMode, Expires: expires, MaxAge: int((12 * time.Hour).Seconds())})
+	writeJSON(w, 200, sessionResponse{Authenticated: true, AdminID: adminID, Email: email, CSRFToken: csrf})
+}
+
+func (h *Handler) current(w http.ResponseWriter, r *http.Request) {
+	id, email, _, ok := h.authenticate(r)
+	if !ok {
+		writeJSON(w, 200, sessionResponse{})
+		return
+	}
+	writeJSON(w, 200, sessionResponse{Authenticated: true, AdminID: id, Email: email})
+}
+func (h *Handler) logout(w http.ResponseWriter, r *http.Request) {
+	_, _, sessionID, ok := h.authenticate(r)
+	if !ok {
+		writeError(w, 401, "authentication_required", "Authentication is required.")
+		return
+	}
+	if !h.validCSRF(r, sessionID) {
+		writeError(w, 403, "csrf_denied", "The CSRF token is invalid.")
+		return
+	}
+	_, _ = h.db.ExecContext(r.Context(), "UPDATE _trestle_admin_sessions SET revoked_at=? WHERE id=?", h.now().UTC().Format(time.RFC3339Nano), sessionID)
+	http.SetCookie(w, &http.Cookie{Name: cookieName, Value: "", Path: "/", HttpOnly: true, SameSite: http.SameSiteStrictMode, MaxAge: -1})
+	w.WriteHeader(204)
+}
+
+func (h *Handler) authenticate(r *http.Request) (string, string, string, bool) {
+	cookie, err := r.Cookie(cookieName)
+	if err != nil {
+		return "", "", "", false
+	}
+	sum := sha256.Sum256([]byte(cookie.Value))
+	var id, email, sessionID, expires string
+	var revoked, disabled sql.NullString
+	err = h.db.QueryRowContext(r.Context(), `SELECT a.id,a.email,s.id,s.expires_at,s.revoked_at,a.disabled_at FROM _trestle_admin_sessions s JOIN _trestle_admins a ON a.id=s.admin_id WHERE s.token_hash=?`, sum[:]).Scan(&id, &email, &sessionID, &expires, &revoked, &disabled)
+	if err != nil || revoked.Valid || disabled.Valid {
+		return "", "", "", false
+	}
+	expiry, err := time.Parse(time.RFC3339Nano, expires)
+	if err != nil || !expiry.After(h.now()) {
+		return "", "", "", false
+	}
+	return id, email, sessionID, true
+}
+func (h *Handler) validCSRF(r *http.Request, sessionID string) bool {
+	if !sameOrigin(r) {
+		return false
+	}
+	sum := sha256.Sum256([]byte(r.Header.Get("X-Trestle-CSRF")))
+	var stored []byte
+	if h.db.QueryRowContext(r.Context(), "SELECT csrf_hash FROM _trestle_admin_sessions WHERE id=?", sessionID).Scan(&stored) != nil {
+		return false
+	}
+	return string(stored) == string(sum[:])
+}
+
+func normalizeEmail(value string) (string, bool) {
+	value = strings.ToLower(strings.TrimSpace(value))
+	parsed, err := mail.ParseAddress(value)
+	return value, err == nil && parsed.Address == value && len(value) <= 254
+}
+func randomToken(size int) (string, error) {
+	b := make([]byte, size)
+	if _, err := rand.Read(b); err != nil {
+		return "", err
+	}
+	return base64.RawURLEncoding.EncodeToString(b), nil
+}
+func decodeJSON(w http.ResponseWriter, r *http.Request, out any) bool {
+	r.Body = http.MaxBytesReader(w, r.Body, 64<<10)
+	dec := json.NewDecoder(r.Body)
+	dec.DisallowUnknownFields()
+	if err := dec.Decode(out); err != nil {
+		writeError(w, 400, "invalid_json", "The request body is invalid.")
+		return false
+	}
+	return true
+}
+func sameOrigin(r *http.Request) bool {
+	origin := r.Header.Get("Origin")
+	if origin == "" {
+		return true
+	}
+	scheme := "http"
+	if r.TLS != nil {
+		scheme = "https"
+	}
+	return origin == scheme+"://"+r.Host
+}
+func clientKey(r *http.Request) string {
+	host, _, err := net.SplitHostPort(r.RemoteAddr)
+	if err != nil {
+		return r.RemoteAddr
+	}
+	return host
+}
+func writeJSON(w http.ResponseWriter, status int, value any) {
+	w.Header().Set("Content-Type", "application/json")
+	w.WriteHeader(status)
+	_ = json.NewEncoder(w).Encode(value)
+}
+func writeError(w http.ResponseWriter, status int, code, message string) {
+	writeJSON(w, status, httperr.New(code, message, w.Header().Get("X-Request-ID")))
+}
+
+type limiter struct {
+	mu       sync.Mutex
+	max      int
+	window   time.Duration
+	attempts map[string][]time.Time
+}
+
+func newLimiter(max int, window time.Duration) *limiter {
+	return &limiter{max: max, window: window, attempts: map[string][]time.Time{}}
+}
+func (l *limiter) Allow(key string, now time.Time) bool {
+	l.mu.Lock()
+	defer l.mu.Unlock()
+	cut := now.Add(-l.window)
+	items := l.attempts[key][:0]
+	for _, at := range l.attempts[key] {
+		if at.After(cut) {
+			items = append(items, at)
+		}
+	}
+	if len(items) >= l.max {
+		l.attempts[key] = items
+		return false
+	}
+	l.attempts[key] = append(items, now)
+	return true
+}
+func (l *limiter) Clear(key string) { l.mu.Lock(); delete(l.attempts, key); l.mu.Unlock() }

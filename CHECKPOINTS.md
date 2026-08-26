@@ -216,7 +216,17 @@ across supported sizes and UI states.
 
 ## CP04 — Secure first-run administration
 
-Status: pending
+Status: complete
+
+Application commit: recorded in Git history for CP04
+Website output commit: recorded in the nested website repository for CP04
+Website source commit: recorded in the website source repository for CP04
+Verified: Argon2id encode/verify and minimum length; setup lifecycle and second
+setup rejection; origin denial; login generic failure/success; CSRF denial;
+logout revocation; Go tests, race, vet, six target builds; both Nift builds/status;
+JS syntax and website-link checks.
+Known limits: recovery, multiple-admin management, administrative personal tokens,
+and trusted-proxy TLS interpretation arrive in later checkpoints.
 
 Application:
 
