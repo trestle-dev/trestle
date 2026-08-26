@@ -62,6 +62,7 @@ func (s *Server) requestContext(next http.Handler) http.Handler {
 		started := time.Now()
 		id := "req_" + strconv.FormatUint(s.ids.Add(1), 36)
 		w.Header().Set("X-Request-ID", id)
+		r.Header.Set("X-Trestle-Request-ID", id)
 		w.Header().Set("X-Content-Type-Options", "nosniff")
 		w.Header().Set("Referrer-Policy", "no-referrer")
 		next.ServeHTTP(w, r)

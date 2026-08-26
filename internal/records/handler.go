@@ -16,6 +16,7 @@ import (
 
 	"github.com/trestle-dev/trestle/internal/adminauth"
 	"github.com/trestle-dev/trestle/internal/appauth"
+	"github.com/trestle-dev/trestle/internal/audit"
 	"github.com/trestle-dev/trestle/internal/collections"
 	"github.com/trestle-dev/trestle/internal/events"
 	"github.com/trestle-dev/trestle/internal/httperr"
@@ -31,6 +32,7 @@ type Handler struct {
 	users       *appauth.Handler
 	ruleHandler *rules.Handler
 	events      *events.Handler
+	auditor     *audit.Handler
 	now         func() time.Time
 }
 type field struct {
@@ -65,6 +67,7 @@ func (h *Handler) ConfigureAccess(users *appauth.Handler, ruleHandler *rules.Han
 	h.users, h.ruleHandler = users, ruleHandler
 }
 func (h *Handler) ConfigureEvents(eventHandler *events.Handler) { h.events = eventHandler }
+func (h *Handler) ConfigureAudit(auditor *audit.Handler)        { h.auditor = auditor }
 func (h *Handler) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 	mutation := r.Method != http.MethodGet
 	_, adminOK := h.auth.Authorize(r, mutation)
@@ -261,6 +264,12 @@ func (h *Handler) create(w http.ResponseWriter, r *http.Request, s schema) {
 		writeError(w, 409, "record_conflict", "The record conflicts with the collection schema.")
 		return
 	}
+	if h.auditor != nil {
+		if err = h.auditor.Emit(r.Context(), tx, "admin", "", "record.create", s.name+"/"+record.ID, "success", r.Header.Get("X-Trestle-Request-ID"), map[string]any{"version": record.Version}); err != nil {
+			writeError(w, 500, "internal_error", "The request could not be completed.")
+			return
+		}
+	}
 	if key != "" {
 		if _, err = tx.ExecContext(r.Context(), "INSERT INTO _trestle_record_idempotency(collection_id,idempotency_key,record_id,created_at) VALUES(?,?,?,?)", s.id, key, record.ID, record.CreatedAt); err != nil {
 			writeError(w, 409, "idempotency_conflict", "The idempotency key is already in use.")
@@ -306,6 +315,12 @@ func (h *Handler) batchCreate(w http.ResponseWriter, r *http.Request, s schema) 
 			return
 		}
 		items = append(items, record)
+		if h.auditor != nil {
+			if err = h.auditor.Emit(r.Context(), tx, "admin", "", "record.create", s.name+"/"+record.ID, "success", r.Header.Get("X-Trestle-Request-ID"), map[string]any{"batch": true}); err != nil {
+				writeError(w, 500, "internal_error", "The request could not be completed.")
+				return
+			}
+		}
 	}
 	if err = tx.Commit(); err != nil {
 		writeError(w, 500, "internal_error", "The request could not be completed.")
@@ -573,6 +588,12 @@ func (h *Handler) update(w http.ResponseWriter, r *http.Request, s schema, id st
 	}
 	if h.events != nil {
 		if err = h.events.Emit(r.Context(), tx, "record.updated", s.name, id, map[string]any{"values": values, "version": version + 1}); err != nil {
+			writeError(w, 500, "internal_error", "The request could not be completed.")
+			return
+		}
+	}
+	if h.auditor != nil {
+		if err = h.auditor.Emit(r.Context(), tx, "admin", "", "record.update", s.name+"/"+id, "success", r.Header.Get("X-Trestle-Request-ID"), map[string]any{"version": version + 1}); err != nil {
 			writeError(w, 500, "internal_error", "The request could not be completed.")
 			return
 		}

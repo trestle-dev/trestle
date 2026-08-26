@@ -12,6 +12,7 @@
   "pagination-separator": "",
   "pagination-pages": 0,
   "dependencies": [
+    "content/assets/js/audit.js",
     "content/assets/js/collections.js",
     "content/assets/js/credentials.js",
     "content/assets/js/files.js",

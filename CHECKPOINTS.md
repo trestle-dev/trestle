@@ -508,7 +508,7 @@ Gate: commit/rollback ordering, reconnect/replay, retention gap, policy change,
 
 ## CP15 — Audit and operational administration
 
-Status: pending
+Status: complete
 
 Application:
 
