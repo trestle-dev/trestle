@@ -12,7 +12,7 @@ import (
 	_ "modernc.org/sqlite"
 )
 
-const CurrentVersion = 4
+const CurrentVersion = 5
 
 type Store struct {
 	db   *sql.DB
@@ -92,6 +92,25 @@ CREATE TABLE _trestle_record_idempotency (
   created_at TEXT NOT NULL,
   PRIMARY KEY(collection_id,idempotency_key)
 ) STRICT;
+`}, {5, "application user identity", `
+CREATE TABLE _trestle_app_users (
+  id TEXT PRIMARY KEY,
+  email TEXT NOT NULL UNIQUE COLLATE NOCASE,
+  password_hash TEXT NOT NULL,
+  verified_at TEXT,
+  disabled_at TEXT,
+  created_at TEXT NOT NULL
+) STRICT;
+CREATE TABLE _trestle_app_sessions (
+  id TEXT PRIMARY KEY,
+  user_id TEXT NOT NULL REFERENCES _trestle_app_users(id) ON DELETE CASCADE,
+  refresh_hash BLOB NOT NULL UNIQUE,
+  created_at TEXT NOT NULL,
+  expires_at TEXT NOT NULL,
+  revoked_at TEXT,
+  replaced_by TEXT
+) STRICT;
+CREATE INDEX _trestle_app_sessions_user ON _trestle_app_sessions(user_id);
 `}}
 
 func Open(ctx context.Context, dataDir string) (*Store, error) {

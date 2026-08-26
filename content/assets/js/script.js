@@ -4,3 +4,4 @@ async function renderCollections(){document.getElementById("overview-content").h
 async function refreshCSRF(){try{const session=await jsonRequest("/admin/v1/session");if(session.csrfToken)csrfToken=session.csrfToken}catch{}}refreshCSRF();
 
 @input("content/assets/js/records.js")
+@input("content/assets/js/users.js")

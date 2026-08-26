@@ -11,6 +11,7 @@ import (
 	"syscall"
 
 	"github.com/trestle-dev/trestle/internal/adminauth"
+	"github.com/trestle-dev/trestle/internal/appauth"
 	"github.com/trestle-dev/trestle/internal/buildinfo"
 	"github.com/trestle-dev/trestle/internal/collections"
 	"github.com/trestle-dev/trestle/internal/config"
@@ -50,12 +51,18 @@ func main() {
 	admin := adminauth.New(database.DB())
 	collectionAdmin := collections.New(database.DB(), admin)
 	recordAPI := records.New(database.DB(), admin)
+	applicationAuth := appauth.New(database.DB(), admin)
+	apiRoutes := http.NewServeMux()
+	apiRoutes.Handle("/api/v1/auth/", applicationAuth)
+	apiRoutes.Handle("/api/v1/collections/", recordAPI)
 	adminRoutes := http.NewServeMux()
 	adminRoutes.Handle("/admin/v1/collections", collectionAdmin)
 	adminRoutes.Handle("/admin/v1/collections/", collectionAdmin)
 	adminRoutes.Handle("/admin/v1/data/", recordAPI)
+	adminRoutes.Handle("/admin/v1/app-users", applicationAuth)
+	adminRoutes.Handle("/admin/v1/app-users/", applicationAuth)
 	adminRoutes.Handle("/", admin)
-	app := server.NewWithHandlers(logger, dashboard, recordAPI, adminRoutes)
+	app := server.NewWithHandlers(logger, dashboard, apiRoutes, adminRoutes)
 	httpServer := &http.Server{Addr: cfg.Listen, Handler: app.Handler(), ReadHeaderTimeout: 5_000_000_000, IdleTimeout: 60_000_000_000}
 	ctx, stop := signal.NotifyContext(context.Background(), os.Interrupt, syscall.SIGTERM)
 	defer stop()

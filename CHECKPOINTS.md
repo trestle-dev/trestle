@@ -368,7 +368,7 @@ tests, expansion-cycle tests, and query-limit tests pass.
 
 ## CP09 — Auth collections and application-user sessions
 
-Status: pending
+Status: complete
 
 Application:
 
