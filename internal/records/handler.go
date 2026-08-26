@@ -1,28 +1,34 @@
 package records
 
 import (
+	"bytes"
 	"crypto/rand"
 	"database/sql"
 	"encoding/base64"
 	"encoding/json"
 	"errors"
 	"fmt"
+	"io"
 	"net/http"
 	"strconv"
 	"strings"
 	"time"
 
 	"github.com/trestle-dev/trestle/internal/adminauth"
+	"github.com/trestle-dev/trestle/internal/appauth"
 	"github.com/trestle-dev/trestle/internal/collections"
 	"github.com/trestle-dev/trestle/internal/httperr"
 	"github.com/trestle-dev/trestle/internal/identities"
 	querylang "github.com/trestle-dev/trestle/internal/query"
+	"github.com/trestle-dev/trestle/internal/rules"
 )
 
 type Handler struct {
 	db          *sql.DB
 	auth        *adminauth.Handler
 	credentials *identities.Handler
+	users       *appauth.Handler
+	ruleHandler *rules.Handler
 	now         func() time.Time
 }
 type field struct {
@@ -53,18 +59,28 @@ func New(db *sql.DB, auth *adminauth.Handler, credentials ...*identities.Handler
 	}
 	return h
 }
+func (h *Handler) ConfigureAccess(users *appauth.Handler, ruleHandler *rules.Handler) {
+	h.users, h.ruleHandler = users, ruleHandler
+}
 func (h *Handler) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 	mutation := r.Method != http.MethodGet
 	_, adminOK := h.auth.Authorize(r, mutation)
-	credentialOK := false
+	actor := rules.Actor{}
 	if !adminOK && h.credentials != nil {
 		scope := "records:read"
 		if mutation {
 			scope = "records:write"
 		}
-		_, credentialOK = h.credentials.Authenticate(r, scope)
+		if principal, ok := h.credentials.Authenticate(r, scope); ok {
+			actor = rules.Actor{ID: principal.ID, Kind: "service"}
+		}
 	}
-	if !adminOK && !credentialOK {
+	if !adminOK && actor.ID == "" && h.users != nil {
+		if id, ok := h.users.Authenticate(r); ok {
+			actor = rules.Actor{ID: id, Kind: "user"}
+		}
+	}
+	if !adminOK && actor.ID == "" {
 		status := 401
 		if mutation {
 			status = 403
@@ -85,13 +101,47 @@ func (h *Handler) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 		writeError(w, 500, "internal_error", "The request could not be completed.")
 		return
 	}
+	rowRule := ""
+	if !adminOK {
+		op := operation(r.Method, id, batch)
+		allowed, expression, ruleErr := h.ruleHandler.Allowed(r, collection, op, actor, nil)
+		if ruleErr != nil {
+			writeError(w, 500, "internal_error", "The request could not be completed.")
+			return
+		}
+		if !allowed && strings.HasPrefix(expression, "actor.id == record.") {
+			rowRule = expression
+			if id != "" {
+				if record, fetchErr := h.fetch(r, s, id); fetchErr == nil {
+					allowed = rules.Evaluate(expression, actor, record.Values)
+				}
+			}
+		} else if !allowed && strings.HasPrefix(expression, "actor.id == input.") && op == "create" {
+			body, readErr := io.ReadAll(http.MaxBytesReader(w, r.Body, 1<<20))
+			if readErr == nil {
+				r.Body = io.NopCloser(bytes.NewReader(body))
+				var input createInput
+				if json.Unmarshal(body, &input) == nil {
+					allowed = rules.Evaluate(expression, actor, input.Values)
+				}
+			}
+		}
+		if !allowed && rowRule == "" {
+			if id != "" {
+				writeError(w, 404, "record_not_found", "The record was not found.")
+			} else {
+				writeError(w, 403, "authorization_denied", "The request is not authorized.")
+			}
+			return
+		}
+	}
 	switch {
 	case batch && r.Method == http.MethodPost:
 		h.batchCreate(w, r, s)
 	case id == "" && r.Method == http.MethodPost:
 		h.create(w, r, s)
 	case id == "" && r.Method == http.MethodGet:
-		h.list(w, r, s)
+		h.list(w, r, s, rowRule, actor)
 	case id != "" && r.Method == http.MethodGet:
 		h.get(w, r, s, id)
 	case id != "" && r.Method == http.MethodPatch:
@@ -101,6 +151,23 @@ func (h *Handler) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 	default:
 		http.NotFound(w, r)
 	}
+}
+func operation(method, id string, batch bool) string {
+	if method == http.MethodPost {
+		return "create"
+	}
+	if id == "" || batch {
+		return "list"
+	}
+	switch method {
+	case http.MethodGet:
+		return "view"
+	case http.MethodPatch:
+		return "update"
+	case http.MethodDelete:
+		return "delete"
+	}
+	return "view"
 }
 func parsePath(p string) (string, string, bool, bool) {
 	prefix := "/api/v1/collections/"
@@ -270,7 +337,7 @@ func (h *Handler) insert(r *http.Request, tx *sql.Tx, s schema, in createInput) 
 	}
 	return Record{ID: id, Version: 1, CreatedAt: now, UpdatedAt: now, Values: values}, nil, nil
 }
-func (h *Handler) list(w http.ResponseWriter, r *http.Request, s schema) {
+func (h *Handler) list(w http.ResponseWriter, r *http.Request, s schema, rowRule string, actor rules.Actor) {
 	limit := 100
 	if raw := r.URL.Query().Get("limit"); raw != "" {
 		parsed, err := strconv.Atoi(raw)
@@ -297,6 +364,9 @@ func (h *Handler) list(w http.ResponseWriter, r *http.Request, s schema) {
 		if err != nil {
 			writeError(w, 500, "internal_error", "The request could not be completed.")
 			return
+		}
+		if rowRule != "" && !rules.Evaluate(rowRule, actor, record.Values) {
+			continue
 		}
 		items = append(items, projectRecord(record, projection(r)))
 	}

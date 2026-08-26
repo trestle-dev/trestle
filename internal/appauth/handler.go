@@ -96,7 +96,12 @@ func (h *Handler) issue(w http.ResponseWriter, r *http.Request, userID, email st
 		writeError(w, 500, "internal_error", "The request could not be completed.")
 		return
 	}
-	writeJSON(w, 200, map[string]any{"userId": userID, "email": email, "refreshToken": raw, "expiresIn": 2592000})
+	access, err := h.createAccess(r, id, userID)
+	if err != nil {
+		writeError(w, 500, "internal_error", "The request could not be completed.")
+		return
+	}
+	writeJSON(w, 200, map[string]any{"userId": userID, "email": email, "accessToken": access, "accessExpiresIn": 900, "refreshToken": raw, "expiresIn": 2592000})
 }
 func (h *Handler) refresh(w http.ResponseWriter, r *http.Request) {
 	var in refreshInput
@@ -133,7 +138,31 @@ func (h *Handler) refresh(w http.ResponseWriter, r *http.Request) {
 		writeError(w, 500, "internal_error", "The request could not be completed.")
 		return
 	}
-	writeJSON(w, 200, map[string]any{"userId": userID, "email": email, "refreshToken": next, "expiresIn": 2592000})
+	access, err := h.createAccess(r, nextID, userID)
+	if err != nil {
+		writeError(w, 500, "internal_error", "The request could not be completed.")
+		return
+	}
+	writeJSON(w, 200, map[string]any{"userId": userID, "email": email, "accessToken": access, "accessExpiresIn": 900, "refreshToken": next, "expiresIn": 2592000})
+}
+
+func (h *Handler) createAccess(r *http.Request, sessionID, userID string) (string, error) {
+	raw := "ta_" + token(24)
+	sum := sha256.Sum256([]byte(raw))
+	_, err := h.db.ExecContext(r.Context(), "INSERT INTO _trestle_app_access(token_hash,session_id,user_id,expires_at) VALUES(?,?,?,?)", sum[:], sessionID, userID, h.now().UTC().Add(15*time.Minute).Format(time.RFC3339Nano))
+	return raw, err
+}
+func (h *Handler) Authenticate(r *http.Request) (string, bool) {
+	header := r.Header.Get("Authorization")
+	if !strings.HasPrefix(header, "Bearer ta_") {
+		return "", false
+	}
+	sum := sha256.Sum256([]byte(strings.TrimSpace(strings.TrimPrefix(header, "Bearer "))))
+	var userID, expires string
+	var revoked, disabled sql.NullString
+	err := h.db.QueryRowContext(r.Context(), `SELECT a.user_id,a.expires_at,s.revoked_at,u.disabled_at FROM _trestle_app_access a JOIN _trestle_app_sessions s ON s.id=a.session_id JOIN _trestle_app_users u ON u.id=a.user_id WHERE a.token_hash=?`, sum[:]).Scan(&userID, &expires, &revoked, &disabled)
+	expiry, _ := time.Parse(time.RFC3339Nano, expires)
+	return userID, err == nil && !revoked.Valid && !disabled.Valid && expiry.After(h.now())
 }
 func (h *Handler) logout(w http.ResponseWriter, r *http.Request) {
 	var in refreshInput

@@ -17,6 +17,7 @@ import (
 	"github.com/trestle-dev/trestle/internal/config"
 	"github.com/trestle-dev/trestle/internal/identities"
 	"github.com/trestle-dev/trestle/internal/records"
+	"github.com/trestle-dev/trestle/internal/rules"
 	"github.com/trestle-dev/trestle/internal/server"
 	"github.com/trestle-dev/trestle/internal/store"
 	"github.com/trestle-dev/trestle/internal/web"
@@ -54,6 +55,8 @@ func main() {
 	credentials := identities.New(database.DB(), admin)
 	recordAPI := records.New(database.DB(), admin, credentials)
 	applicationAuth := appauth.New(database.DB(), admin)
+	accessRules := rules.New(database.DB(), admin)
+	recordAPI.ConfigureAccess(applicationAuth, accessRules)
 	apiRoutes := http.NewServeMux()
 	apiRoutes.Handle("/api/v1/auth/", applicationAuth)
 	apiRoutes.Handle("/api/v1/collections/", recordAPI)
@@ -65,6 +68,7 @@ func main() {
 	adminRoutes.Handle("/admin/v1/app-users/", applicationAuth)
 	adminRoutes.Handle("/admin/v1/credentials", credentials)
 	adminRoutes.Handle("/admin/v1/credentials/", credentials)
+	adminRoutes.Handle("/admin/v1/collection-rules/", accessRules)
 	adminRoutes.Handle("/", admin)
 	app := server.NewWithHandlers(logger, dashboard, apiRoutes, adminRoutes)
 	httpServer := &http.Server{Addr: cfg.Listen, Handler: app.Handler(), ReadHeaderTimeout: 5_000_000_000, IdleTimeout: 60_000_000_000}

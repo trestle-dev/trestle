@@ -414,7 +414,7 @@ attribution, and user-versus-service identity confusion tests pass.
 
 ## CP11 — Collection access rules
 
-Status: pending
+Status: complete
 
 Application:
 

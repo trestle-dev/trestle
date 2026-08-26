@@ -107,3 +107,25 @@ func TestGenericLoginFailureAndPasswordMinimum(t *testing.T) {
 		t.Fatal("enumerating login response")
 	}
 }
+
+func TestAccessTokenIsSeparateAndExpiresWithSession(t *testing.T) {
+	h := setup(t)
+	registerAndLogin(t, h)
+	w := call(t, h, "/api/v1/auth/login", map[string]any{"email": "user@example.com", "password": "1234567"})
+	var out struct{ AccessToken, RefreshToken string }
+	json.Unmarshal(w.Body.Bytes(), &out)
+	r := httptest.NewRequest("GET", "/", nil)
+	r.Header.Set("Authorization", "Bearer "+out.AccessToken)
+	if id, ok := h.Authenticate(r); !ok || id == "" {
+		t.Fatal("access token denied")
+	}
+	r.Header.Set("Authorization", "Bearer "+out.RefreshToken)
+	if _, ok := h.Authenticate(r); ok {
+		t.Fatal("refresh token accepted as access token")
+	}
+	call(t, h, "/api/v1/auth/logout", map[string]any{"refreshToken": out.RefreshToken})
+	r.Header.Set("Authorization", "Bearer "+out.AccessToken)
+	if _, ok := h.Authenticate(r); ok {
+		t.Fatal("access survived session revocation")
+	}
+}

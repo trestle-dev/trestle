@@ -12,7 +12,7 @@ import (
 	_ "modernc.org/sqlite"
 )
 
-const CurrentVersion = 6
+const CurrentVersion = 7
 
 type Store struct {
 	db   *sql.DB
@@ -125,6 +125,20 @@ CREATE TABLE _trestle_credentials (
   last_used_at TEXT
 ) STRICT;
 CREATE INDEX _trestle_credentials_kind ON _trestle_credentials(kind);
+`}, {7, "collection access rules", `
+CREATE TABLE _trestle_app_access (
+  token_hash BLOB PRIMARY KEY,
+  session_id TEXT NOT NULL REFERENCES _trestle_app_sessions(id) ON DELETE CASCADE,
+  user_id TEXT NOT NULL REFERENCES _trestle_app_users(id) ON DELETE CASCADE,
+  expires_at TEXT NOT NULL
+) STRICT;
+CREATE TABLE _trestle_collection_rules (
+  collection_id TEXT NOT NULL REFERENCES _trestle_collections(id) ON DELETE CASCADE,
+  operation TEXT NOT NULL CHECK(operation IN ('list','view','create','update','delete')),
+  expression TEXT NOT NULL,
+  updated_at TEXT NOT NULL,
+  PRIMARY KEY(collection_id,operation)
+) STRICT;
 `}}
 
 func Open(ctx context.Context, dataDir string) (*Store, error) {
