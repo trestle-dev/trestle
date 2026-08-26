@@ -11,8 +11,8 @@ The repository is currently pre-release. Checkpoints CP00–CP21 are implemented
 covering the process and SQLite foundation, embedded administration, typed
 collections and records, authentication and access rules, local and
 S3-compatible files, realtime events, audit, durable jobs, webhooks, AWS Lambda,
-OpenAPI, reference clients, backup/recovery, and the incident-tracker dogfood
-application. Deployment automation and stable-release hardening remain.
+OpenAPI, reference clients, backup/recovery, and whole-product dogfooding.
+Deployment automation and stable-release hardening remain.
 
 ## Requirements
 
@@ -97,7 +97,6 @@ node scripts/check-web.mjs internal/web/public
 go test ./...
 go test -race ./...
 go vet ./...
-./scripts/test-dogfood.sh
 ```
 
 CI additionally compiles Linux, macOS, and Windows targets for both amd64 and

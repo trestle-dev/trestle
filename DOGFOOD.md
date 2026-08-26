@@ -1,8 +1,11 @@
-# CP21 dogfood record
+# CP21 dogfood findings
 
-CP21 builds and operates `examples/incident-tracker` without importing internal
-packages or modifying SQLite directly. The retained gate starts the production
-binary against an empty directory and drives setup through HTTP.
+CP21 used a temporary incident-management client to exercise Trestle strictly
+through its published HTTP interfaces. The client and its seed harness were
+removed after the checkpoint because they were validation machinery, not a
+polished example that belonged in the core repository. The checkpoint commit
+retains the exact implementation and this document retains the resulting
+product findings.
 
 ## Exercised product paths
 
@@ -32,9 +35,6 @@ binary against an empty directory and drives setup through HTTP.
 5. **Keep provider credentials out of the example.** The Lambda target exercises
    durable retry diagnostics without shipping AWS secrets. A real acceptance
    result requires operator-supplied credentials and a real AWS account.
-6. **Retain the clean-start journey in CI.** `scripts/test-dogfood.sh` fails on
-   the first unexpected API response and proves backup preflight before exit.
-
-The packaged initialized example uses `admin@example.com` / `mudblood` for its
-administrator and `reporter@example.com` / `reporter7` for the application UI.
-
+6. **Keep dogfood clients outside the core repository.** Future end-to-end
+   applications should live in their own repositories, where their product and
+   release quality can be evaluated independently from Trestle itself.
