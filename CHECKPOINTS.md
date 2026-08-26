@@ -532,7 +532,7 @@ Gate: attribution, redaction, retention, export authorization, pagination, and
 
 ## CP16 — Durable job engine
 
-Status: pending
+Status: complete
 
 Application:
 

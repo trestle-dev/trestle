@@ -19,6 +19,7 @@ import (
 	"github.com/trestle-dev/trestle/internal/events"
 	filestore "github.com/trestle-dev/trestle/internal/files"
 	"github.com/trestle-dev/trestle/internal/identities"
+	"github.com/trestle-dev/trestle/internal/jobs"
 	"github.com/trestle-dev/trestle/internal/records"
 	"github.com/trestle-dev/trestle/internal/rules"
 	"github.com/trestle-dev/trestle/internal/server"
@@ -63,6 +64,7 @@ func main() {
 	eventAPI := events.New(database.DB(), admin, credentials)
 	recordAPI.ConfigureEvents(eventAPI)
 	auditAPI := audit.New(database.DB(), admin)
+	jobAPI := jobs.New(database.DB(), admin)
 	recordAPI.ConfigureAudit(auditAPI)
 	fileAPI, err := filestore.New(database.DB(), admin, credentials, cfg.DataDir, filestore.Options{Backend: cfg.StorageBackend, S3Endpoint: cfg.S3Endpoint, S3Region: cfg.S3Region, S3Bucket: cfg.S3Bucket, S3AccessKey: cfg.S3AccessKey, S3SecretKey: cfg.S3SecretKey})
 	if err != nil {
@@ -90,11 +92,14 @@ func main() {
 	adminRoutes.Handle("/admin/v1/events", eventAPI)
 	adminRoutes.Handle("/admin/v1/audit", auditAPI)
 	adminRoutes.Handle("/admin/v1/operations", auditAPI)
+	adminRoutes.Handle("/admin/v1/jobs", jobAPI)
+	adminRoutes.Handle("/admin/v1/jobs/", jobAPI)
 	adminRoutes.Handle("/", admin)
 	app := server.NewWithHandlers(logger, dashboard, apiRoutes, adminRoutes)
 	httpServer := &http.Server{Addr: cfg.Listen, Handler: app.Handler(), ReadHeaderTimeout: 5_000_000_000, IdleTimeout: 60_000_000_000}
 	ctx, stop := signal.NotifyContext(context.Background(), os.Interrupt, syscall.SIGTERM)
 	defer stop()
+	jobAPI.Start(ctx)
 	errCh := make(chan error, 1)
 	go func() {
 		logger.Info("server starting", "listen", cfg.Listen, "data_dir", cfg.DataDir)
