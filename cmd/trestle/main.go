@@ -14,6 +14,7 @@ import (
 	"github.com/trestle-dev/trestle/internal/config"
 	"github.com/trestle-dev/trestle/internal/server"
 	"github.com/trestle-dev/trestle/internal/store"
+	"github.com/trestle-dev/trestle/internal/web"
 )
 
 func main() {
@@ -35,7 +36,15 @@ func main() {
 	}
 	defer database.Close()
 	logger.Info("database ready", "path", database.Path(), "schema_version", store.CurrentVersion)
-	app := server.New(logger)
+	dashboard, err := web.New(cfg.StaticDir)
+	if err != nil {
+		logger.Error("dashboard initialization failed", "error", err)
+		os.Exit(1)
+	}
+	if cfg.StaticDir != "" {
+		logger.Warn("using development static override", "directory", cfg.StaticDir)
+	}
+	app := server.New(logger, dashboard)
 	httpServer := &http.Server{Addr: cfg.Listen, Handler: app.Handler(), ReadHeaderTimeout: 5_000_000_000, IdleTimeout: 60_000_000_000}
 	ctx, stop := signal.NotifyContext(context.Background(), os.Interrupt, syscall.SIGTERM)
 	defer stop()

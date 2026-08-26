@@ -17,6 +17,7 @@ type Config struct {
 	DataDir         string
 	ShutdownTimeout time.Duration
 	LogLevel        string
+	StaticDir       string
 }
 
 func Defaults() Config {
@@ -41,6 +42,9 @@ func Load(args []string, getenv func(string) string) (Config, error) {
 	if value := getenv("TRESTLE_LOG_LEVEL"); value != "" {
 		cfg.LogLevel = value
 	}
+	if value := getenv("TRESTLE_STATIC_DIR"); value != "" {
+		cfg.StaticDir = value
+	}
 
 	set := flag.NewFlagSet("trestle", flag.ContinueOnError)
 	set.SetOutput(io.Discard)
@@ -48,6 +52,7 @@ func Load(args []string, getenv func(string) string) (Config, error) {
 	set.StringVar(&cfg.DataDir, "data-dir", cfg.DataDir, "data directory")
 	set.DurationVar(&cfg.ShutdownTimeout, "shutdown-timeout", cfg.ShutdownTimeout, "graceful shutdown timeout")
 	set.StringVar(&cfg.LogLevel, "log-level", cfg.LogLevel, "debug, info, warn, or error")
+	set.StringVar(&cfg.StaticDir, "static-dir", cfg.StaticDir, "development static asset override")
 	if err := set.Parse(args); err != nil {
 		return Config{}, err
 	}

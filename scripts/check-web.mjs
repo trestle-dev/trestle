@@ -24,6 +24,7 @@ for (const file of html) {
   for (const match of source.matchAll(/(?:href|src)="([^"#]+)(?:#[^"]*)?"/g)) {
     const value = match[1];
     if (/^(?:https?:|mailto:|data:)/.test(value)) continue;
+    if (value.startsWith("/") && value !== "/" && !path.extname(value)) continue;
     let target;
     if (value.startsWith("/")) target = path.join(root, value);
     else target = path.resolve(path.dirname(file), value);

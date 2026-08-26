@@ -179,7 +179,16 @@ busy database, and foreign-key tests pass.
 
 ## CP03 — Embedded Nift dashboard and fixed-viewport shell
 
-Status: pending
+Status: complete
+
+Application commit: recorded in Git history for CP03
+Website output commit: recorded in the nested website repository for CP03
+Website source commit: recorded in the website source repository for CP03
+Verified: embedded root/assets/SPA fallback, missing-asset, CSP/cache, and static
+override tests; fixed-viewport source assertions; Go tests, race, vet, six target
+builds; both Nift builds/status; JS syntax and website-link checks.
+Known limits: CP03 supplies the shell and readiness workflow. Collection screens
+become functional at CP05; later navigation remains visibly planned.
 
 Application:
 

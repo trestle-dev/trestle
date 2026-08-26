@@ -1,0 +1,67 @@
+package web
+
+import (
+	"embed"
+	"errors"
+	"io/fs"
+	"mime"
+	"net/http"
+	"os"
+	"path"
+	"strings"
+)
+
+//go:embed public
+var embedded embed.FS
+
+func New(staticDir string) (http.Handler, error) {
+	var root fs.FS
+	if staticDir == "" {
+		var err error
+		root, err = fs.Sub(embedded, "public")
+		if err != nil {
+			return nil, err
+		}
+	} else {
+		info, err := os.Stat(staticDir)
+		if err != nil {
+			return nil, err
+		}
+		if !info.IsDir() {
+			return nil, errors.New("static override is not a directory")
+		}
+		root = os.DirFS(staticDir)
+	}
+	return handler{root: root}, nil
+}
+
+type handler struct{ root fs.FS }
+
+func (h handler) ServeHTTP(w http.ResponseWriter, r *http.Request) {
+	if r.Method != http.MethodGet && r.Method != http.MethodHead {
+		http.NotFound(w, r)
+		return
+	}
+	name := strings.TrimPrefix(path.Clean(r.URL.Path), "/")
+	if name == "." || name == "" {
+		name = "index.html"
+	}
+	data, err := fs.ReadFile(h.root, name)
+	if err != nil && !strings.Contains(path.Base(name), ".") {
+		data, err = fs.ReadFile(h.root, "index.html")
+	}
+	if err != nil {
+		http.NotFound(w, r)
+		return
+	}
+	if contentType := mime.TypeByExtension(path.Ext(name)); contentType != "" {
+		w.Header().Set("Content-Type", contentType)
+	}
+	if strings.HasSuffix(name, ".html") || name == "index.html" {
+		w.Header().Set("Cache-Control", "no-cache")
+	} else {
+		w.Header().Set("Cache-Control", "public, max-age=3600")
+	}
+	w.Header().Set("Content-Security-Policy", "default-src 'self'; script-src 'self'; style-src 'self'; img-src 'self' data:; connect-src 'self'; frame-ancestors 'none'; base-uri 'none'; form-action 'self'")
+	_, _ = w.Write(data)
+}

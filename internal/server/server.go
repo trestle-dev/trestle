@@ -19,12 +19,15 @@ type Server struct {
 	handler http.Handler
 }
 
-func New(logger *slog.Logger) *Server {
+func New(logger *slog.Logger, dashboard ...http.Handler) *Server {
 	s := &Server{logger: logger}
 	mux := http.NewServeMux()
 	mux.HandleFunc("GET /system/health", s.health)
 	mux.HandleFunc("GET /system/ready", s.readiness)
 	mux.HandleFunc("GET /system/version", s.version)
+	if len(dashboard) != 0 && dashboard[0] != nil {
+		mux.Handle("/", dashboard[0])
+	}
 	s.handler = s.requestContext(mux)
 	return s
 }
