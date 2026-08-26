@@ -34,11 +34,10 @@ the end. Planned features may be explained only when visibly labelled planned.
 
 ## Product position
 
-Trestle pursues useful feature/product parity with products such as PocketBase
-where that makes sense. It deliberately does **not** pursue PocketBase API,
-SDK, schema, migration, token, filter-language, or behavioural compatibility.
-Do not copy upstream implementation or UI. A future importer may translate
-data, but compatibility is not the canonical architecture.
+Trestle has its own API, schema, migration, token, filter-language, and
+behavioural contracts. Build from Trestle's product requirements and do not
+copy another product's implementation or UI. Import tools may translate data,
+but external compatibility is not the canonical architecture.
 
 The API is the product. SDKs are conveniences. Any language capable of HTTP,
 JSON, and streaming HTTP must be able to use the full supported application

@@ -137,7 +137,7 @@ multiple languages; generated artifacts reproduce in CI with no hand edits.
 ## 10. Import, operations, and compatibility boundary
 
 - Build export/import with dry-run validation and resumable diagnostics.
-- Consider a PocketBase importer as an explicit translation tool, never as API
+- Consider importers only as explicit translation tools, never as API
   compatibility or a reason to inherit undocumented behavior.
 - Add restore drills, maintenance operations, retention controls, and upgrade
   guidance.
@@ -158,6 +158,6 @@ implemented guarantees from roadmap work.
 ## Deliberately deferred
 
 PostgreSQL, clustering, GraphQL, a plugin marketplace, a hosted cloud, exact
-PocketBase compatibility, and a local user-code runtime are not first-release
+third-party API compatibility, and a local user-code runtime are not first-release
 requirements. Revisit them only with a concrete use case and an architecture
 that preserves the single-node product's safety and clarity.

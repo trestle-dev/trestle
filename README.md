@@ -4,9 +4,8 @@ Trestle is a planned open-source, self-hosted application backend with
 collections, authentication, access rules, files, realtime APIs, migrations,
 administration, backups, and event-driven integrations in one compact binary.
 
-Trestle is not a PocketBase API clone. Its stable HTTP/JSON/SSE contracts are
-intended to work from browsers, mobile applications, and trusted backends
-written in any language.
+Its stable HTTP/JSON/SSE contracts are intended to work from browsers, mobile
+applications, and trusted backends written in any language.
 
 The repository is currently pre-release. Checkpoints CP00–CP05 are implemented:
 the server lifecycle, SQLite migrations, embedded administration shell, secure

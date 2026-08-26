@@ -638,8 +638,8 @@ Application:
 - Implement SQLite-consistent backup, file-storage manifest/strategy, validation,
   restore preflight, maintenance state, export/import with dry run, resumable
   diagnostics, and explicit secret/session treatment.
-- Consider a PocketBase importer only as translation after native round trips are
-  proven; never imply API compatibility.
+- Consider third-party importers only as translation after native round trips
+  are proven; never imply API compatibility.
 
 Dashboard:
 
@@ -649,7 +649,7 @@ Dashboard:
 Public website:
 
 - Add Backup, Restore, Disaster recovery, Export/import, Upgrade/rollback, and an
-  honest PocketBase migration boundary page. Include tested drills, not slogans.
+  honest third-party migration boundary page. Include tested drills, not slogans.
 
 Gate: repeated backup/restore and export/import compare schema, records, files,
   identities, and permitted operational state; corrupted/partial/wrong-version

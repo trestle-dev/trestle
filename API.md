@@ -91,5 +91,5 @@ closure are protocol behavior and require documentation and tests.
 
 Generate client conveniences only after the HTTP contract works through curl.
 Do not add SDK-only admin shortcuts. Backward compatibility refers to Trestle's
-published versions, not PocketBase behavior; any future importer is a separate,
-explicit translation workflow.
+published versions; any future importer is a separate, explicit translation
+workflow rather than a compatibility contract.
