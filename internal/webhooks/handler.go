@@ -143,7 +143,9 @@ func (h *Handler) create(w http.ResponseWriter, r *http.Request) {
 		Name, URL string
 		Topics    []string
 	}
-	if json.NewDecoder(http.MaxBytesReader(w, r.Body, 1<<20)).Decode(&in) != nil || in.Name == "" || len(in.Topics) == 0 || safeDestination(in.URL) != nil {
+	decodeErr := json.NewDecoder(http.MaxBytesReader(w, r.Body, 1<<20)).Decode(&in)
+	_, targetErr := validateTargetURL(in.URL)
+	if decodeErr != nil || in.Name == "" || len(in.Topics) == 0 || targetErr != nil {
 		http.Error(w, "invalid webhook", 422)
 		return
 	}
@@ -199,9 +201,9 @@ func (h *Handler) decrypt(value []byte) ([]byte, error) {
 	return h.aead.Open(nil, value[:n], value[n:], nil)
 }
 func safeDestination(raw string) error {
-	u, err := url.Parse(raw)
-	if err != nil || u.Scheme != "https" || u.User != nil || u.Hostname() == "" {
-		return errors.New("webhook URL must use HTTPS")
+	u, err := validateTargetURL(raw)
+	if err != nil {
+		return err
 	}
 	ips, err := net.LookupIP(u.Hostname())
 	if err != nil {
@@ -213,6 +215,14 @@ func safeDestination(raw string) error {
 		}
 	}
 	return nil
+}
+
+func validateTargetURL(raw string) (*url.URL, error) {
+	u, err := url.Parse(raw)
+	if err != nil || u.Scheme != "https" || u.User != nil || u.Hostname() == "" {
+		return nil, errors.New("webhook URL must use HTTPS")
+	}
+	return u, nil
 }
 func loadKey(path string) ([]byte, error) {
 	if value, err := os.ReadFile(path); err == nil && len(value) == 32 {

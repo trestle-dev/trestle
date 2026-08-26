@@ -65,7 +65,7 @@ Never require a superuser credential for ordinary application-backend access.
 7. Collection filters and access rules use parsed, typed ASTs compiled to
    parameterized queries; never concatenate user expressions into SQL.
 8. Authentication, authorization, migrations, jobs, realtime, retention, and
-   audit remain deterministic software—not model decisions.
+   audit remain deterministic software - not model decisions.
 9. AWS Lambda invocation from committed application events is the first
    functions integration. Trestle remains useful without AWS.
 10. User-defined local function execution is deferred until a credible process
@@ -406,7 +406,7 @@ https://nift.dev/docs.html
 
 When unfamiliar with the project, prioritise:
 
-1. Getting started — https://nift.dev/docs/getting-started.html
+1. Getting started - https://nift.dev/docs/getting-started.html
 2. the three-primitives/template-language material;
 3. paths and tracked files, especially `@pathto`;
 4. project structure;

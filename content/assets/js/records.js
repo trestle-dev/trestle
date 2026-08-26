@@ -26,6 +26,6 @@ function renderRecordTable(collection,host,schema,response){const list=host.quer
   list.querySelector("[data-next-page]").addEventListener("click",()=>{state.history.push(state.cursor);state.cursor=response.nextCursor;state.page++;loadRecords(collection,host,schema)});list.querySelector("[data-previous-page]").addEventListener("click",()=>{state.cursor=state.history.pop()||"";state.page=Math.max(1,state.page-1);loadRecords(collection,host,schema)});
 }
 function cursorCompatible(host){const sort=host.querySelector(".query-bar").elements.sort.value.trim();return sort===""||sort==="id"}
-function displayRecordValue(value){if(value==null)return "—";if(typeof value==="object")return JSON.stringify(value);return String(value)}
+function displayRecordValue(value){if(value==null)return "-";if(typeof value==="object")return JSON.stringify(value);return String(value)}
 function recordListURL(collection,host){const form=host.querySelector(".query-bar");const params=new URLSearchParams({limit:String(cursorCompatible(host)?recordPageSize:100)});if(form?.elements.filter.value)params.set("filter",form.elements.filter.value);if(form?.elements.sort.value)params.set("sort",form.elements.sort.value);if(host._recordState?.cursor)params.set("cursor",host._recordState.cursor);return `/admin/v1/data/${encodeURIComponent(collection)}/records?${params}`}
 function escapeHTML(value){return String(value).replace(/[&<>"']/g,char=>({"&":"&amp;","<":"&lt;",">":"&gt;",'"':"&quot;","'":"&#39;"}[char]))}

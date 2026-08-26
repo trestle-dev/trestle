@@ -7,12 +7,12 @@ administration, backups, and event-driven integrations in one compact binary.
 Its stable HTTP/JSON/SSE contracts are intended to work from browsers, mobile
 applications, and trusted backends written in any language.
 
-The repository is currently pre-release. Checkpoints CP00–CP05 are implemented:
-the server lifecycle, SQLite migrations, embedded administration shell, secure
-first-run administrator sessions, and base-collection metadata are working.
-The implemented foundation now includes physical collections, record CRUD,
-typed queries, application authentication, scoped backend credentials,
-collection access rules and local file storage through CP12.
+The repository is currently pre-release. Checkpoints CP00–CP21 are implemented,
+covering the process and SQLite foundation, embedded administration, typed
+collections and records, authentication and access rules, local and
+S3-compatible files, realtime events, audit, durable jobs, webhooks, AWS Lambda,
+OpenAPI, reference clients, backup/recovery, and the incident-tracker dogfood
+application. Deployment automation and stable-release hardening remain.
 
 ## Requirements
 
@@ -97,6 +97,7 @@ node scripts/check-web.mjs internal/web/public
 go test ./...
 go test -race ./...
 go vet ./...
+./scripts/test-dogfood.sh
 ```
 
 CI additionally compiles Linux, macOS, and Windows targets for both amd64 and
@@ -112,11 +113,11 @@ guidance arrives in later checkpoints; the current schema is not stable.
 
 Start with:
 
-- [HANDOVER.md](HANDOVER.md) — product invariants and engineering workflow
-- [CHECKPOINTS.md](CHECKPOINTS.md) — step-by-step implementation handover
-- [PLAN.md](PLAN.md) — ordered implementation programme
-- [ARCHITECTURE.md](ARCHITECTURE.md) — system and persistence boundaries
-- [API.md](API.md) — language-neutral API contract direction
-- [UI.md](UI.md) — fixed-viewport vanilla dashboard contract
-- [FUNCTIONS.md](FUNCTIONS.md) — AWS Lambda event integration
-- [SECURITY.md](SECURITY.md) — trust model and security invariants
+- [HANDOVER.md](HANDOVER.md) - product invariants and engineering workflow
+- [CHECKPOINTS.md](CHECKPOINTS.md) - step-by-step implementation handover
+- [PLAN.md](PLAN.md) - ordered implementation programme
+- [ARCHITECTURE.md](ARCHITECTURE.md) - system and persistence boundaries
+- [API.md](API.md) - language-neutral API contract direction
+- [UI.md](UI.md) - fixed-viewport vanilla dashboard contract
+- [FUNCTIONS.md](FUNCTIONS.md) - AWS Lambda event integration
+- [SECURITY.md](SECURITY.md) - trust model and security invariants
