@@ -13,6 +13,7 @@ import (
 	"github.com/trestle-dev/trestle/internal/buildinfo"
 	"github.com/trestle-dev/trestle/internal/config"
 	"github.com/trestle-dev/trestle/internal/server"
+	"github.com/trestle-dev/trestle/internal/store"
 )
 
 func main() {
@@ -27,6 +28,13 @@ func main() {
 		os.Exit(2)
 	}
 	logger := slog.New(slog.NewJSONHandler(os.Stderr, &slog.HandlerOptions{}))
+	database, err := store.Open(context.Background(), cfg.DataDir)
+	if err != nil {
+		logger.Error("database initialization failed", "error", err)
+		os.Exit(1)
+	}
+	defer database.Close()
+	logger.Info("database ready", "path", database.Path(), "schema_version", store.CurrentVersion)
 	app := server.New(logger)
 	httpServer := &http.Server{Addr: cfg.Listen, Handler: app.Handler(), ReadHeaderTimeout: 5_000_000_000, IdleTimeout: 60_000_000_000}
 	ctx, stop := signal.NotifyContext(context.Background(), os.Interrupt, syscall.SIGTERM)

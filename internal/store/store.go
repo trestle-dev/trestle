@@ -1,0 +1,122 @@
+package store
+
+import (
+	"context"
+	"database/sql"
+	"errors"
+	"fmt"
+	"os"
+	"path/filepath"
+	"time"
+
+	_ "modernc.org/sqlite"
+)
+
+const CurrentVersion = 1
+
+type Store struct {
+	db   *sql.DB
+	path string
+}
+
+type migration struct {
+	version   int
+	name, sql string
+}
+
+var migrations = []migration{{1, "system foundation", `
+CREATE TABLE _trestle_schema_migrations (
+  version INTEGER PRIMARY KEY,
+  name TEXT NOT NULL,
+  applied_at TEXT NOT NULL
+) STRICT;
+CREATE TABLE _trestle_system_meta (
+  key TEXT PRIMARY KEY,
+  value TEXT NOT NULL,
+  updated_at TEXT NOT NULL
+) STRICT;
+CREATE TABLE _trestle_audit (
+  id INTEGER PRIMARY KEY,
+  occurred_at TEXT NOT NULL,
+  actor_kind TEXT NOT NULL,
+  actor_id TEXT,
+  action TEXT NOT NULL,
+  target TEXT,
+  outcome TEXT NOT NULL,
+  request_id TEXT
+) STRICT;
+`}}
+
+func Open(ctx context.Context, dataDir string) (*Store, error) {
+	if err := os.MkdirAll(dataDir, 0o700); err != nil {
+		return nil, fmt.Errorf("create data directory: %w", err)
+	}
+	if err := os.Chmod(dataDir, 0o700); err != nil {
+		return nil, fmt.Errorf("secure data directory: %w", err)
+	}
+	path := filepath.Join(dataDir, "trestle.db")
+	dsn := "file:" + filepath.ToSlash(path) + "?_pragma=foreign_keys(1)&_pragma=busy_timeout(5000)&_pragma=journal_mode(WAL)"
+	db, err := sql.Open("sqlite", dsn)
+	if err != nil {
+		return nil, fmt.Errorf("open sqlite: %w", err)
+	}
+	db.SetMaxOpenConns(1)
+	db.SetConnMaxLifetime(0)
+	s := &Store{db: db, path: path}
+	if err := s.initialize(ctx); err != nil {
+		_ = db.Close()
+		return nil, err
+	}
+	return s, nil
+}
+
+func (s *Store) initialize(ctx context.Context) error {
+	if err := s.db.PingContext(ctx); err != nil {
+		return fmt.Errorf("ping sqlite: %w", err)
+	}
+	var foreignKeys int
+	if err := s.db.QueryRowContext(ctx, "PRAGMA foreign_keys").Scan(&foreignKeys); err != nil || foreignKeys != 1 {
+		return errors.New("sqlite foreign keys are not enabled")
+	}
+	var version int
+	if err := s.db.QueryRowContext(ctx, "PRAGMA user_version").Scan(&version); err != nil {
+		return fmt.Errorf("read schema version: %w", err)
+	}
+	if version > CurrentVersion {
+		return fmt.Errorf("database schema version %d is newer than supported version %d", version, CurrentVersion)
+	}
+	for _, m := range migrations {
+		if m.version > version {
+			if err := s.apply(ctx, m); err != nil {
+				return err
+			}
+		}
+	}
+	return nil
+}
+
+func (s *Store) apply(ctx context.Context, m migration) error {
+	tx, err := s.db.BeginTx(ctx, nil)
+	if err != nil {
+		return fmt.Errorf("begin migration %d: %w", m.version, err)
+	}
+	defer tx.Rollback()
+	if _, err := tx.ExecContext(ctx, m.sql); err != nil {
+		return fmt.Errorf("apply migration %d (%s): %w", m.version, m.name, err)
+	}
+	if _, err := tx.ExecContext(ctx, "INSERT INTO _trestle_schema_migrations(version,name,applied_at) VALUES(?,?,?)", m.version, m.name, time.Now().UTC().Format(time.RFC3339Nano)); err != nil {
+		return fmt.Errorf("record migration %d: %w", m.version, err)
+	}
+	if _, err := tx.ExecContext(ctx, fmt.Sprintf("PRAGMA user_version = %d", m.version)); err != nil {
+		return fmt.Errorf("set schema version %d: %w", m.version, err)
+	}
+	if err := tx.Commit(); err != nil {
+		return fmt.Errorf("commit migration %d: %w", m.version, err)
+	}
+	return nil
+}
+
+func (s *Store) Close() error                   { return s.db.Close() }
+func (s *Store) Ping(ctx context.Context) error { return s.db.PingContext(ctx) }
+func (s *Store) Path() string                   { return s.path }
+func (s *Store) DB() *sql.DB                    { return s.db }

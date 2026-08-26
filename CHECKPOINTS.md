@@ -144,7 +144,16 @@ shutdown under requests, redaction, and stable version output.
 
 ## CP02 — SQLite foundation and migrations
 
-Status: pending
+Status: complete
+
+Application commit: recorded in Git history for CP02
+Website output commit: recorded in the nested website repository for CP02
+Website source commit: recorded in the website source repository for CP02
+Verified: fresh/open/restart, foreign-key, owner-permission, migration-record,
+future-schema refusal, and failed-migration rollback tests; Go tests, race, vet,
+six release-target builds; both Nift builds/status; JS and website-link checks.
+Known limits: WAL is supported for the documented local-filesystem topology;
+backup/restore and schema-rebuild recovery arrive in later checkpoints.
 
 Application:
 
