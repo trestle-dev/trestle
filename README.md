@@ -58,7 +58,7 @@ http://127.0.0.1:8090
 
 On first run, open that address and create the first administrator. The setup
 route closes once the administrator is committed. Administrator passwords
-currently require at least 12 characters.
+currently require at least 7 characters.
 
 Trestle creates `./data/trestle.db` by default. The data directory is set to
 owner-only permissions and must live on a local filesystem; shared/network

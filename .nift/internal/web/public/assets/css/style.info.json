@@ -12,6 +12,8 @@
   "pagination-separator": "",
   "pagination-pages": 0,
   "dependencies": [
+    "content/assets/css/auth.css",
+    "content/assets/css/records.css",
     "content/assets/css/style.css"
   ],
   "reqs": []

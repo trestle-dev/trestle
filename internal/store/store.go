@@ -12,7 +12,7 @@ import (
 	_ "modernc.org/sqlite"
 )
 
-const CurrentVersion = 3
+const CurrentVersion = 4
 
 type Store struct {
 	db   *sql.DB
@@ -83,6 +83,14 @@ CREATE TABLE _trestle_fields (
   created_at TEXT NOT NULL,
   UNIQUE(collection_id,name),
   UNIQUE(collection_id,position)
+) STRICT;
+`}, {4, "record idempotency", `
+CREATE TABLE _trestle_record_idempotency (
+  collection_id TEXT NOT NULL REFERENCES _trestle_collections(id) ON DELETE CASCADE,
+  idempotency_key TEXT NOT NULL,
+  record_id TEXT NOT NULL,
+  created_at TEXT NOT NULL,
+  PRIMARY KEY(collection_id,idempotency_key)
 ) STRICT;
 `}}
 

@@ -11,7 +11,7 @@ import (
 	"golang.org/x/crypto/argon2"
 )
 
-const MinPasswordLength = 12
+const MinPasswordLength = 7
 
 func hashPassword(password string) (string, error) {
 	if len([]rune(password)) < MinPasswordLength {

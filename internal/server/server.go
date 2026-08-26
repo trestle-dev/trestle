@@ -20,11 +20,14 @@ type Server struct {
 }
 
 func New(logger *slog.Logger, dashboard ...http.Handler) *Server {
-	return newServer(logger, first(dashboard), nil)
+	return newServer(logger, first(dashboard), nil, nil)
 }
 
 func NewWithAdmin(logger *slog.Logger, dashboard, admin http.Handler) *Server {
-	return newServer(logger, dashboard, admin)
+	return newServer(logger, dashboard, nil, admin)
+}
+func NewWithHandlers(logger *slog.Logger, dashboard, api, admin http.Handler) *Server {
+	return newServer(logger, dashboard, api, admin)
 }
 func first(handlers []http.Handler) http.Handler {
 	if len(handlers) == 0 {
@@ -32,7 +35,7 @@ func first(handlers []http.Handler) http.Handler {
 	}
 	return handlers[0]
 }
-func newServer(logger *slog.Logger, dashboard, admin http.Handler) *Server {
+func newServer(logger *slog.Logger, dashboard, api, admin http.Handler) *Server {
 	s := &Server{logger: logger}
 	mux := http.NewServeMux()
 	mux.HandleFunc("GET /system/health", s.health)
@@ -40,6 +43,9 @@ func newServer(logger *slog.Logger, dashboard, admin http.Handler) *Server {
 	mux.HandleFunc("GET /system/version", s.version)
 	if admin != nil {
 		mux.Handle("/admin/v1/", admin)
+	}
+	if api != nil {
+		mux.Handle("/api/v1/", api)
 	}
 	if dashboard != nil {
 		mux.Handle("/", dashboard)

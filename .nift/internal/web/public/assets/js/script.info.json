@@ -12,6 +12,7 @@
   "pagination-separator": "",
   "pagination-pages": 0,
   "dependencies": [
+    "content/assets/js/records.js",
     "content/assets/js/script.js"
   ],
   "reqs": []

@@ -17,7 +17,8 @@ func physicalColumn(fieldID string) string {
 	sum := sha256.Sum256([]byte(fieldID))
 	return "f_" + hex.EncodeToString(sum[:8])
 }
-func quote(identifier string) string { return `"` + strings.ReplaceAll(identifier, `"`, `""`) + `"` }
+func PhysicalColumnName(fieldID string) string { return physicalColumn(fieldID) }
+func quote(identifier string) string           { return `"` + strings.ReplaceAll(identifier, `"`, `""`) + `"` }
 
 func createPhysical(ctx context.Context, tx *sql.Tx, collectionID string, fields []Field) error {
 	parts := []string{`_id TEXT PRIMARY KEY`, `_version INTEGER NOT NULL DEFAULT 1 CHECK(_version > 0)`, `_created TEXT NOT NULL`, `_updated TEXT NOT NULL`}

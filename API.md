@@ -54,6 +54,12 @@ authorization, conflict, precondition failure, rate limit, and replay gaps.
 
 ## Querying
 
+CP07 provides versioned CRUD at `/api/v1/collections/:collection/records` and
+the administrator equivalent at `/admin/v1/data/:collection/records`. Record
+updates and deletes require `If-Match`; creates accept `Idempotency-Key`.
+Lists are bounded to 100 items and support `fields` projection. Batch create is
+transactional and bounded to 100 records; request bodies are limited to 1 MiB.
+
 Support bounded page size, deterministic sorting with an ID tie-breaker, field
 projection, and explicitly limited relation expansion. Cursor pagination is the
 long-term default; if offset pagination ships first, state its consistency limits.

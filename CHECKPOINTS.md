@@ -322,7 +322,7 @@ constraint, rollback, crash-restart, and concurrent-access matrices pass.
 
 ## CP07 — Record CRUD vertical slice
 
-Status: pending
+Status: complete
 
 Application:
 
