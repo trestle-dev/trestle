@@ -606,7 +606,7 @@ Gate: transaction rollback, adapter contract, mocked AWS failures, duplicate
 
 ## CP19 — OpenAPI, reference clients, and AI DX
 
-Status: pending
+Status: complete
 
 Application:
 

@@ -11,6 +11,7 @@ import (
 	"syscall"
 
 	"github.com/trestle-dev/trestle/internal/adminauth"
+	"github.com/trestle-dev/trestle/internal/apidocs"
 	"github.com/trestle-dev/trestle/internal/appauth"
 	"github.com/trestle-dev/trestle/internal/audit"
 	"github.com/trestle-dev/trestle/internal/buildinfo"
@@ -74,6 +75,7 @@ func main() {
 	}
 	eventAPI.ConfigureDispatcher(webhookAPI)
 	functionAPI := functionapi.New(database.DB(), admin, jobAPI, functionapi.Options{Region: cfg.AWSRegion, AccessKey: cfg.AWSAccessKey, SecretKey: cfg.AWSSecretKey})
+	apiDocs := apidocs.New(database.DB(), admin)
 	eventAPI.ConfigureDispatcher(functionAPI)
 	recordAPI.ConfigureAudit(auditAPI)
 	fileAPI, err := filestore.New(database.DB(), admin, credentials, cfg.DataDir, filestore.Options{Backend: cfg.StorageBackend, S3Endpoint: cfg.S3Endpoint, S3Region: cfg.S3Region, S3Bucket: cfg.S3Bucket, S3AccessKey: cfg.S3AccessKey, S3SecretKey: cfg.S3SecretKey})
@@ -87,6 +89,8 @@ func main() {
 	apiRoutes.Handle("/api/v1/files", fileAPI)
 	apiRoutes.Handle("/api/v1/files/", fileAPI)
 	apiRoutes.Handle("/api/v1/realtime", eventAPI)
+	apiRoutes.Handle("/api/v1/openapi.json", apiDocs)
+	apiRoutes.Handle("/api/v1/capabilities", apiDocs)
 	adminRoutes := http.NewServeMux()
 	adminRoutes.Handle("/admin/v1/collections", collectionAdmin)
 	adminRoutes.Handle("/admin/v1/collections/", collectionAdmin)
@@ -108,6 +112,7 @@ func main() {
 	adminRoutes.Handle("/admin/v1/webhooks/", webhookAPI)
 	adminRoutes.Handle("/admin/v1/functions", functionAPI)
 	adminRoutes.Handle("/admin/v1/functions/", functionAPI)
+	adminRoutes.Handle("/admin/v1/api/schema", apiDocs)
 	adminRoutes.Handle("/", admin)
 	app := server.NewWithHandlers(logger, dashboard, apiRoutes, adminRoutes)
 	httpServer := &http.Server{Addr: cfg.Listen, Handler: app.Handler(), ReadHeaderTimeout: 5_000_000_000, IdleTimeout: 60_000_000_000}
