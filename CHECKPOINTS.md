@@ -579,7 +579,7 @@ Gate: signature vectors, SSRF/DNS rebinding, redirects, timeout, oversized
 
 ## CP18 — AWS Lambda function integration
 
-Status: pending
+Status: complete
 
 Application:
 

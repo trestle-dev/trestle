@@ -24,6 +24,9 @@ type Config struct {
 	S3Bucket        string
 	S3AccessKey     string
 	S3SecretKey     string
+	AWSRegion       string
+	AWSAccessKey    string
+	AWSSecretKey    string
 }
 
 func Defaults() Config {
@@ -61,6 +64,9 @@ func Load(args []string, getenv func(string) string) (Config, error) {
 	cfg.S3Bucket = getenv("TRESTLE_S3_BUCKET")
 	cfg.S3AccessKey = getenv("TRESTLE_S3_ACCESS_KEY")
 	cfg.S3SecretKey = getenv("TRESTLE_S3_SECRET_KEY")
+	cfg.AWSRegion = getenv("TRESTLE_AWS_REGION")
+	cfg.AWSAccessKey = getenv("TRESTLE_AWS_ACCESS_KEY")
+	cfg.AWSSecretKey = getenv("TRESTLE_AWS_SECRET_KEY")
 
 	set := flag.NewFlagSet("trestle", flag.ContinueOnError)
 	set.SetOutput(io.Discard)

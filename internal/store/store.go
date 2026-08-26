@@ -12,7 +12,7 @@ import (
 	_ "modernc.org/sqlite"
 )
 
-const CurrentVersion = 12
+const CurrentVersion = 13
 
 type Store struct {
 	db   *sql.DB
@@ -187,6 +187,13 @@ CREATE TABLE _trestle_webhooks (
  id TEXT PRIMARY KEY, name TEXT NOT NULL, url TEXT NOT NULL,
  topics TEXT NOT NULL, secret_cipher BLOB NOT NULL,
  enabled INTEGER NOT NULL DEFAULT 1 CHECK(enabled IN (0,1)),
+ created_at TEXT NOT NULL, updated_at TEXT NOT NULL
+) STRICT;
+`}, {13, "function targets", `
+CREATE TABLE _trestle_functions (
+ id TEXT PRIMARY KEY, name TEXT NOT NULL, provider TEXT NOT NULL CHECK(provider='aws-lambda'),
+ target TEXT NOT NULL, region TEXT NOT NULL, topics TEXT NOT NULL,
+ callback_scopes TEXT NOT NULL DEFAULT '', enabled INTEGER NOT NULL DEFAULT 1 CHECK(enabled IN (0,1)),
  created_at TEXT NOT NULL, updated_at TEXT NOT NULL
 ) STRICT;
 `}}

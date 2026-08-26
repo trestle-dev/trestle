@@ -22,10 +22,12 @@ type Handler struct {
 	admin       *adminauth.Handler
 	credentials *identities.Handler
 	now         func() time.Time
-	dispatcher  Dispatcher
+	dispatchers []Dispatcher
 }
 
-func (h *Handler) ConfigureDispatcher(dispatcher Dispatcher) { h.dispatcher = dispatcher }
+func (h *Handler) ConfigureDispatcher(dispatcher Dispatcher) {
+	h.dispatchers = append(h.dispatchers, dispatcher)
+}
 
 type Event struct {
 	Sequence   int64  `json:"sequence"`
@@ -45,8 +47,10 @@ func (h *Handler) Emit(ctx context.Context, tx *sql.Tx, topic, collection, recor
 		return err
 	}
 	_, err = tx.ExecContext(ctx, "INSERT INTO _trestle_events(occurred_at,topic,collection_name,record_id,payload_json) VALUES(?,?,?,?,?)", h.now().UTC().Format(time.RFC3339Nano), topic, null(collection), null(recordID), string(encoded))
-	if err == nil && h.dispatcher != nil {
-		err = h.dispatcher.Dispatch(ctx, tx, topic, collection, recordID, payload)
+	for _, dispatcher := range h.dispatchers {
+		if err == nil {
+			err = dispatcher.Dispatch(ctx, tx, topic, collection, recordID, payload)
+		}
 	}
 	return err
 }
