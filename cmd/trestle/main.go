@@ -15,6 +15,7 @@ import (
 	"github.com/trestle-dev/trestle/internal/buildinfo"
 	"github.com/trestle-dev/trestle/internal/collections"
 	"github.com/trestle-dev/trestle/internal/config"
+	filestore "github.com/trestle-dev/trestle/internal/files"
 	"github.com/trestle-dev/trestle/internal/identities"
 	"github.com/trestle-dev/trestle/internal/records"
 	"github.com/trestle-dev/trestle/internal/rules"
@@ -57,9 +58,16 @@ func main() {
 	applicationAuth := appauth.New(database.DB(), admin)
 	accessRules := rules.New(database.DB(), admin)
 	recordAPI.ConfigureAccess(applicationAuth, accessRules)
+	fileAPI, err := filestore.New(database.DB(), admin, credentials, cfg.DataDir)
+	if err != nil {
+		logger.Error("file storage initialization failed", "error", err)
+		os.Exit(1)
+	}
 	apiRoutes := http.NewServeMux()
 	apiRoutes.Handle("/api/v1/auth/", applicationAuth)
 	apiRoutes.Handle("/api/v1/collections/", recordAPI)
+	apiRoutes.Handle("/api/v1/files", fileAPI)
+	apiRoutes.Handle("/api/v1/files/", fileAPI)
 	adminRoutes := http.NewServeMux()
 	adminRoutes.Handle("/admin/v1/collections", collectionAdmin)
 	adminRoutes.Handle("/admin/v1/collections/", collectionAdmin)
@@ -69,6 +77,8 @@ func main() {
 	adminRoutes.Handle("/admin/v1/credentials", credentials)
 	adminRoutes.Handle("/admin/v1/credentials/", credentials)
 	adminRoutes.Handle("/admin/v1/collection-rules/", accessRules)
+	adminRoutes.Handle("/admin/v1/files", fileAPI)
+	adminRoutes.Handle("/admin/v1/files/", fileAPI)
 	adminRoutes.Handle("/", admin)
 	app := server.NewWithHandlers(logger, dashboard, apiRoutes, adminRoutes)
 	httpServer := &http.Server{Addr: cfg.Listen, Handler: app.Handler(), ReadHeaderTimeout: 5_000_000_000, IdleTimeout: 60_000_000_000}

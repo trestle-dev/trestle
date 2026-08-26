@@ -10,7 +10,9 @@ applications, and trusted backends written in any language.
 The repository is currently pre-release. Checkpoints CP00–CP05 are implemented:
 the server lifecycle, SQLite migrations, embedded administration shell, secure
 first-run administrator sessions, and base-collection metadata are working.
-Physical collection tables and record CRUD begin at CP06–CP07.
+The implemented foundation now includes physical collections, record CRUD,
+typed queries, application authentication, scoped backend credentials,
+collection access rules and local file storage through CP12.
 
 ## Requirements
 

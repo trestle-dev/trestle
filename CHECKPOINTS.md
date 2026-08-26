@@ -439,7 +439,7 @@ pass.
 
 ## CP12 — Local file storage
 
-Status: pending
+Status: complete
 
 Application:
 

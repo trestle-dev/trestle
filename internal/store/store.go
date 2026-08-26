@@ -12,7 +12,7 @@ import (
 	_ "modernc.org/sqlite"
 )
 
-const CurrentVersion = 7
+const CurrentVersion = 8
 
 type Store struct {
 	db   *sql.DB
@@ -139,6 +139,19 @@ CREATE TABLE _trestle_collection_rules (
   updated_at TEXT NOT NULL,
   PRIMARY KEY(collection_id,operation)
 ) STRICT;
+`}, {8, "local file storage", `
+CREATE TABLE _trestle_files (
+  id TEXT PRIMARY KEY,
+  storage_key TEXT NOT NULL UNIQUE,
+  original_name TEXT NOT NULL,
+  content_type TEXT NOT NULL,
+  size INTEGER NOT NULL CHECK(size >= 0),
+  sha256 TEXT NOT NULL,
+  collection_name TEXT,
+  record_id TEXT,
+  created_at TEXT NOT NULL
+) STRICT;
+CREATE INDEX _trestle_files_record ON _trestle_files(collection_name,record_id);
 `}}
 
 func Open(ctx context.Context, dataDir string) (*Store, error) {
