@@ -38,7 +38,7 @@ func setup(t *testing.T) (*Handler, session) {
 	json.Unmarshal(w.Body.Bytes(), &login)
 	sess := session{w.Result().Cookies()[0], login.CSRF}
 	schemas := collections.New(s.DB(), auth)
-	w = invoke(t, schemas, sess, "POST", "/admin/v1/collections", map[string]any{"name": "issues", "fields": []map[string]any{{"name": "title", "type": "text", "required": true}, {"name": "done", "type": "boolean", "default": false}, {"name": "score", "type": "number"}}}, nil)
+	w = invoke(t, schemas, sess, "POST", "/admin/v1/collections", map[string]any{"name": "issues", "fields": []map[string]any{{"name": "title", "type": "text", "required": true}, {"name": "done", "type": "boolean", "default": false}, {"name": "score", "type": "number"}, {"name": "owner", "type": "text"}}}, nil)
 	if w.Code != 201 {
 		t.Fatalf("schema: %d %s", w.Code, w.Body.String())
 	}

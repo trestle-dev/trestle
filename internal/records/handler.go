@@ -132,7 +132,7 @@ func (h *Handler) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 				}
 			}
 		}
-		if !allowed && rowRule == "" {
+		if !allowed && (id != "" || rowRule == "") {
 			if id != "" {
 				writeError(w, 404, "record_not_found", "The record was not found.")
 			} else {
