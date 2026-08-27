@@ -75,6 +75,15 @@ root privileges:
 curl -fsSL https://trestle.dev/install.sh | sh
 ```
 
+Update the installed binary without changing instance data or configuration:
+
+```sh
+curl -fsSL https://trestle.dev/update.sh | sh
+```
+
+The updater supports `--dry-run`, `--version vX.Y.Z`, and `--rollback`.
+System installations pass `--system` through `sudo` for install and update.
+
 For an explicit machine-wide install:
 
 ```sh

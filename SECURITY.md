@@ -1,8 +1,7 @@
 # Security model
 
-This is an engineering contract and threat-model seed, not a claim that the
-scaffold is production-ready. Public security guarantees begin only when their
-implementation and adversarial regression tests exist.
+This is an engineering contract and threat model, not a claim that failure is
+impossible or a substitute for independent assessment.
 
 ## Trust zones
 
@@ -42,7 +41,7 @@ the inspecting actor cannot access.
 ## Web security
 
 - Define cookie flags, session rotation, CSRF protection, CORS defaults, origin
-  checks, and WebSocket/SSE proxy behavior explicitly.
+  checks, and SSE proxy behavior explicitly.
 - Trust forwarded headers only from configured trusted proxies; never from the
   mere presence of `X-Forwarded-*`.
 - Apply security headers without breaking required dashboard behavior. Avoid
@@ -76,8 +75,8 @@ versions. Backups use a SQLite-consistent mechanism and include an explicit file
 storage strategy. A backup is not trusted until restore tests pass.
 
 Audit records are append-oriented and capture actor, action, target, outcome,
-time, and correlation ID without copying secrets. Tamper evidence and remote audit
-export are later hardening options, not implied by an append-only UI.
+time, and correlation ID without copying secrets. Tamper evidence and remote
+audit export are later hardening options, not implied by an append-only UI.
 
 ## Required adversarial coverage
 
@@ -88,5 +87,12 @@ lease theft, SSRF, callback escalation, secret leakage, proxy spoofing, migratio
 failure, backup/restore, and resource exhaustion. Fuzz parsers and decoders; run
 Go race tests and bounded load tests before a stable release.
 
-Use a private reporting channel once the project is public. Do not ask reporters
-to disclose an unpatched vulnerability in a public issue.
+## Reporting and supported versions
+
+Report suspected vulnerabilities privately to `security@trestle.dev`. Do not
+open a public issue until maintainers have coordinated disclosure. Include the
+affected version, deployment shape, reproduction, impact, and logs after
+removing secrets and personal data.
+
+Only the newest release line receives security fixes before the first stable
+release. A supported-version window will be frozen at the stable release gate.

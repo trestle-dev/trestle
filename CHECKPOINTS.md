@@ -713,7 +713,7 @@ Gate: clean-install/upgrade/rollback matrices, proxy-spoof tests, real Caddy/ngi
 
 ## CP23 - Stable-release hardening
 
-Status: pending
+Status: in progress (subcheckpoint 23.1 complete)
 
 Application:
 
