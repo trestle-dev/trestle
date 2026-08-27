@@ -112,6 +112,15 @@ func (h *Handler) setup(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	defer tx.Rollback()
+	if h.provider == string(store.Postgres) {
+		// PostgreSQL READ COMMITTED does not serialize count-then-insert, so
+		// competing setup transactions would both observe zero administrators.
+		// A transaction-scoped advisory lock makes exactly one setup winner.
+		if _, err := tx.ExecContext(r.Context(), "SELECT pg_advisory_xact_lock(839201347562)"); err != nil {
+			writeError(w, 500, "internal_error", "The request could not be completed.")
+			return
+		}
+	}
 	var count int
 	if err := tx.QueryRowContext(r.Context(), "SELECT count(*) FROM _trestle_admins").Scan(&count); err != nil || count != 0 {
 		writeError(w, 409, "setup_complete", "Initial setup has already been completed.")

@@ -368,15 +368,21 @@ Known limits: PostgreSQL 16 CI is configured but no green run has been reviewed;
 
 ## PG04 - First-run administration and identity parity
 
-Status: pending
+Status: complete
 
 Confirmed entry condition from the PG03R baseline: concurrent first-admin
 submissions with distinct emails created two administrators on PostgreSQL.
 The count-then-insert setup guard is not race-safe under PostgreSQL READ
 COMMITTED; SQLite's single-connection serialization masked the defect. PG04
-must introduce a provider-safe single-winner invariant and a
-provider-parameterized concurrency test. This is deliberately not patched in
-PG03R; it belongs to the complete crash-safe first-run state-machine design.
+introduced a transaction-scoped PostgreSQL advisory lock in the setup path, so
+competing requests now create exactly one administrator on each provider with a
+stable `409 setup_complete` for losers. The provider-parameterized concurrency
+test covers both engines.
+
+Also hardened in PG04: PostgreSQL migration startup now pins a dedicated
+`*sql.Conn` and performs the advisory lock, validated migration-history reads,
+migrations and identity initialization through that same connection, with the
+concurrent-startup test proving only one migration owner proceeds.
 
 ### Application
 
@@ -409,6 +415,24 @@ PG03R; it belongs to the complete crash-safe first-run state-machine design.
 - The complete administrator/application identity suite is provider-parameterized
   and green.
 - No PostgreSQL connection secret reaches browser state after setup.
+
+Completion record:
+
+```text
+Status: complete
+Application commit: recorded by this commit
+Website output commit: 418f5b7
+Website source commit: 561cb8c
+SQLite evidence: full suite plus the provider-parameterized identity subtests pass
+PostgreSQL evidence: real postgres 18.6 identity/session/token/credential suites
+  and the competing-setup single-winner test pass
+Parity evidence: exactly one winner per competing setup on both providers;
+  case-insensitive email uniqueness, rotation, revocation and CSRF behave alike
+Findings repaired: PostgreSQL first-admin race; advisory-lock ownership now uses
+  a pinned connection
+Known limits: collection, record, query and file parity remain PG05-PG07/PG07+;
+  PostgreSQL 16 CI configured but not yet reviewed green
+```
 
 ## PG05 - Collection metadata and physical schema parity
 

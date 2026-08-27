@@ -24,6 +24,22 @@ type Store struct {
 	dialect       Dialect
 	executor      Executor
 	schemaVersion int
+	initConn      *sql.Conn
+}
+
+// queryer, dbWorker and txBeginner abstract the shared *sql.DB and *sql.Conn
+// methods so initialization can pin one PostgreSQL connection for the whole
+// advisory-lock, migration and identity sequence.
+type queryer interface {
+	QueryContext(context.Context, string, ...any) (*sql.Rows, error)
+	QueryRowContext(context.Context, string, ...any) *sql.Row
+}
+type dbWorker interface {
+	queryer
+	ExecContext(context.Context, string, ...any) (sql.Result, error)
+}
+type txBeginner interface {
+	BeginTx(context.Context, *sql.TxOptions) (*sql.Tx, error)
 }
 
 type Options struct {
@@ -339,15 +355,26 @@ func (s *Store) initialize(ctx context.Context) error {
 			}
 		}
 	}
-	return s.ensureIdentity(ctx)
+	return s.ensureIdentity(ctx, s.db)
 }
 
 func (s *Store) initializePostgres(ctx context.Context) error {
-	if _, err := s.db.ExecContext(ctx, "SELECT pg_advisory_lock(839201347561)"); err != nil {
+	// Pin one dedicated connection so the session-level advisory lock, the
+	// migration-history reads, the migrations and the identity initialization
+	// all share connection ownership instead of relying on the temporary
+	// one-connection pool.
+	conn, err := s.db.Conn(ctx)
+	if err != nil {
+		return fmt.Errorf("acquire postgres connection: %w", err)
+	}
+	defer conn.Close()
+	if _, err := conn.ExecContext(ctx, "SELECT pg_advisory_lock(839201347561)"); err != nil {
 		return fmt.Errorf("lock postgres migrations: %w", err)
 	}
-	defer s.db.ExecContext(context.Background(), "SELECT pg_advisory_unlock(839201347561)")
-	history, err := s.readHistory(ctx)
+	defer conn.ExecContext(context.Background(), "SELECT pg_advisory_unlock(839201347561)")
+	s.initConn = conn
+	defer func() { s.initConn = nil }()
+	history, err := s.readHistory(ctx, conn)
 	if err != nil {
 		return err
 	}
@@ -359,7 +386,7 @@ func (s *Store) initializePostgres(ctx context.Context) error {
 			}
 		}
 	}
-	return s.ensureIdentity(ctx)
+	return s.ensureIdentity(ctx, conn)
 }
 
 type migrationHistory struct {
@@ -371,14 +398,14 @@ type migrationHistory struct {
 // from the validated _trestle_schema_migrations history. A database without the
 // history table is treated as blank. Damaged, non-contiguous, future or
 // misnamed history fails closed instead of guessing.
-func (s *Store) readHistory(ctx context.Context) (migrationHistory, error) {
+func (s *Store) readHistory(ctx context.Context, q queryer) (migrationHistory, error) {
 	var exists bool
 	var err error
 	if s.provider == Postgres {
-		err = s.db.QueryRowContext(ctx, "SELECT to_regclass('_trestle_schema_migrations') IS NOT NULL").Scan(&exists)
+		err = q.QueryRowContext(ctx, "SELECT to_regclass('_trestle_schema_migrations') IS NOT NULL").Scan(&exists)
 	} else {
 		var count int
-		err = s.db.QueryRowContext(ctx, "SELECT count(*) FROM sqlite_master WHERE type='table' AND name='_trestle_schema_migrations'").Scan(&count)
+		err = q.QueryRowContext(ctx, "SELECT count(*) FROM sqlite_master WHERE type='table' AND name='_trestle_schema_migrations'").Scan(&count)
 		exists = count > 0
 	}
 	if err != nil {
@@ -387,7 +414,7 @@ func (s *Store) readHistory(ctx context.Context) (migrationHistory, error) {
 	if !exists {
 		return migrationHistory{}, nil
 	}
-	rows, err := s.db.QueryContext(ctx, "SELECT version,name FROM _trestle_schema_migrations ORDER BY version")
+	rows, err := q.QueryContext(ctx, "SELECT version,name FROM _trestle_schema_migrations ORDER BY version")
 	if err != nil {
 		return migrationHistory{}, fmt.Errorf("read migration history: %w", err)
 	}
@@ -423,7 +450,7 @@ func (s *Store) readHistory(ctx context.Context) (migrationHistory, error) {
 // reconciliation signal. A blank database may initialize; an absent mirror is
 // restored; disagreement fails closed rather than reconstructing history.
 func (s *Store) sqliteVersion(ctx context.Context) (int, error) {
-	history, err := s.readHistory(ctx)
+	history, err := s.readHistory(ctx, s.db)
 	if err != nil {
 		return 0, err
 	}
@@ -451,14 +478,14 @@ func (s *Store) sqliteVersion(ctx context.Context) (int, error) {
 	return history.version, nil
 }
 
-func (s *Store) ensureIdentity(ctx context.Context) error {
+func (s *Store) ensureIdentity(ctx context.Context, w dbWorker) error {
 	provider := string(s.provider)
-	_, err := s.executor.ExecContext(ctx, "INSERT INTO _trestle_system_meta(key,value,updated_at) VALUES(?,?,?) ON CONFLICT(key) DO NOTHING", "database_provider", provider, time.Now().UTC().Format(time.RFC3339Nano))
+	_, err := w.ExecContext(ctx, Bind(s.dialect, "INSERT INTO _trestle_system_meta(key,value,updated_at) VALUES(?,?,?) ON CONFLICT(key) DO NOTHING"), "database_provider", provider, time.Now().UTC().Format(time.RFC3339Nano))
 	if err != nil {
 		return fmt.Errorf("record database identity: %w", err)
 	}
 	var stored string
-	if err := s.executor.QueryRowContext(ctx, "SELECT value FROM _trestle_system_meta WHERE key=?", "database_provider").Scan(&stored); err != nil {
+	if err := w.QueryRowContext(ctx, Bind(s.dialect, "SELECT value FROM _trestle_system_meta WHERE key=?"), "database_provider").Scan(&stored); err != nil {
 		return fmt.Errorf("read database identity: %w", err)
 	}
 	if stored != provider {
@@ -477,7 +504,11 @@ func (s *Store) apply(ctx context.Context, m migration) error {
 	if s.executor == nil {
 		s.executor = NewExecutor(s.db, s.dialect)
 	}
-	tx, err := s.db.BeginTx(ctx, nil)
+	var db txBeginner = s.db
+	if s.initConn != nil {
+		db = s.initConn
+	}
+	tx, err := db.BeginTx(ctx, nil)
 	if err != nil {
 		return fmt.Errorf("begin migration %d: %w", m.version, err)
 	}

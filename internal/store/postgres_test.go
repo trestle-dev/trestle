@@ -22,6 +22,31 @@ func postgresTestURL(t *testing.T) string {
 	return value
 }
 
+// ownedURL acquires the test ownership advisory lock before returning the URL
+// so tests from parallel package binaries sharing the disposable database
+// serialize instead of resetting one another's schema.
+func ownedURL(t *testing.T) string {
+	t.Helper()
+	url := postgresTestURL(t)
+	raw, err := sql.Open("postgres", url)
+	if err != nil {
+		t.Fatal(err)
+	}
+	conn, err := raw.Conn(context.Background())
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err := conn.ExecContext(context.Background(), "SELECT pg_advisory_lock(839201347563)"); err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() {
+		conn.ExecContext(context.Background(), "SELECT pg_advisory_unlock(839201347563)")
+		conn.Close()
+		raw.Close()
+	})
+	return url
+}
+
 func resetPostgres(t *testing.T, raw *sql.DB) {
 	t.Helper()
 	rows, err := raw.Query(`SELECT tablename FROM pg_tables WHERE schemaname='public'`)
@@ -49,7 +74,7 @@ func resetPostgres(t *testing.T, raw *sql.DB) {
 }
 
 func TestPostgresFreshRestartAndFutureSchema(t *testing.T) {
-	url := postgresTestURL(t)
+	url := ownedURL(t)
 	raw, err := sql.Open("postgres", url)
 	if err != nil {
 		t.Fatal(err)
@@ -84,7 +109,7 @@ func TestPostgresFreshRestartAndFutureSchema(t *testing.T) {
 }
 
 func TestPostgresFailedMigrationRollsBack(t *testing.T) {
-	url := postgresTestURL(t)
+	url := ownedURL(t)
 	raw, err := sql.Open("postgres", url)
 	if err != nil {
 		t.Fatal(err)
@@ -109,7 +134,7 @@ func TestPostgresFailedMigrationRollsBack(t *testing.T) {
 }
 
 func TestPostgresConcurrentStartupSerializesMigrations(t *testing.T) {
-	url := postgresTestURL(t)
+	url := ownedURL(t)
 	raw, err := sql.Open("postgres", url)
 	if err != nil {
 		t.Fatal(err)
@@ -145,7 +170,7 @@ func TestPostgresConcurrentStartupSerializesMigrations(t *testing.T) {
 }
 
 func TestPostgresDiagnosticsAppliedVersion(t *testing.T) {
-	url := postgresTestURL(t)
+	url := ownedURL(t)
 	raw, err := sql.Open("postgres", url)
 	if err != nil {
 		t.Fatal(err)
@@ -179,7 +204,7 @@ func TestPostgresDiagnosticsAppliedVersion(t *testing.T) {
 }
 
 func TestPostgresMigrationHistoryValidation(t *testing.T) {
-	url := postgresTestURL(t)
+	url := ownedURL(t)
 	raw, err := sql.Open("postgres", url)
 	if err != nil {
 		t.Fatal(err)

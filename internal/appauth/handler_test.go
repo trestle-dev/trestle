@@ -2,7 +2,6 @@ package appauth
 
 import (
 	"bytes"
-	"context"
 	"encoding/json"
 	"net/http"
 	"net/http/httptest"
@@ -11,17 +10,13 @@ import (
 	"testing"
 
 	"github.com/trestle-dev/trestle/internal/adminauth"
-	"github.com/trestle-dev/trestle/internal/store"
+	"github.com/trestle-dev/trestle/internal/storetest"
 )
 
-func setup(t *testing.T) *Handler {
+func setup(t *testing.T, provider string) *Handler {
 	t.Helper()
-	s, err := store.Open(context.Background(), t.TempDir())
-	if err != nil {
-		t.Fatal(err)
-	}
-	t.Cleanup(func() { s.Close() })
-	return New(s.DB(), adminauth.New(s.DB()))
+	s := storetest.Open(t, provider)
+	return New(s.DB(), adminauth.New(s.DB(), string(s.Provider())))
 }
 func call(t *testing.T, h http.Handler, path string, body any) *httptest.ResponseRecorder {
 	t.Helper()
@@ -48,84 +43,120 @@ func registerAndLogin(t *testing.T, h *Handler) string {
 	return out.RefreshToken
 }
 func TestRegistrationLoginRotationRevocation(t *testing.T) {
-	h := setup(t)
-	refresh := registerAndLogin(t, h)
-	w := call(t, h, "/api/v1/auth/refresh", map[string]any{"refreshToken": refresh})
-	if w.Code != 200 {
-		t.Fatal(w.Body.String())
-	}
-	w = call(t, h, "/api/v1/auth/refresh", map[string]any{"refreshToken": refresh})
-	if w.Code != 401 {
-		t.Fatalf("reused refresh %d", w.Code)
-	}
-	var next struct {
-		RefreshToken string `json:"refreshToken"`
-	}
-	callResult := call(t, h, "/api/v1/auth/login", map[string]any{"email": "user@example.com", "password": "1234567"})
-	json.Unmarshal(callResult.Body.Bytes(), &next)
-	w = call(t, h, "/api/v1/auth/logout", map[string]any{"refreshToken": next.RefreshToken})
-	if w.Code != 204 {
-		t.Fatal(w.Code)
+	for _, provider := range storetest.Providers(t) {
+		t.Run(provider, func(t *testing.T) {
+			h := setup(t, provider)
+			refresh := registerAndLogin(t, h)
+			w := call(t, h, "/api/v1/auth/refresh", map[string]any{"refreshToken": refresh})
+			if w.Code != 200 {
+				t.Fatal(w.Body.String())
+			}
+			w = call(t, h, "/api/v1/auth/refresh", map[string]any{"refreshToken": refresh})
+			if w.Code != 401 {
+				t.Fatalf("reused refresh %d", w.Code)
+			}
+			var next struct {
+				RefreshToken string `json:"refreshToken"`
+			}
+			callResult := call(t, h, "/api/v1/auth/login", map[string]any{"email": "user@example.com", "password": "1234567"})
+			json.Unmarshal(callResult.Body.Bytes(), &next)
+			w = call(t, h, "/api/v1/auth/logout", map[string]any{"refreshToken": next.RefreshToken})
+			if w.Code != 204 {
+				t.Fatal(w.Code)
+			}
+		})
 	}
 }
 func TestConcurrentRefreshOnlyOneWins(t *testing.T) {
-	h := setup(t)
-	refresh := registerAndLogin(t, h)
-	codes := make(chan int, 2)
-	var wg sync.WaitGroup
-	for i := 0; i < 2; i++ {
-		wg.Add(1)
-		go func() {
-			defer wg.Done()
-			codes <- call(t, h, "/api/v1/auth/refresh", map[string]any{"refreshToken": refresh}).Code
-		}()
-	}
-	wg.Wait()
-	close(codes)
-	ok, denied := 0, 0
-	for code := range codes {
-		if code == 200 {
-			ok++
-		}
-		if code == 401 {
-			denied++
-		}
-	}
-	if ok != 1 || denied != 1 {
-		t.Fatalf("ok=%d denied=%d", ok, denied)
+	for _, provider := range storetest.Providers(t) {
+		t.Run(provider, func(t *testing.T) {
+			h := setup(t, provider)
+			refresh := registerAndLogin(t, h)
+			codes := make(chan int, 2)
+			var wg sync.WaitGroup
+			for i := 0; i < 2; i++ {
+				wg.Add(1)
+				go func() {
+					defer wg.Done()
+					codes <- call(t, h, "/api/v1/auth/refresh", map[string]any{"refreshToken": refresh}).Code
+				}()
+			}
+			wg.Wait()
+			close(codes)
+			ok, denied := 0, 0
+			for code := range codes {
+				if code == 200 {
+					ok++
+				}
+				if code == 401 {
+					denied++
+				}
+			}
+			if ok != 1 || denied != 1 {
+				t.Fatalf("ok=%d denied=%d", ok, denied)
+			}
+		})
 	}
 }
-func TestGenericLoginFailureAndPasswordMinimum(t *testing.T) {
-	h := setup(t)
-	w := call(t, h, "/api/v1/auth/register", map[string]any{"email": "x@example.com", "password": "123456"})
-	if w.Code != 422 {
-		t.Fatal(w.Code)
+func TestEmailUniquenessIsCaseInsensitive(t *testing.T) {
+	for _, provider := range storetest.Providers(t) {
+		t.Run(provider, func(t *testing.T) {
+			h := setup(t, provider)
+			w := call(t, h, "/api/v1/auth/register", map[string]any{"email": "User@Example.COM", "password": "1234567"})
+			if w.Code != 201 {
+				t.Fatal(w.Body.String())
+			}
+			w = call(t, h, "/api/v1/auth/register", map[string]any{"email": "user@example.com", "password": "1234567"})
+			if w.Code != 409 {
+				t.Fatalf("case-variant registration: %d %s", w.Code, w.Body.String())
+			}
+			w = call(t, h, "/api/v1/auth/login", map[string]any{"email": "USER@example.com", "password": "1234567"})
+			if w.Code != 200 {
+				t.Fatalf("case-variant login: %d %s", w.Code, w.Body.String())
+			}
+		})
 	}
-	a := call(t, h, "/api/v1/auth/login", map[string]any{"email": "missing@example.com", "password": "wrong"})
-	b := call(t, h, "/api/v1/auth/login", map[string]any{"email": "x@example.com", "password": "wrong"})
-	if a.Code != b.Code || !strings.Contains(a.Body.String(), "invalid_credentials") {
-		t.Fatal("enumerating login response")
+}
+
+func TestGenericLoginFailureAndPasswordMinimum(t *testing.T) {
+	for _, provider := range storetest.Providers(t) {
+		t.Run(provider, func(t *testing.T) {
+			h := setup(t, provider)
+			w := call(t, h, "/api/v1/auth/register", map[string]any{"email": "x@example.com", "password": "123456"})
+			if w.Code != 422 {
+				t.Fatal(w.Code)
+			}
+			a := call(t, h, "/api/v1/auth/login", map[string]any{"email": "missing@example.com", "password": "wrong"})
+			b := call(t, h, "/api/v1/auth/login", map[string]any{"email": "x@example.com", "password": "wrong"})
+			if a.Code != b.Code || !strings.Contains(a.Body.String(), "invalid_credentials") {
+				t.Fatal("enumerating login response")
+			}
+		})
 	}
 }
 
 func TestAccessTokenIsSeparateAndExpiresWithSession(t *testing.T) {
-	h := setup(t)
-	registerAndLogin(t, h)
-	w := call(t, h, "/api/v1/auth/login", map[string]any{"email": "user@example.com", "password": "1234567"})
-	var out struct{ AccessToken, RefreshToken string }
-	json.Unmarshal(w.Body.Bytes(), &out)
-	r := httptest.NewRequest("GET", "/", nil)
-	r.Header.Set("Authorization", "Bearer "+out.AccessToken)
-	if id, ok := h.Authenticate(r); !ok || id == "" {
-		t.Fatal("access token denied")
-	}
-	r.Header.Set("Authorization", "Bearer "+out.RefreshToken)
-	if _, ok := h.Authenticate(r); ok {
-		t.Fatal("refresh token accepted as access token")
-	}
-	call(t, h, "/api/v1/auth/logout", map[string]any{"refreshToken": out.RefreshToken})
-	r.Header.Set("Authorization", "Bearer "+out.AccessToken)
-	if _, ok := h.Authenticate(r); ok {
-		t.Fatal("access survived session revocation")
+	for _, provider := range storetest.Providers(t) {
+		t.Run(provider, func(t *testing.T) {
+			h := setup(t, provider)
+			registerAndLogin(t, h)
+			w := call(t, h, "/api/v1/auth/login", map[string]any{"email": "user@example.com", "password": "1234567"})
+			var out struct{ AccessToken, RefreshToken string }
+			json.Unmarshal(w.Body.Bytes(), &out)
+			r := httptest.NewRequest("GET", "/", nil)
+			r.Header.Set("Authorization", "Bearer "+out.AccessToken)
+			if id, ok := h.Authenticate(r); !ok || id == "" {
+				t.Fatal("access token denied")
+			}
+			r.Header.Set("Authorization", "Bearer "+out.RefreshToken)
+			if _, ok := h.Authenticate(r); ok {
+				t.Fatal("refresh token accepted as access token")
+			}
+			call(t, h, "/api/v1/auth/logout", map[string]any{"refreshToken": out.RefreshToken})
+			r.Header.Set("Authorization", "Bearer "+out.AccessToken)
+			if _, ok := h.Authenticate(r); ok {
+				t.Fatal("access survived session revocation")
+			}
+		})
 	}
 }

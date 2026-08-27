@@ -2,40 +2,40 @@ package adminauth
 
 import (
 	"bytes"
-	"context"
 	"encoding/json"
+	"fmt"
 	"net/http"
 	"net/http/httptest"
 	"strings"
 	"testing"
 
 	"github.com/trestle-dev/trestle/internal/requestmeta"
-	"github.com/trestle-dev/trestle/internal/store"
+	"github.com/trestle-dev/trestle/internal/storetest"
 )
 
-func testHandler(t *testing.T) *Handler {
+func testHandler(t *testing.T, provider string) *Handler {
 	t.Helper()
-	s, err := store.Open(context.Background(), t.TempDir())
-	if err != nil {
-		t.Fatal(err)
-	}
-	t.Cleanup(func() { s.Close() })
-	return New(s.DB())
+	s := storetest.Open(t, provider)
+	return New(s.DB(), string(s.Provider()))
 }
 
 func TestTrustedHTTPSIssuesSecureCookie(t *testing.T) {
-	h := testHandler(t)
-	r := httptest.NewRequest(http.MethodPost, "/admin/v1/setup", strings.NewReader(`{"email":"admin@example.com","password":"mudblood"}`))
-	r.Host = "example.test"
-	r.Header.Set("Origin", "https://example.test")
-	r = requestmeta.With(r, "https", "203.0.113.9")
-	w := httptest.NewRecorder()
-	h.ServeHTTP(w, r)
-	if w.Code != 200 {
-		t.Fatalf("setup: %d %s", w.Code, w.Body.String())
-	}
-	if cookies := w.Result().Cookies(); len(cookies) != 1 || !cookies[0].Secure {
-		t.Fatalf("expected secure cookie: %#v", cookies)
+	for _, provider := range storetest.Providers(t) {
+		t.Run(provider, func(t *testing.T) {
+			h := testHandler(t, provider)
+			r := httptest.NewRequest(http.MethodPost, "/admin/v1/setup", strings.NewReader(`{"email":"admin@example.com","password":"mudblood"}`))
+			r.Host = "example.test"
+			r.Header.Set("Origin", "https://example.test")
+			r = requestmeta.With(r, "https", "203.0.113.9")
+			w := httptest.NewRecorder()
+			h.ServeHTTP(w, r)
+			if w.Code != 200 {
+				t.Fatalf("setup: %d %s", w.Code, w.Body.String())
+			}
+			if cookies := w.Result().Cookies(); len(cookies) != 1 || !cookies[0].Secure {
+				t.Fatalf("expected secure cookie: %#v", cookies)
+			}
+		})
 	}
 }
 func request(t *testing.T, h http.Handler, method, path string, body any, cookie *http.Cookie, csrf string) *httptest.ResponseRecorder {
@@ -60,61 +60,115 @@ func request(t *testing.T, h http.Handler, method, path string, body any, cookie
 	h.ServeHTTP(w, r)
 	return w
 }
+func rawRequest(h http.Handler, method, path string, body any) int {
+	var data bytes.Buffer
+	if body != nil {
+		json.NewEncoder(&data).Encode(body)
+	}
+	r := httptest.NewRequest(method, path, &data)
+	r.Host = "example.test"
+	r.Header.Set("Origin", "http://example.test")
+	w := httptest.NewRecorder()
+	h.ServeHTTP(w, r)
+	return w.Code
+}
 
 func TestSetupLoginLogoutLifecycle(t *testing.T) {
-	h := testHandler(t)
-	w := request(t, h, "GET", "/admin/v1/setup/status", nil, nil, "")
-	if !strings.Contains(w.Body.String(), "true") {
-		t.Fatal(w.Body.String())
+	for _, provider := range storetest.Providers(t) {
+		t.Run(provider, func(t *testing.T) {
+			h := testHandler(t, provider)
+			w := request(t, h, "GET", "/admin/v1/setup/status", nil, nil, "")
+			if !strings.Contains(w.Body.String(), "true") {
+				t.Fatal(w.Body.String())
+			}
+			w = request(t, h, "POST", "/admin/v1/setup", credentials{Email: "Admin@Example.com", Password: "correct horse battery staple"}, nil, "")
+			if w.Code != 200 {
+				t.Fatalf("setup: %d %s", w.Code, w.Body.String())
+			}
+			setupCookie := w.Result().Cookies()[0]
+			var session sessionResponse
+			if err := json.NewDecoder(w.Body).Decode(&session); err != nil {
+				t.Fatal(err)
+			}
+			w = request(t, h, "POST", "/admin/v1/setup", credentials{Email: "other@example.com", Password: "correct horse battery staple"}, nil, "")
+			if w.Code != 409 {
+				t.Fatalf("second setup: %d", w.Code)
+			}
+			w = request(t, h, "DELETE", "/admin/v1/session", nil, setupCookie, "")
+			if w.Code != 403 {
+				t.Fatalf("logout without csrf: %d", w.Code)
+			}
+			w = request(t, h, "DELETE", "/admin/v1/session", nil, setupCookie, session.CSRFToken)
+			if w.Code != 204 {
+				t.Fatalf("logout: %d %s", w.Code, w.Body.String())
+			}
+			w = request(t, h, "GET", "/admin/v1/session", nil, setupCookie, "")
+			if !strings.Contains(w.Body.String(), "false") {
+				t.Fatal("revoked session remained active")
+			}
+			w = request(t, h, "POST", "/admin/v1/session", credentials{Email: "admin@example.com", Password: "wrong password"}, nil, "")
+			if w.Code != 401 || !strings.Contains(w.Body.String(), "invalid_credentials") {
+				t.Fatalf("bad login: %d %s", w.Code, w.Body.String())
+			}
+			w = request(t, h, "POST", "/admin/v1/session", credentials{Email: "admin@example.com", Password: "correct horse battery staple"}, nil, "")
+			if w.Code != 200 {
+				t.Fatalf("login: %d %s", w.Code, w.Body.String())
+			}
+		})
 	}
-	w = request(t, h, "POST", "/admin/v1/setup", credentials{Email: "Admin@Example.com", Password: "correct horse battery staple"}, nil, "")
-	if w.Code != 200 {
-		t.Fatalf("setup: %d %s", w.Code, w.Body.String())
-	}
-	setupCookie := w.Result().Cookies()[0]
-	var session sessionResponse
-	if err := json.NewDecoder(w.Body).Decode(&session); err != nil {
-		t.Fatal(err)
-	}
-	w = request(t, h, "POST", "/admin/v1/setup", credentials{Email: "other@example.com", Password: "correct horse battery staple"}, nil, "")
-	if w.Code != 409 {
-		t.Fatalf("second setup: %d", w.Code)
-	}
-	w = request(t, h, "DELETE", "/admin/v1/session", nil, setupCookie, "")
-	if w.Code != 403 {
-		t.Fatalf("logout without csrf: %d", w.Code)
-	}
-	w = request(t, h, "DELETE", "/admin/v1/session", nil, setupCookie, session.CSRFToken)
-	if w.Code != 204 {
-		t.Fatalf("logout: %d %s", w.Code, w.Body.String())
-	}
-	w = request(t, h, "GET", "/admin/v1/session", nil, setupCookie, "")
-	if !strings.Contains(w.Body.String(), "false") {
-		t.Fatal("revoked session remained active")
-	}
-	w = request(t, h, "POST", "/admin/v1/session", credentials{Email: "admin@example.com", Password: "wrong password"}, nil, "")
-	if w.Code != 401 || !strings.Contains(w.Body.String(), "invalid_credentials") {
-		t.Fatalf("bad login: %d %s", w.Code, w.Body.String())
-	}
-	w = request(t, h, "POST", "/admin/v1/session", credentials{Email: "admin@example.com", Password: "correct horse battery staple"}, nil, "")
-	if w.Code != 200 {
-		t.Fatalf("login: %d %s", w.Code, w.Body.String())
+}
+
+func TestCompetingSetupCreatesOneAdministrator(t *testing.T) {
+	for _, provider := range storetest.Providers(t) {
+		t.Run(provider, func(t *testing.T) {
+			s := storetest.Open(t, provider)
+			h := New(s.DB(), string(s.Provider()))
+			start := make(chan struct{})
+			codes := make(chan int, 8)
+			for i := 0; i < 8; i++ {
+				go func(n int) {
+					<-start
+					codes <- rawRequest(h, "POST", "/admin/v1/setup", credentials{Email: fmt.Sprintf("admin%d@example.com", n), Password: "correct horse battery staple"})
+				}(i)
+			}
+			close(start)
+			ok, denied := 0, 0
+			for i := 0; i < 8; i++ {
+				switch <-codes {
+				case 200:
+					ok++
+				case 409:
+					denied++
+				}
+			}
+			if ok != 1 || denied != 7 {
+				t.Fatalf("200=%d 409=%d, want exactly one winner", ok, denied)
+			}
+			var count int
+			if err := s.DB().QueryRow("SELECT count(*) FROM _trestle_admins").Scan(&count); err != nil || count != 1 {
+				t.Fatalf("admins=%d err=%v", count, err)
+			}
+		})
 	}
 }
 
 func TestSetupValidationAndOrigin(t *testing.T) {
-	h := testHandler(t)
-	w := request(t, h, "POST", "/admin/v1/setup", credentials{Email: "bad", Password: "short"}, nil, "")
-	if w.Code != 422 {
-		t.Fatalf("got %d", w.Code)
-	}
-	r := httptest.NewRequest("POST", "/admin/v1/setup", strings.NewReader(`{"email":"a@example.com","password":"correct horse battery staple"}`))
-	r.Host = "example.test"
-	r.Header.Set("Origin", "https://evil.test")
-	w = httptest.NewRecorder()
-	h.ServeHTTP(w, r)
-	if w.Code != 403 {
-		t.Fatalf("origin got %d", w.Code)
+	for _, provider := range storetest.Providers(t) {
+		t.Run(provider, func(t *testing.T) {
+			h := testHandler(t, provider)
+			w := request(t, h, "POST", "/admin/v1/setup", credentials{Email: "bad", Password: "short"}, nil, "")
+			if w.Code != 422 {
+				t.Fatalf("got %d", w.Code)
+			}
+			r := httptest.NewRequest("POST", "/admin/v1/setup", strings.NewReader(`{"email":"a@example.com","password":"correct horse battery staple"}`))
+			r.Host = "example.test"
+			r.Header.Set("Origin", "https://evil.test")
+			w = httptest.NewRecorder()
+			h.ServeHTTP(w, r)
+			if w.Code != 403 {
+				t.Fatalf("origin got %d", w.Code)
+			}
+		})
 	}
 }
 
