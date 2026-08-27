@@ -495,7 +495,14 @@ Known limits: records, querying, files and automation parity remain PG06-PG07+;
 
 ## PG06 - Records, filters and transaction semantics
 
-Status: pending
+Status: complete
+
+Record create/get/update/delete, 1,000-record atomic batches, idempotency,
+projections, optimistic versions and boolean filters now run against both
+providers with identical envelopes and committed state. The dialect owns
+boolean and numeric value binding, and the typed filter AST is compiled through
+it. Concurrent updates and idempotency races resolve to exactly one winner on
+SQLite serialization and PostgreSQL MVCC.
 
 ### Application
 
@@ -528,6 +535,25 @@ Status: pending
   ordering and committed state on both providers.
 - Concurrency tests contain no unexplained duplicate, lost update or partial
   batch.
+
+Completion record:
+
+```text
+Status: complete
+Application commit: recorded by this commit
+Website output commit: bac7246
+Website source commit: 303d520
+SQLite evidence: records CRUD, validation, batch, idempotency, filter, cursor
+  and concurrency gates pass
+PostgreSQL evidence: real postgres 18.6 runs the same records suite including
+  1,000-record batches and one-winner update/idempotency races
+Parity evidence: boolean and numeric values bind through the dialect; batch
+  rollback and stale-version behavior are identical on both providers
+Findings repaired: SQLite-only boolean encoding reached dynamic tables; the
+  filter AST normalized booleans as integers regardless of provider
+Known limits: querying and pagination parity is PG07; files and automation
+  remain pending; PostgreSQL 16 CI configured but not yet reviewed green
+```
 
 ## PG07 - Access rules, identities and file metadata
 

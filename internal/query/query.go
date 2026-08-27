@@ -6,6 +6,8 @@ import (
 	"fmt"
 	"regexp"
 	"strings"
+
+	"github.com/trestle-dev/trestle/internal/store"
 )
 
 const MaxExpressionBytes = 512
@@ -53,7 +55,7 @@ func Parse(input string) (Expr, error) {
 	return expr, nil
 }
 
-func Compile(expr Expr, fields map[string]Field) (string, []any, error) {
+func Compile(expr Expr, fields map[string]Field, dialect store.Dialect) (string, []any, error) {
 	parts := make([]string, 0, len(expr.Clauses))
 	args := make([]any, 0, len(expr.Clauses))
 	for _, clause := range expr.Clauses {
@@ -71,7 +73,7 @@ func Compile(expr Expr, fields map[string]Field) (string, []any, error) {
 			value = "%" + value.(string) + "%"
 		}
 		parts = append(parts, quote(field.Column)+" "+op+" ?")
-		args = append(args, normalize(field.Type, value))
+		args = append(args, normalize(dialect, field.Type, value))
 	}
 	return strings.Join(parts, " AND "), args, nil
 }
@@ -93,12 +95,9 @@ func compatible(kind, op string, value any) bool {
 	}
 }
 
-func normalize(kind string, value any) any {
+func normalize(dialect store.Dialect, kind string, value any) any {
 	if kind == "boolean" && value != nil {
-		if value.(bool) {
-			return 1
-		}
-		return 0
+		return dialect.Boolean(value.(bool))
 	}
 	return value
 }

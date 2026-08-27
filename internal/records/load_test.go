@@ -11,7 +11,7 @@ import (
 )
 
 func TestBoundedConcurrentRecordReadLoad(t *testing.T) {
-	h, session := setup(t)
+	h, session := setup(t, "sqlite")
 	for i := 0; i < 100; i++ {
 		response := invoke(t, h, session, http.MethodPost, "/api/v1/collections/issues/records", map[string]any{"values": map[string]any{"title": "load-" + strconv.Itoa(i)}}, nil)
 		if response.Code != http.StatusCreated {
@@ -51,7 +51,7 @@ func TestBoundedConcurrentRecordReadLoad(t *testing.T) {
 }
 
 func TestRecordResourceLimitsFailControlled(t *testing.T) {
-	h, session := setup(t)
+	h, session := setup(t, "sqlite")
 	records := make([]map[string]any, 1001)
 	for i := range records {
 		records[i] = map[string]any{"values": map[string]any{"title": "bounded"}}

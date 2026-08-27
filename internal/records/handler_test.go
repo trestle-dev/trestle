@@ -2,7 +2,6 @@ package records
 
 import (
 	"bytes"
-	"context"
 	"encoding/json"
 	"net/http"
 	"net/http/httptest"
@@ -12,7 +11,7 @@ import (
 
 	"github.com/trestle-dev/trestle/internal/adminauth"
 	"github.com/trestle-dev/trestle/internal/collections"
-	"github.com/trestle-dev/trestle/internal/store"
+	"github.com/trestle-dev/trestle/internal/storetest"
 )
 
 type session struct {
@@ -20,14 +19,10 @@ type session struct {
 	csrf   string
 }
 
-func setup(t *testing.T) (*Handler, session) {
+func setup(t *testing.T, provider string) (*Handler, session) {
 	t.Helper()
-	s, err := store.Open(context.Background(), t.TempDir())
-	if err != nil {
-		t.Fatal(err)
-	}
-	t.Cleanup(func() { s.Close() })
-	auth := adminauth.New(s.DB())
+	s := storetest.Open(t, provider)
+	auth := adminauth.New(s.DB(), string(s.Provider()))
 	w := invoke(t, auth, session{}, "POST", "/admin/v1/setup", map[string]any{"email": "admin@example.com", "password": "correct horse battery staple"}, nil)
 	if w.Code != 200 {
 		t.Fatal(w.Body.String())
@@ -46,6 +41,9 @@ func setup(t *testing.T) (*Handler, session) {
 }
 func invoke(t *testing.T, h http.Handler, s session, method, path string, body any, headers map[string]string) *httptest.ResponseRecorder {
 	t.Helper()
+	return runInvoke(h, s, method, path, body, headers)
+}
+func runInvoke(h http.Handler, s session, method, path string, body any, headers map[string]string) *httptest.ResponseRecorder {
 	var b bytes.Buffer
 	if body != nil {
 		json.NewEncoder(&b).Encode(body)
@@ -66,124 +64,266 @@ func invoke(t *testing.T, h http.Handler, s session, method, path string, body a
 }
 
 func TestRecordCRUDAndVersions(t *testing.T) {
-	h, s := setup(t)
-	w := invoke(t, h, s, "POST", "/api/v1/collections/issues/records", map[string]any{"values": map[string]any{"title": "first", "score": 2}}, nil)
-	if w.Code != 201 || w.Header().Get("ETag") != "\"1\"" {
-		t.Fatalf("create %d %s", w.Code, w.Body.String())
-	}
-	var created Record
-	json.Unmarshal(w.Body.Bytes(), &created)
-	if created.Values["done"] != false {
-		t.Fatalf("default missing: %#v", created)
-	}
-	w = invoke(t, h, s, "GET", "/api/v1/collections/issues/records/"+created.ID, nil, nil)
-	if w.Code != 200 {
-		t.Fatal(w.Body.String())
-	}
-	w = invoke(t, h, s, "PATCH", "/api/v1/collections/issues/records/"+created.ID, map[string]any{"values": map[string]any{"done": true}}, map[string]string{"If-Match": "\"1\""})
-	if w.Code != 200 || w.Header().Get("ETag") != "\"2\"" {
-		t.Fatalf("update %d %s", w.Code, w.Body.String())
-	}
-	w = invoke(t, h, s, "PATCH", "/api/v1/collections/issues/records/"+created.ID, map[string]any{"values": map[string]any{"title": "stale"}}, map[string]string{"If-Match": "\"1\""})
-	if w.Code != 412 {
-		t.Fatalf("stale %d", w.Code)
-	}
-	w = invoke(t, h, s, "DELETE", "/api/v1/collections/issues/records/"+created.ID, nil, map[string]string{"If-Match": "\"2\""})
-	if w.Code != 204 {
-		t.Fatalf("delete %d %s", w.Code, w.Body.String())
+	for _, provider := range storetest.Providers(t) {
+		t.Run(provider, func(t *testing.T) {
+			h, s := setup(t, provider)
+			w := invoke(t, h, s, "POST", "/api/v1/collections/issues/records", map[string]any{"values": map[string]any{"title": "first", "score": 2}}, nil)
+			if w.Code != 201 || w.Header().Get("ETag") != "\"1\"" {
+				t.Fatalf("create %d %s", w.Code, w.Body.String())
+			}
+			var created Record
+			json.Unmarshal(w.Body.Bytes(), &created)
+			if created.Values["done"] != false {
+				t.Fatalf("default missing: %#v", created)
+			}
+			w = invoke(t, h, s, "GET", "/api/v1/collections/issues/records/"+created.ID, nil, nil)
+			if w.Code != 200 {
+				t.Fatal(w.Body.String())
+			}
+			w = invoke(t, h, s, "PATCH", "/api/v1/collections/issues/records/"+created.ID, map[string]any{"values": map[string]any{"done": true}}, map[string]string{"If-Match": "\"1\""})
+			if w.Code != 200 || w.Header().Get("ETag") != "\"2\"" {
+				t.Fatalf("update %d %s", w.Code, w.Body.String())
+			}
+			w = invoke(t, h, s, "PATCH", "/api/v1/collections/issues/records/"+created.ID, map[string]any{"values": map[string]any{"title": "stale"}}, map[string]string{"If-Match": "\"1\""})
+			if w.Code != 412 {
+				t.Fatalf("stale %d", w.Code)
+			}
+			w = invoke(t, h, s, "DELETE", "/api/v1/collections/issues/records/"+created.ID, nil, map[string]string{"If-Match": "\"2\""})
+			if w.Code != 204 {
+				t.Fatalf("delete %d %s", w.Code, w.Body.String())
+			}
+		})
 	}
 }
 func TestValidationAndAtomicBatch(t *testing.T) {
-	h, s := setup(t)
-	w := invoke(t, h, s, "POST", "/api/v1/collections/issues/records", map[string]any{"values": map[string]any{"done": "yes", "unknown": 1}}, nil)
-	if w.Code != 422 || !strings.Contains(w.Body.String(), "wrong_type") || !strings.Contains(w.Body.String(), "unknown") {
-		t.Fatalf("validation %d %s", w.Code, w.Body.String())
-	}
-	w = invoke(t, h, s, "POST", "/api/v1/collections/issues/records/batch", map[string]any{"records": []map[string]any{{"id": "rec_same", "values": map[string]any{"title": "one"}}, {"id": "rec_same", "values": map[string]any{"title": "two"}}}}, nil)
-	if w.Code != 409 {
-		t.Fatalf("batch conflict %d %s", w.Code, w.Body.String())
-	}
-	w = invoke(t, h, s, "GET", "/api/v1/collections/issues/records", nil, nil)
-	if !strings.Contains(w.Body.String(), `"items":[]`) {
-		t.Fatalf("batch was not atomic: %s", w.Body.String())
+	for _, provider := range storetest.Providers(t) {
+		t.Run(provider, func(t *testing.T) {
+			h, s := setup(t, provider)
+			w := invoke(t, h, s, "POST", "/api/v1/collections/issues/records", map[string]any{"values": map[string]any{"done": "yes", "unknown": 1}}, nil)
+			if w.Code != 422 || !strings.Contains(w.Body.String(), "wrong_type") || !strings.Contains(w.Body.String(), "unknown") {
+				t.Fatalf("validation %d %s", w.Code, w.Body.String())
+			}
+			w = invoke(t, h, s, "POST", "/api/v1/collections/issues/records/batch", map[string]any{"records": []map[string]any{{"id": "rec_same", "values": map[string]any{"title": "one"}}, {"id": "rec_same", "values": map[string]any{"title": "two"}}}}, nil)
+			if w.Code != 409 {
+				t.Fatalf("batch conflict %d %s", w.Code, w.Body.String())
+			}
+			w = invoke(t, h, s, "GET", "/api/v1/collections/issues/records", nil, nil)
+			if !strings.Contains(w.Body.String(), `"items":[]`) {
+				t.Fatalf("batch was not atomic: %s", w.Body.String())
+			}
+		})
 	}
 }
 
 func TestBatchAcceptsMoreThanOneHundredRecords(t *testing.T) {
-	h, s := setup(t)
-	records := make([]map[string]any, 101)
-	for i := range records {
-		records[i] = map[string]any{"values": map[string]any{"title": "batch-" + strconv.Itoa(i)}}
-	}
-	w := invoke(t, h, s, "POST", "/api/v1/collections/issues/records/batch", map[string]any{"records": records}, nil)
-	if w.Code != http.StatusCreated {
-		t.Fatalf("batch of 101 records: %d %s", w.Code, w.Body.String())
+	for _, provider := range storetest.Providers(t) {
+		t.Run(provider, func(t *testing.T) {
+			h, s := setup(t, provider)
+			records := make([]map[string]any, 101)
+			for i := range records {
+				records[i] = map[string]any{"values": map[string]any{"title": "batch-" + strconv.Itoa(i)}}
+			}
+			w := invoke(t, h, s, "POST", "/api/v1/collections/issues/records/batch", map[string]any{"records": records}, nil)
+			if w.Code != http.StatusCreated {
+				t.Fatalf("batch of 101 records: %d %s", w.Code, w.Body.String())
+			}
+		})
 	}
 }
 func TestMutationNeedsVersionAndCSRF(t *testing.T) {
-	h, s := setup(t)
-	w := invoke(t, h, s, "POST", "/api/v1/collections/issues/records", map[string]any{"values": map[string]any{"title": "first"}}, nil)
-	var created Record
-	json.Unmarshal(w.Body.Bytes(), &created)
-	w = invoke(t, h, s, "PATCH", "/api/v1/collections/issues/records/"+created.ID, map[string]any{"values": map[string]any{"title": "next"}}, nil)
-	if w.Code != 428 {
-		t.Fatalf("missing version %d", w.Code)
-	}
-	s.csrf = "bad"
-	w = invoke(t, h, s, "DELETE", "/api/v1/collections/issues/records/"+created.ID, nil, map[string]string{"If-Match": "1"})
-	if w.Code != 403 {
-		t.Fatalf("csrf %d", w.Code)
+	for _, provider := range storetest.Providers(t) {
+		t.Run(provider, func(t *testing.T) {
+			h, s := setup(t, provider)
+			w := invoke(t, h, s, "POST", "/api/v1/collections/issues/records", map[string]any{"values": map[string]any{"title": "first"}}, nil)
+			var created Record
+			json.Unmarshal(w.Body.Bytes(), &created)
+			w = invoke(t, h, s, "PATCH", "/api/v1/collections/issues/records/"+created.ID, map[string]any{"values": map[string]any{"title": "next"}}, nil)
+			if w.Code != 428 {
+				t.Fatalf("missing version %d", w.Code)
+			}
+			s.csrf = "bad"
+			w = invoke(t, h, s, "DELETE", "/api/v1/collections/issues/records/"+created.ID, nil, map[string]string{"If-Match": "1"})
+			if w.Code != 403 {
+				t.Fatalf("csrf %d", w.Code)
+			}
+		})
 	}
 }
 
 func TestIdempotentCreateProjectionAndBounds(t *testing.T) {
-	h, s := setup(t)
-	headers := map[string]string{"Idempotency-Key": "request-17"}
-	w := invoke(t, h, s, "POST", "/api/v1/collections/issues/records?fields=title", map[string]any{"values": map[string]any{"title": "same", "score": 4}}, headers)
-	if w.Code != 201 || strings.Contains(w.Body.String(), `"score"`) {
-		t.Fatalf("first create %d %s", w.Code, w.Body.String())
-	}
-	var first Record
-	json.Unmarshal(w.Body.Bytes(), &first)
-	w = invoke(t, h, s, "POST", "/api/v1/collections/issues/records?fields=title", map[string]any{"values": map[string]any{"title": "ignored"}}, headers)
-	var replay Record
-	json.Unmarshal(w.Body.Bytes(), &replay)
-	if w.Code != 200 || w.Header().Get("Idempotency-Replayed") != "true" || replay.ID != first.ID {
-		t.Fatalf("replay %d %s", w.Code, w.Body.String())
-	}
-	w = invoke(t, h, s, "GET", "/api/v1/collections/issues/records?limit=101", nil, nil)
-	if w.Code != 400 {
-		t.Fatalf("limit %d %s", w.Code, w.Body.String())
+	for _, provider := range storetest.Providers(t) {
+		t.Run(provider, func(t *testing.T) {
+			h, s := setup(t, provider)
+			headers := map[string]string{"Idempotency-Key": "request-17"}
+			w := invoke(t, h, s, "POST", "/api/v1/collections/issues/records?fields=title", map[string]any{"values": map[string]any{"title": "same", "score": 4}}, headers)
+			if w.Code != 201 || strings.Contains(w.Body.String(), `"score"`) {
+				t.Fatalf("first create %d %s", w.Code, w.Body.String())
+			}
+			var first Record
+			json.Unmarshal(w.Body.Bytes(), &first)
+			w = invoke(t, h, s, "POST", "/api/v1/collections/issues/records?fields=title", map[string]any{"values": map[string]any{"title": "ignored"}}, headers)
+			var replay Record
+			json.Unmarshal(w.Body.Bytes(), &replay)
+			if w.Code != 200 || w.Header().Get("Idempotency-Replayed") != "true" || replay.ID != first.ID {
+				t.Fatalf("replay %d %s", w.Code, w.Body.String())
+			}
+			w = invoke(t, h, s, "GET", "/api/v1/collections/issues/records?limit=101", nil, nil)
+			if w.Code != 400 {
+				t.Fatalf("limit %d %s", w.Code, w.Body.String())
+			}
+		})
 	}
 }
 
 func TestTypedFilterSortAndCursor(t *testing.T) {
-	h, s := setup(t)
-	for _, title := range []string{"alpha", "beta", "gamma"} {
-		w := invoke(t, h, s, "POST", "/api/v1/collections/issues/records", map[string]any{"values": map[string]any{"title": title}}, nil)
-		if w.Code != 201 {
-			t.Fatal(w.Body.String())
-		}
+	for _, provider := range storetest.Providers(t) {
+		t.Run(provider, func(t *testing.T) {
+			h, s := setup(t, provider)
+			for _, title := range []string{"alpha", "beta", "gamma"} {
+				w := invoke(t, h, s, "POST", "/api/v1/collections/issues/records", map[string]any{"values": map[string]any{"title": title}}, nil)
+				if w.Code != 201 {
+					t.Fatal(w.Body.String())
+				}
+			}
+			w := invoke(t, h, s, "GET", `/api/v1/collections/issues/records?filter=title%20~%20%22et%22`, nil, nil)
+			if w.Code != 200 || !strings.Contains(w.Body.String(), "beta") || strings.Contains(w.Body.String(), "alpha") {
+				t.Fatalf("filter %d %s", w.Code, w.Body.String())
+			}
+			w = invoke(t, h, s, "GET", `/api/v1/collections/issues/records?filter=title%20=%20%22x%27%20OR%201%3D1%20--%22`, nil, nil)
+			if w.Code != 200 || !strings.Contains(w.Body.String(), `"items":[]`) {
+				t.Fatalf("injection %d %s", w.Code, w.Body.String())
+			}
+			w = invoke(t, h, s, "GET", `/api/v1/collections/issues/records?limit=1`, nil, nil)
+			var page struct {
+				Items      []Record `json:"items"`
+				NextCursor string   `json:"nextCursor"`
+			}
+			json.Unmarshal(w.Body.Bytes(), &page)
+			if len(page.Items) != 1 || page.NextCursor == "" {
+				t.Fatalf("page: %s", w.Body.String())
+			}
+			w = invoke(t, h, s, "GET", `/api/v1/collections/issues/records?limit=1&cursor=`+page.NextCursor, nil, nil)
+			if w.Code != 200 || strings.Contains(w.Body.String(), page.Items[0].ID) {
+				t.Fatalf("cursor %d %s", w.Code, w.Body.String())
+			}
+		})
 	}
-	w := invoke(t, h, s, "GET", `/api/v1/collections/issues/records?filter=title%20~%20%22et%22`, nil, nil)
-	if w.Code != 200 || !strings.Contains(w.Body.String(), "beta") || strings.Contains(w.Body.String(), "alpha") {
-		t.Fatalf("filter %d %s", w.Code, w.Body.String())
+}
+
+func TestBooleanFilterBothProviders(t *testing.T) {
+	for _, provider := range storetest.Providers(t) {
+		t.Run(provider, func(t *testing.T) {
+			h, s := setup(t, provider)
+			for _, done := range []bool{true, false, true} {
+				w := invoke(t, h, s, "POST", "/api/v1/collections/issues/records", map[string]any{"values": map[string]any{"title": "t", "done": done}}, nil)
+				if w.Code != 201 {
+					t.Fatal(w.Body.String())
+				}
+			}
+			w := invoke(t, h, s, "GET", `/api/v1/collections/issues/records?filter=done%20=%20true`, nil, nil)
+			if w.Code != 200 {
+				t.Fatal(w.Body.String())
+			}
+			var out struct {
+				Items []Record `json:"items"`
+			}
+			json.Unmarshal(w.Body.Bytes(), &out)
+			if len(out.Items) != 2 {
+				t.Fatalf("boolean filter items=%d %s", len(out.Items), w.Body.String())
+			}
+		})
 	}
-	w = invoke(t, h, s, "GET", `/api/v1/collections/issues/records?filter=title%20=%20%22x%27%20OR%201%3D1%20--%22`, nil, nil)
-	if w.Code != 200 || !strings.Contains(w.Body.String(), `"items":[]`) {
-		t.Fatalf("injection %d %s", w.Code, w.Body.String())
+}
+
+func TestBatchOneThousandRecords(t *testing.T) {
+	for _, provider := range storetest.Providers(t) {
+		t.Run(provider, func(t *testing.T) {
+			h, s := setup(t, provider)
+			records := make([]map[string]any, 1000)
+			for i := range records {
+				records[i] = map[string]any{"values": map[string]any{"title": "bulk-" + strconv.Itoa(i)}}
+			}
+			w := invoke(t, h, s, "POST", "/api/v1/collections/issues/records/batch", map[string]any{"records": records}, nil)
+			if w.Code != http.StatusCreated {
+				t.Fatalf("batch of 1000: %d %s", w.Code, w.Body.String())
+			}
+			var id string
+			if err := h.db.QueryRow("SELECT id FROM _trestle_collections WHERE name='issues'").Scan(&id); err != nil {
+				t.Fatal(err)
+			}
+			var committed int
+			table := `"` + collections.PhysicalTableName(id) + `"`
+			if err := h.db.QueryRow("SELECT count(*) FROM " + table).Scan(&committed); err != nil || committed != 1000 {
+				t.Fatalf("committed=%d err=%v, want 1000", committed, err)
+			}
+		})
 	}
-	w = invoke(t, h, s, "GET", `/api/v1/collections/issues/records?limit=1`, nil, nil)
-	var page struct {
-		Items      []Record `json:"items"`
-		NextCursor string   `json:"nextCursor"`
+}
+
+func TestIdempotencyRaceOneWinner(t *testing.T) {
+	for _, provider := range storetest.Providers(t) {
+		t.Run(provider, func(t *testing.T) {
+			h, s := setup(t, provider)
+			start := make(chan struct{})
+			codes := make(chan int, 2)
+			body := map[string]any{"values": map[string]any{"title": "duplicate"}}
+			for i := 0; i < 2; i++ {
+				go func() {
+					<-start
+					codes <- runInvoke(h, s, "POST", "/api/v1/collections/issues/records", body, map[string]string{"Idempotency-Key": "race-key"}).Code
+				}()
+			}
+			close(start)
+			created, loser := 0, 0
+			for i := 0; i < 2; i++ {
+				switch <-codes {
+				case 201:
+					created++
+				case 200, 409:
+					loser++
+				default:
+					t.Fatalf("unexpected code")
+				}
+			}
+			if created != 1 || loser != 1 {
+				t.Fatalf("201=%d loser=%d, want one winner", created, loser)
+			}
+			var records int
+			if err := h.db.QueryRow("SELECT count(*) FROM _trestle_record_idempotency").Scan(&records); err != nil || records != 1 {
+				t.Fatalf("idempotency rows=%d err=%v", records, err)
+			}
+		})
 	}
-	json.Unmarshal(w.Body.Bytes(), &page)
-	if len(page.Items) != 1 || page.NextCursor == "" {
-		t.Fatalf("page: %s", w.Body.String())
-	}
-	w = invoke(t, h, s, "GET", `/api/v1/collections/issues/records?limit=1&cursor=`+page.NextCursor, nil, nil)
-	if w.Code != 200 || strings.Contains(w.Body.String(), page.Items[0].ID) {
-		t.Fatalf("cursor %d %s", w.Code, w.Body.String())
+}
+
+func TestConcurrentUpdateOneWinner(t *testing.T) {
+	for _, provider := range storetest.Providers(t) {
+		t.Run(provider, func(t *testing.T) {
+			h, s := setup(t, provider)
+			w := invoke(t, h, s, "POST", "/api/v1/collections/issues/records", map[string]any{"values": map[string]any{"title": "base"}}, nil)
+			var created Record
+			json.Unmarshal(w.Body.Bytes(), &created)
+			start := make(chan struct{})
+			codes := make(chan int, 2)
+			for i := 0; i < 2; i++ {
+				go func() {
+					<-start
+					codes <- runInvoke(h, s, "PATCH", "/api/v1/collections/issues/records/"+created.ID, map[string]any{"values": map[string]any{"title": "next"}}, map[string]string{"If-Match": `"1"`}).Code
+				}()
+			}
+			close(start)
+			ok, stale := 0, 0
+			for i := 0; i < 2; i++ {
+				switch <-codes {
+				case 200:
+					ok++
+				case 412:
+					stale++
+				}
+			}
+			if ok != 1 || stale != 1 {
+				t.Fatalf("200=%d 412=%d, want one winner and one stale", ok, stale)
+			}
+		})
 	}
 }

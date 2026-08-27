@@ -3,6 +3,8 @@ package query
 import (
 	"strings"
 	"testing"
+
+	"github.com/trestle-dev/trestle/internal/store"
 )
 
 func FuzzParseCompile(f *testing.F) {
@@ -18,7 +20,7 @@ func FuzzParseCompile(f *testing.F) {
 			"title":  {Column: "c_title", Type: "text"},
 			"count":  {Column: "c_count", Type: "number"},
 			"active": {Column: "c_active", Type: "boolean"},
-		})
+		}, store.NewDialect(store.SQLite))
 		if err != nil {
 			return
 		}

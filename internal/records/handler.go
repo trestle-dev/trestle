@@ -212,13 +212,18 @@ func (h *Handler) loadSchema(r *http.Request, name string) (schema, error) {
 		return s, err
 	}
 	defer rows.Close()
+	dialect := h.db.Dialect()
 	for rows.Next() {
 		var f field
-		var required int
-		if err := rows.Scan(&f.id, &f.name, &f.kind, &required, &f.defaultJSON); err != nil {
+		var requiredRaw any
+		if err := rows.Scan(&f.id, &f.name, &f.kind, &requiredRaw, &f.defaultJSON); err != nil {
 			return s, err
 		}
-		f.required = required == 1
+		required, err := dialect.DecodeBoolean(requiredRaw)
+		if err != nil {
+			return s, err
+		}
+		f.required = required
 		s.fields = append(s.fields, f)
 	}
 	return s, rows.Err()
@@ -347,7 +352,7 @@ func (h *Handler) insert(r *http.Request, tx store.Transaction, s schema, in cre
 	marks := []string{"?", "?", "?"}
 	for _, f := range s.fields {
 		columns = append(columns, quote(collections.PhysicalColumnName(f.id)))
-		args = append(args, encodeValue(f, values[f.name]))
+		args = append(args, encodeValue(h.db.Dialect(), f, values[f.name]))
 		marks = append(marks, "?")
 	}
 	_, err := tx.ExecContext(r.Context(), "INSERT INTO "+quote(s.table)+"("+strings.Join(columns, ",")+") VALUES("+strings.Join(marks, ",")+")", args...)
@@ -371,7 +376,7 @@ func (h *Handler) list(w http.ResponseWriter, r *http.Request, s schema, rowRule
 		}
 		limit = parsed
 	}
-	statement, args, err := listSQL(s, r, limit)
+	statement, args, err := listSQL(h.db.Dialect(), s, r, limit)
 	if err != nil {
 		writeError(w, 400, "invalid_query", err.Error())
 		return
@@ -401,7 +406,7 @@ func (h *Handler) list(w http.ResponseWriter, r *http.Request, s schema, rowRule
 	writeJSON(w, 200, map[string]any{"items": items, "nextCursor": next})
 }
 
-func listSQL(s schema, r *http.Request, limit int) (string, []any, error) {
+func listSQL(dialect store.Dialect, s schema, r *http.Request, limit int) (string, []any, error) {
 	columns := []string{"_id", "_version", "_created", "_updated"}
 	fields := map[string]querylang.Field{
 		"id": {Column: "_id", Type: "text"}, "createdAt": {Column: "_created", Type: "datetime"}, "updatedAt": {Column: "_updated", Type: "datetime"},
@@ -415,7 +420,7 @@ func listSQL(s schema, r *http.Request, limit int) (string, []any, error) {
 	if err != nil {
 		return "", nil, err
 	}
-	where, args, err := querylang.Compile(expr, fields)
+	where, args, err := querylang.Compile(expr, fields, dialect)
 	if err != nil {
 		return "", nil, err
 	}
@@ -568,7 +573,7 @@ func (h *Handler) update(w http.ResponseWriter, r *http.Request, s schema, id st
 	args := []any{now}
 	for _, f := range s.fields {
 		sets = append(sets, quote(collections.PhysicalColumnName(f.id))+"=?")
-		args = append(args, encodeValue(f, values[f.name]))
+		args = append(args, encodeValue(h.db.Dialect(), f, values[f.name]))
 	}
 	args = append(args, id, version)
 	tx, err := h.db.BeginTx(r.Context(), nil)
@@ -701,16 +706,13 @@ func validType(kind string, value any) bool {
 	}
 	return false
 }
-func encodeValue(f field, value any) any {
+func encodeValue(d store.Dialect, f field, value any) any {
 	if value == nil {
 		return nil
 	}
 	switch f.kind {
 	case "boolean":
-		if value.(bool) {
-			return 1
-		}
-		return 0
+		return d.Boolean(value.(bool))
 	case "json":
 		b, _ := json.Marshal(value)
 		return string(b)
