@@ -21,36 +21,44 @@ func physicalColumn(fieldID string) string {
 func PhysicalColumnName(fieldID string) string { return physicalColumn(fieldID) }
 func quote(identifier string) string           { return `"` + strings.ReplaceAll(identifier, `"`, `""`) + `"` }
 
-func createPhysical(ctx context.Context, tx store.Transaction, collectionID string, fields []Field) error {
+func createPhysical(ctx context.Context, tx store.Transaction, dialect store.Dialect, collectionID string, fields []Field) error {
 	parts := []string{`_id TEXT PRIMARY KEY`, `_version INTEGER NOT NULL DEFAULT 1 CHECK(_version > 0)`, `_created TEXT NOT NULL`, `_updated TEXT NOT NULL`}
 	for _, f := range fields {
-		parts = append(parts, columnDDL(f))
+		part, err := columnDDL(dialect, f)
+		if err != nil {
+			return err
+		}
+		parts = append(parts, part)
 	}
-	_, err := tx.ExecContext(ctx, "CREATE TABLE "+quote(PhysicalTableName(collectionID))+" ("+strings.Join(parts, ",")+") STRICT")
+	_, err := tx.ExecContext(ctx, "CREATE TABLE "+quote(PhysicalTableName(collectionID))+" ("+strings.Join(parts, ",")+")"+dialect.TableSuffix())
 	return err
 }
 
-func columnDDL(f Field) string {
-	kind := "TEXT"
-	switch f.Type {
-	case "number":
-		kind = "REAL"
-	case "boolean":
-		kind = "INTEGER CHECK(" + quote(physicalColumn(f.ID)) + " IN (0,1))"
-	case "json":
-		kind = "TEXT CHECK(json_valid(" + quote(physicalColumn(f.ID)) + "))"
+func columnDDL(dialect store.Dialect, f Field) (string, error) {
+	column := quote(physicalColumn(f.ID))
+	base, err := dialect.ColumnType(f.Type)
+	if err != nil {
+		return "", err
 	}
-	part := quote(physicalColumn(f.ID)) + " " + kind
+	part := column + " " + base
+	switch f.Type {
+	case "boolean":
+		part += dialect.BooleanCheck(column)
+	case "json":
+		part += dialect.JSONCheck(column)
+	case "number":
+		part += dialect.NumberCheck(column)
+	}
 	if f.Required {
 		part += " NOT NULL"
 	}
 	if f.Unique {
 		part += " UNIQUE"
 	}
-	return part
+	return part, nil
 }
 
-func rebuildPhysical(ctx context.Context, tx store.Transaction, collectionID string, oldFields, newFields []Field) error {
+func rebuildPhysical(ctx context.Context, tx store.Transaction, dialect store.Dialect, collectionID string, oldFields, newFields []Field) error {
 	table := PhysicalTableName(collectionID)
 	temporary := table + "_next"
 	if _, err := tx.ExecContext(ctx, "DROP TABLE IF EXISTS "+quote(temporary)); err != nil {
@@ -58,9 +66,13 @@ func rebuildPhysical(ctx context.Context, tx store.Transaction, collectionID str
 	}
 	parts := []string{`_id TEXT PRIMARY KEY`, `_version INTEGER NOT NULL DEFAULT 1 CHECK(_version > 0)`, `_created TEXT NOT NULL`, `_updated TEXT NOT NULL`}
 	for _, f := range newFields {
-		parts = append(parts, columnDDL(f))
+		part, err := columnDDL(dialect, f)
+		if err != nil {
+			return err
+		}
+		parts = append(parts, part)
 	}
-	if _, err := tx.ExecContext(ctx, "CREATE TABLE "+quote(temporary)+" ("+strings.Join(parts, ",")+") STRICT"); err != nil {
+	if _, err := tx.ExecContext(ctx, "CREATE TABLE "+quote(temporary)+" ("+strings.Join(parts, ",")+")"+dialect.TableSuffix()); err != nil {
 		return err
 	}
 	old := map[string]bool{}

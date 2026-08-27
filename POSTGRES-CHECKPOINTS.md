@@ -436,7 +436,14 @@ Known limits: collection, record, query and file parity remain PG05-PG07/PG07+;
 
 ## PG05 - Collection metadata and physical schema parity
 
-Status: pending
+Status: complete
+
+The dialect now owns the physical mapping for every field type, boolean codecs
+and table options. SQLite keeps STRICT tables with typed checks; PostgreSQL uses
+native types. Collection metadata CRUD, rename, additive change, destructive
+acknowledgement, uniqueness races and incompatible-data rejection behave
+identically, and a failed schema change leaves old metadata and rows intact on
+both providers.
 
 ### Application
 
@@ -467,6 +474,24 @@ Status: pending
 - The same collection definitions produce equivalent accepted/rejected records
   and introspection on SQLite and PostgreSQL.
 - Failed schema changes preserve old metadata and rows on both providers.
+
+Completion record:
+
+```text
+Status: complete
+Application commit: recorded by this commit
+Website output commit: 7ed4acb
+Website source commit: 6ea70f7
+SQLite evidence: full collections suite plus type round-trip and race gates pass
+PostgreSQL evidence: real postgres 18.6 collections lifecycle, field-type
+  round-trip, incompatible-data and uniqueness-race suites pass
+Parity evidence: all nine field types map to reviewed provider DDL; rename and
+  additive changes preserve stable columns; incompatible changes fail closed
+Findings repaired: SQLite-only physical DDL; boolean metadata codec on BOOLEAN
+  columns; SQLite accepted incompatible number copies that PostgreSQL rejected
+Known limits: records, querying, files and automation parity remain PG06-PG07+;
+  PostgreSQL 16 CI configured but not yet reviewed green
+```
 
 ## PG06 - Records, filters and transaction semantics
 

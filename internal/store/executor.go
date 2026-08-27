@@ -3,6 +3,7 @@ package store
 import (
 	"context"
 	"database/sql"
+	"fmt"
 )
 
 type Executor interface {
@@ -14,6 +15,7 @@ type Executor interface {
 	QueryRowContext(context.Context, string, ...any) *sql.Row
 	Begin() (Transaction, error)
 	BeginTx(context.Context, *sql.TxOptions) (Transaction, error)
+	Dialect() Dialect
 }
 
 type Transaction interface {
@@ -77,6 +79,7 @@ func (e *boundExecutor) Begin() (Transaction, error) {
 	}
 	return &boundTransaction{tx: tx, dialect: e.dialect}, nil
 }
+func (e *boundExecutor) Dialect() Dialect { return e.dialect }
 func (e *boundExecutor) BeginTx(c context.Context, o *sql.TxOptions) (Transaction, error) {
 	tx, err := e.db.BeginTx(c, o)
 	if err != nil {
@@ -109,6 +112,12 @@ type Dialect interface {
 	Provider() Provider
 	Bind(string) (string, error)
 	Boolean(bool) any
+	DecodeBoolean(any) (bool, error)
+	ColumnType(kind string) (string, error)
+	BooleanCheck(column string) string
+	JSONCheck(column string) string
+	NumberCheck(column string) string
+	TableSuffix() string
 }
 type sqliteDialect struct{}
 
@@ -120,12 +129,70 @@ func (sqliteDialect) Boolean(value bool) any {
 	}
 	return 0
 }
+func (sqliteDialect) DecodeBoolean(value any) (bool, error) {
+	switch v := value.(type) {
+	case int64:
+		return v == 1, nil
+	case bool:
+		return v, nil
+	default:
+		return false, fmt.Errorf("unsupported boolean value %T", value)
+	}
+}
+func (sqliteDialect) ColumnType(kind string) (string, error) {
+	switch kind {
+	case "text", "email", "url", "select", "relation", "datetime", "json":
+		return "TEXT", nil
+	case "number":
+		return "REAL", nil
+	case "boolean":
+		return "INTEGER", nil
+	default:
+		return "", fmt.Errorf("unsupported field type %q", kind)
+	}
+}
+func (sqliteDialect) BooleanCheck(column string) string {
+	return fmt.Sprintf(" CHECK(%s IN (0,1))", column)
+}
+func (sqliteDialect) JSONCheck(column string) string {
+	return fmt.Sprintf(" CHECK(json_valid(%s))", column)
+}
+func (sqliteDialect) NumberCheck(column string) string {
+	return fmt.Sprintf(" CHECK(typeof(%s) IN ('real','integer','null'))", column)
+}
+func (sqliteDialect) TableSuffix() string { return " STRICT" }
 
 type postgresDialect struct{}
 
 func (postgresDialect) Provider() Provider                { return Postgres }
 func (postgresDialect) Bind(query string) (string, error) { return RebindPostgres(query) }
 func (postgresDialect) Boolean(value bool) any            { return value }
+func (postgresDialect) DecodeBoolean(value any) (bool, error) {
+	switch v := value.(type) {
+	case bool:
+		return v, nil
+	case int64:
+		return v == 1, nil
+	default:
+		return false, fmt.Errorf("unsupported boolean value %T", value)
+	}
+}
+func (postgresDialect) ColumnType(kind string) (string, error) {
+	switch kind {
+	case "text", "email", "url", "select", "relation", "datetime", "json":
+		return "TEXT", nil
+	case "number":
+		return "DOUBLE PRECISION", nil
+	case "boolean":
+		return "BOOLEAN", nil
+	default:
+		return "", fmt.Errorf("unsupported field type %q", kind)
+	}
+}
+func (postgresDialect) BooleanCheck(column string) string { return "" }
+func (postgresDialect) JSONCheck(column string) string    { return "" }
+func (postgresDialect) NumberCheck(column string) string  { return "" }
+func (postgresDialect) TableSuffix() string               { return "" }
 func NewDialect(provider Provider) Dialect {
 	if provider == Postgres {
 		return postgresDialect{}

@@ -130,11 +130,11 @@ func (h *Handler) create(w http.ResponseWriter, r *http.Request) {
 		writeError(w, 409, "collection_exists", "A collection with that name already exists.")
 		return
 	}
-	if err = insertFields(r, tx, id, now, in.Fields); err != nil {
+	if err = insertFields(r, tx, h.db.Dialect(), id, now, in.Fields); err != nil {
 		writeError(w, 500, "internal_error", "The request could not be completed.")
 		return
 	}
-	if err = createPhysical(r.Context(), tx, id, in.Fields); err != nil {
+	if err = createPhysical(r.Context(), tx, h.db.Dialect(), id, in.Fields); err != nil {
 		writeError(w, 422, "schema_change_failed", "The physical schema could not be created.")
 		return
 	}
@@ -217,11 +217,11 @@ func (h *Handler) update(w http.ResponseWriter, r *http.Request, name string) {
 		writeError(w, 500, "internal_error", "The request could not be completed.")
 		return
 	}
-	if err = insertFields(r, tx, id, now, in.Fields); err != nil {
+	if err = insertFields(r, tx, h.db.Dialect(), id, now, in.Fields); err != nil {
 		writeError(w, 500, "internal_error", "The request could not be completed.")
 		return
 	}
-	if err = rebuildPhysical(r.Context(), tx, id, before.Fields, in.Fields); err != nil {
+	if err = rebuildPhysical(r.Context(), tx, h.db.Dialect(), id, before.Fields, in.Fields); err != nil {
 		writeError(w, 422, "schema_change_failed", "Existing records are incompatible with the requested schema.")
 		return
 	}
@@ -279,15 +279,24 @@ func (h *Handler) load(r *http.Request, name string) (Collection, error) {
 	}
 	defer rows.Close()
 	item.Fields = []Field{}
+	dialect := h.db.Dialect()
 	for rows.Next() {
 		var f Field
-		var required, unique int
+		var requiredRaw, uniqueRaw any
 		var def sql.NullString
-		if err := rows.Scan(&f.ID, &f.Name, &f.Type, &required, &unique, &def); err != nil {
+		if err := rows.Scan(&f.ID, &f.Name, &f.Type, &requiredRaw, &uniqueRaw, &def); err != nil {
 			return item, err
 		}
-		f.Required = required == 1
-		f.Unique = unique == 1
+		required, err := dialect.DecodeBoolean(requiredRaw)
+		if err != nil {
+			return item, err
+		}
+		unique, err := dialect.DecodeBoolean(uniqueRaw)
+		if err != nil {
+			return item, err
+		}
+		f.Required = required
+		f.Unique = unique
 		if def.Valid {
 			f.Default = json.RawMessage(def.String)
 		}
@@ -312,13 +321,13 @@ func resolveFieldIDs(fields []Field, existing map[string]string) {
 		}
 	}
 }
-func insertFields(r *http.Request, tx store.Transaction, collectionID, now string, fields []Field) error {
+func insertFields(r *http.Request, tx store.Transaction, dialect store.Dialect, collectionID, now string, fields []Field) error {
 	for i, f := range fields {
 		var def any
 		if len(f.Default) > 0 {
 			def = string(f.Default)
 		}
-		_, err := tx.ExecContext(r.Context(), "INSERT INTO _trestle_fields(id,collection_id,position,name,type,required,is_unique,default_json,created_at) VALUES(?,?,?,?,?,?,?,?,?)", f.ID, collectionID, i, f.Name, f.Type, boolInt(f.Required), boolInt(f.Unique), def, now)
+		_, err := tx.ExecContext(r.Context(), "INSERT INTO _trestle_fields(id,collection_id,position,name,type,required,is_unique,default_json,created_at) VALUES(?,?,?,?,?,?,?,?,?)", f.ID, collectionID, i, f.Name, f.Type, dialect.Boolean(f.Required), dialect.Boolean(f.Unique), def, now)
 		if err != nil {
 			return err
 		}
@@ -394,12 +403,6 @@ func newID(prefix string) string {
 	b := make([]byte, 15)
 	_, _ = rand.Read(b)
 	return prefix + base64.RawURLEncoding.EncodeToString(b)
-}
-func boolInt(v bool) int {
-	if v {
-		return 1
-	}
-	return 0
 }
 func itoa(v int) string {
 	if v == 0 {
