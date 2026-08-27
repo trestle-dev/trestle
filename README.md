@@ -7,14 +7,13 @@ administration, backups, and event-driven integrations in one compact binary.
 Its stable HTTP/JSON/SSE contracts are intended to work from browsers, mobile
 applications, and trusted backends written in any language.
 
-The repository is currently pre-release. Checkpoints CP00-CP22 and hardening
-campaigns CP23.1-CP23.8 are implemented,
+The repository is currently a release candidate. Checkpoints CP00-CP22 and all
+ten CP23 hardening campaigns are implemented,
 covering the process and SQLite foundation, embedded administration, typed
 collections and records, authentication and access rules, local and
 S3-compatible files, realtime events, audit, durable jobs, webhooks, AWS Lambda,
 OpenAPI, reference clients, backup/recovery, and whole-product dogfooding.
-Deployment and release automation are implemented. Contract auditing and the
-release-candidate freeze remain.
+Deployment, release automation and the release-candidate matrix are implemented.
 
 ## Requirements
 
@@ -144,9 +143,9 @@ arm64.
 
 ## Current safety boundary
 
-Trestle has no supported stable release yet. CP22 provides deployment and
-release machinery, but CP23 must complete the adversarial hardening campaign
-before the project claims stable contracts or a supported production version.
+Trestle has no published stable release yet. CP23 is complete and its support
+boundary is recorded in `STABILITY.md`; a tagged stable release and independent
+field evidence remain distinct from completing the engineering campaign.
 
 ## Project documents
 
