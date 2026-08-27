@@ -130,7 +130,7 @@ Known limits: PostgreSQL remains planned; real provider execution begins at PG03
 
 ## PG01 - Database configuration and secret lifecycle
 
-Status: pending
+Status: complete
 
 ### Application
 
@@ -165,6 +165,20 @@ Status: pending
   conflicts.
 - Secrets are absent from every surfaced failure and support artifact.
 - Interrupted bootstrap resumes or fails closed without changing provider.
+
+Completion record:
+
+```text
+Status: complete
+Application commit: recorded by this commit
+Website output commit: 91e4c38
+Website source commit: d71d7dd
+SQLite evidence: full Go suite and focused race tests pass
+PostgreSQL evidence: URL, TLS, pool and timeout configuration matrices pass
+Parity evidence: SQLite remains the unchanged default when no provider is explicit or stored
+Findings repaired: database configuration was implicit; secrets had no database-specific lifecycle
+Known limits: selector remains a disabled preview until PG03 can migrate PostgreSQL
+```
 
 ## PG02 - Provider-neutral execution boundary
 

@@ -2,6 +2,9 @@ package config
 
 import (
 	"net/netip"
+	"os"
+	"path/filepath"
+	"strings"
 	"testing"
 	"time"
 )
@@ -14,6 +17,46 @@ func TestPrecedenceFlagsEnvironmentDefaults(t *testing.T) {
 	}
 	if cfg.Listen != "127.0.0.1:9001" || cfg.LogLevel != "warn" || cfg.DataDir != "./data" {
 		t.Fatalf("unexpected config: %#v", cfg)
+	}
+}
+
+func TestDatabaseConfigurationValidationAndPrecedence(t *testing.T) {
+	env := map[string]string{"TRESTLE_DATABASE_PROVIDER": "postgres", "TRESTLE_DATABASE_URL": "postgres://user:secret@db.example/trestle?sslmode=require"}
+	cfg, err := Load([]string{"--database-max-open", "24", "--database-max-idle", "4"}, func(key string) string { return env[key] })
+	if err != nil {
+		t.Fatal(err)
+	}
+	if cfg.DatabaseProvider != "postgres" || cfg.DatabaseMaxOpen != 24 || !cfg.DatabaseExplicit {
+		t.Fatalf("unexpected database config: %#v", cfg)
+	}
+	if _, err := Load([]string{"--database-provider", "postgres", "--database-url", "postgres://u:p@db.example/x?sslmode=disable"}, func(string) string { return "" }); err == nil {
+		t.Fatal("accepted plaintext remote postgres")
+	}
+	if _, err := Load([]string{"--database-url", "postgres://u:p@localhost/x?sslmode=disable"}, func(string) string { return "" }); err == nil {
+		t.Fatal("accepted postgres URL with sqlite provider")
+	}
+}
+
+func TestDatabaseBootstrapIsAtomicOwnerOnlyAndRedacted(t *testing.T) {
+	dir := t.TempDir()
+	value := DatabaseBootstrap{Provider: "postgres", URL: "postgres://admin:mudblood@localhost/trestle?sslmode=disable", MaxOpen: 8, MaxIdle: 2, ConnectTimeout: 5 * time.Second, ConnMaxLifetime: time.Hour}
+	if err := PersistDatabaseBootstrap(dir, value); err != nil {
+		t.Fatal(err)
+	}
+	info, err := os.Stat(filepath.Join(dir, databaseBootstrapFile))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if info.Mode().Perm() != 0o600 {
+		t.Fatalf("permissions %o", info.Mode().Perm())
+	}
+	got, found, err := ReadDatabaseBootstrap(dir)
+	if err != nil || !found || got.Provider != "postgres" {
+		t.Fatalf("got=%#v found=%v err=%v", got, found, err)
+	}
+	redacted := RedactDatabaseURL(value.URL)
+	if strings.Contains(redacted, "mudblood") || !strings.Contains(redacted, "redacted") {
+		t.Fatalf("unsafe redaction: %s", redacted)
 	}
 }
 

@@ -7,6 +7,7 @@ import (
 	"io"
 	"net"
 	"net/netip"
+	"net/url"
 	"os"
 	"strconv"
 	"strings"
@@ -14,33 +15,41 @@ import (
 )
 
 type Config struct {
-	Listen            string
-	DataDir           string
-	ShutdownTimeout   time.Duration
-	LogLevel          string
-	StaticDir         string
-	StorageBackend    string
-	S3Endpoint        string
-	S3Region          string
-	S3Bucket          string
-	S3AccessKey       string
-	S3SecretKey       string
-	AWSRegion         string
-	AWSAccessKey      string
-	AWSSecretKey      string
-	TrustedProxies    []netip.Prefix
-	ReadHeaderTimeout time.Duration
-	ReadTimeout       time.Duration
-	IdleTimeout       time.Duration
-	MaxHeaderBytes    int
+	Listen                  string
+	DataDir                 string
+	ShutdownTimeout         time.Duration
+	LogLevel                string
+	StaticDir               string
+	StorageBackend          string
+	S3Endpoint              string
+	S3Region                string
+	S3Bucket                string
+	S3AccessKey             string
+	S3SecretKey             string
+	AWSRegion               string
+	AWSAccessKey            string
+	AWSSecretKey            string
+	TrustedProxies          []netip.Prefix
+	ReadHeaderTimeout       time.Duration
+	ReadTimeout             time.Duration
+	IdleTimeout             time.Duration
+	MaxHeaderBytes          int
+	DatabaseProvider        string
+	DatabaseURL             string
+	DatabaseMaxOpen         int
+	DatabaseMaxIdle         int
+	DatabaseConnectTimeout  time.Duration
+	DatabaseConnMaxLifetime time.Duration
+	DatabaseExplicit        bool
 }
 
 func Defaults() Config {
-	return Config{Listen: "127.0.0.1:8090", DataDir: "./data", ShutdownTimeout: 10 * time.Second, LogLevel: "info", StorageBackend: "local", S3Region: "us-east-1", ReadHeaderTimeout: 5 * time.Second, ReadTimeout: 5 * time.Minute, IdleTimeout: 60 * time.Second, MaxHeaderBytes: 1 << 20}
+	return Config{Listen: "127.0.0.1:8090", DataDir: "./data", ShutdownTimeout: 10 * time.Second, LogLevel: "info", StorageBackend: "local", S3Region: "us-east-1", ReadHeaderTimeout: 5 * time.Second, ReadTimeout: 5 * time.Minute, IdleTimeout: 60 * time.Second, MaxHeaderBytes: 1 << 20, DatabaseProvider: "sqlite", DatabaseMaxOpen: 10, DatabaseMaxIdle: 2, DatabaseConnectTimeout: 10 * time.Second, DatabaseConnMaxLifetime: 30 * time.Minute}
 }
 
 func Load(args []string, getenv func(string) string) (Config, error) {
 	cfg := Defaults()
+	databaseEnvironment := false
 	if value := getenv("TRESTLE_LISTEN"); value != "" {
 		cfg.Listen = value
 	}
@@ -108,6 +117,46 @@ func Load(args []string, getenv func(string) string) (Config, error) {
 		}
 		cfg.MaxHeaderBytes = n
 	}
+	if value := getenv("TRESTLE_DATABASE_PROVIDER"); value != "" {
+		cfg.DatabaseProvider = value
+		databaseEnvironment = true
+	}
+	if value := getenv("TRESTLE_DATABASE_URL"); value != "" {
+		cfg.DatabaseURL = value
+		databaseEnvironment = true
+	}
+	if value := getenv("TRESTLE_DATABASE_MAX_OPEN"); value != "" {
+		n, err := strconv.Atoi(value)
+		if err != nil {
+			return Config{}, fmt.Errorf("TRESTLE_DATABASE_MAX_OPEN: %w", err)
+		}
+		cfg.DatabaseMaxOpen = n
+		databaseEnvironment = true
+	}
+	if value := getenv("TRESTLE_DATABASE_MAX_IDLE"); value != "" {
+		n, err := strconv.Atoi(value)
+		if err != nil {
+			return Config{}, fmt.Errorf("TRESTLE_DATABASE_MAX_IDLE: %w", err)
+		}
+		cfg.DatabaseMaxIdle = n
+		databaseEnvironment = true
+	}
+	if value := getenv("TRESTLE_DATABASE_CONNECT_TIMEOUT"); value != "" {
+		d, err := time.ParseDuration(value)
+		if err != nil {
+			return Config{}, fmt.Errorf("TRESTLE_DATABASE_CONNECT_TIMEOUT: %w", err)
+		}
+		cfg.DatabaseConnectTimeout = d
+		databaseEnvironment = true
+	}
+	if value := getenv("TRESTLE_DATABASE_CONN_MAX_LIFETIME"); value != "" {
+		d, err := time.ParseDuration(value)
+		if err != nil {
+			return Config{}, fmt.Errorf("TRESTLE_DATABASE_CONN_MAX_LIFETIME: %w", err)
+		}
+		cfg.DatabaseConnMaxLifetime = d
+		databaseEnvironment = true
+	}
 
 	set := flag.NewFlagSet("trestle", flag.ContinueOnError)
 	set.SetOutput(io.Discard)
@@ -126,12 +175,25 @@ func Load(args []string, getenv func(string) string) (Config, error) {
 	set.DurationVar(&cfg.ReadTimeout, "read-timeout", cfg.ReadTimeout, "HTTP request read timeout including request bodies")
 	set.DurationVar(&cfg.IdleTimeout, "idle-timeout", cfg.IdleTimeout, "HTTP keep-alive idle timeout")
 	set.IntVar(&cfg.MaxHeaderBytes, "max-header-bytes", cfg.MaxHeaderBytes, "maximum HTTP request header bytes")
+	set.StringVar(&cfg.DatabaseProvider, "database-provider", cfg.DatabaseProvider, "sqlite or postgres")
+	set.StringVar(&cfg.DatabaseURL, "database-url", cfg.DatabaseURL, "PostgreSQL connection URL (secret)")
+	set.IntVar(&cfg.DatabaseMaxOpen, "database-max-open", cfg.DatabaseMaxOpen, "maximum open database connections")
+	set.IntVar(&cfg.DatabaseMaxIdle, "database-max-idle", cfg.DatabaseMaxIdle, "maximum idle database connections")
+	set.DurationVar(&cfg.DatabaseConnectTimeout, "database-connect-timeout", cfg.DatabaseConnectTimeout, "database startup connection timeout")
+	set.DurationVar(&cfg.DatabaseConnMaxLifetime, "database-conn-max-lifetime", cfg.DatabaseConnMaxLifetime, "maximum database connection lifetime")
 	if err := set.Parse(args); err != nil {
 		return Config{}, err
 	}
 	if set.NArg() != 0 {
 		return Config{}, fmt.Errorf("unexpected arguments: %s", strings.Join(set.Args(), " "))
 	}
+	databaseFlag := false
+	set.Visit(func(f *flag.Flag) {
+		if strings.HasPrefix(f.Name, "database-") {
+			databaseFlag = true
+		}
+	})
+	cfg.DatabaseExplicit = databaseEnvironment || databaseFlag
 	prefixes, err := parsePrefixes(trustedProxies)
 	if err != nil {
 		return Config{}, fmt.Errorf("trusted proxies: %w", err)
@@ -186,10 +248,74 @@ func (c Config) Validate() error {
 			return errors.New("S3 endpoint must use HTTPS except on loopback")
 		}
 	}
+	if c.DatabaseProvider != "sqlite" && c.DatabaseProvider != "postgres" {
+		return errors.New("database provider must be sqlite or postgres")
+	}
+	if c.DatabaseMaxOpen < 1 || c.DatabaseMaxOpen > 500 || c.DatabaseMaxIdle < 0 || c.DatabaseMaxIdle > c.DatabaseMaxOpen {
+		return errors.New("database pool bounds are invalid")
+	}
+	if c.DatabaseConnectTimeout <= 0 || c.DatabaseConnectTimeout > time.Minute {
+		return errors.New("database connect timeout must be greater than zero and no more than 1m")
+	}
+	if c.DatabaseConnMaxLifetime < 0 || c.DatabaseConnMaxLifetime > 24*time.Hour {
+		return errors.New("database connection lifetime must be between 0 and 24h")
+	}
+	if c.DatabaseProvider == "sqlite" {
+		if c.DatabaseURL != "" {
+			return errors.New("database URL is only valid for postgres")
+		}
+	} else if err := validatePostgresURL(c.DatabaseURL); err != nil {
+		return err
+	}
 	return nil
 }
 
-func FromOS(args []string) (Config, error) { return Load(args, os.Getenv) }
+func FromOS(args []string) (Config, error) {
+	cfg, err := Load(args, os.Getenv)
+	if err != nil || cfg.DatabaseExplicit {
+		return cfg, err
+	}
+	stored, found, err := ReadDatabaseBootstrap(cfg.DataDir)
+	if err != nil {
+		return Config{}, err
+	}
+	if found {
+		cfg.DatabaseProvider = stored.Provider
+		cfg.DatabaseURL = stored.URL
+		cfg.DatabaseMaxOpen = stored.MaxOpen
+		cfg.DatabaseMaxIdle = stored.MaxIdle
+		cfg.DatabaseConnectTimeout = stored.ConnectTimeout
+		cfg.DatabaseConnMaxLifetime = stored.ConnMaxLifetime
+	}
+	return cfg, cfg.Validate()
+}
+
+func validatePostgresURL(value string) error {
+	u, err := url.Parse(value)
+	if err != nil || (u.Scheme != "postgres" && u.Scheme != "postgresql") || u.Hostname() == "" {
+		return errors.New("postgres database URL must be a valid postgres:// or postgresql:// URL")
+	}
+	host := strings.ToLower(u.Hostname())
+	loopback := host == "localhost"
+	if ip := net.ParseIP(host); ip != nil {
+		loopback = ip.IsLoopback()
+	}
+	if !loopback && strings.EqualFold(u.Query().Get("sslmode"), "disable") {
+		return errors.New("remote postgres connections must use TLS")
+	}
+	return nil
+}
+
+func RedactDatabaseURL(value string) string {
+	u, err := url.Parse(value)
+	if err != nil {
+		return "[redacted database URL]"
+	}
+	if u.User != nil {
+		u.User = url.UserPassword("[redacted]", "[redacted]")
+	}
+	return u.Redacted()
+}
 
 func parsePrefixes(value string) ([]netip.Prefix, error) {
 	if strings.TrimSpace(value) == "" {

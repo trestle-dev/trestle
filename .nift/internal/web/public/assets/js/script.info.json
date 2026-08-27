@@ -17,6 +17,7 @@
     "content/assets/js/backups.js",
     "content/assets/js/collections.js",
     "content/assets/js/credentials.js",
+    "content/assets/js/database-setup.js",
     "content/assets/js/deployment.js",
     "content/assets/js/files.js",
     "content/assets/js/jobs.js",
