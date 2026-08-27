@@ -327,3 +327,103 @@ func TestConcurrentUpdateOneWinner(t *testing.T) {
 		})
 	}
 }
+
+func TestQueryNullSemantics(t *testing.T) {
+	for _, provider := range storetest.Providers(t) {
+		t.Run(provider, func(t *testing.T) {
+			h, s := setup(t, provider)
+			invoke(t, h, s, "POST", "/api/v1/collections/issues/records", map[string]any{"values": map[string]any{"title": "owned"}}, nil)
+			invoke(t, h, s, "POST", "/api/v1/collections/issues/records", map[string]any{"values": map[string]any{"title": "anonymous", "owner": "alice"}}, nil)
+			w := invoke(t, h, s, "GET", `/api/v1/collections/issues/records?filter=owner%20=%20null`, nil, nil)
+			if w.Code != 200 || !strings.Contains(w.Body.String(), "owned") || strings.Contains(w.Body.String(), "anonymous") {
+				t.Fatalf("IS NULL %d %s", w.Code, w.Body.String())
+			}
+			w = invoke(t, h, s, "GET", `/api/v1/collections/issues/records?filter=owner%20!=%20null`, nil, nil)
+			if w.Code != 200 || !strings.Contains(w.Body.String(), "anonymous") || strings.Contains(w.Body.String(), "owned") {
+				t.Fatalf("IS NOT NULL %d %s", w.Code, w.Body.String())
+			}
+		})
+	}
+}
+
+func TestQueryNumberDatetimeAndCase(t *testing.T) {
+	for _, provider := range storetest.Providers(t) {
+		t.Run(provider, func(t *testing.T) {
+			h, s := setup(t, provider)
+			invoke(t, h, s, "POST", "/api/v1/collections/issues/records", map[string]any{"values": map[string]any{"title": "Alpha", "score": 2}}, nil)
+			invoke(t, h, s, "POST", "/api/v1/collections/issues/records", map[string]any{"values": map[string]any{"title": "beta", "score": 5}}, nil)
+			w := invoke(t, h, s, "GET", `/api/v1/collections/issues/records?filter=score%20%3E=%203`, nil, nil)
+			if w.Code != 200 || !strings.Contains(w.Body.String(), "beta") || strings.Contains(w.Body.String(), "Alpha") {
+				t.Fatalf("number filter %d %s", w.Code, w.Body.String())
+			}
+			w = invoke(t, h, s, "GET", `/api/v1/collections/issues/records?filter=title%20=%20%22alpha%22`, nil, nil)
+			if w.Code != 200 || !strings.Contains(w.Body.String(), `"items":[]`) {
+				t.Fatalf("case-sensitive match %d %s", w.Code, w.Body.String())
+			}
+			first := invoke(t, h, s, "GET", `/api/v1/collections/issues/records?limit=1&sort=-title`, nil, nil)
+			if first.Code != 200 || !strings.Contains(first.Body.String(), "beta") {
+				t.Fatalf("desc sort %d %s", first.Code, first.Body.String())
+			}
+			w = invoke(t, h, s, "GET", `/api/v1/collections/issues/records?filter=createdAt%20%3E%20%222000-01-01T00%3A00%3A00Z%22`, nil, nil)
+			if w.Code != 200 || !strings.Contains(w.Body.String(), "Alpha") {
+				t.Fatalf("datetime filter %d %s", w.Code, w.Body.String())
+			}
+		})
+	}
+}
+
+func TestQueryFilterCursorCombined(t *testing.T) {
+	for _, provider := range storetest.Providers(t) {
+		t.Run(provider, func(t *testing.T) {
+			h, s := setup(t, provider)
+			for i := 0; i < 5; i++ {
+				invoke(t, h, s, "POST", "/api/v1/collections/issues/records", map[string]any{"values": map[string]any{"title": "item", "score": i}}, nil)
+			}
+			var page struct {
+				Items      []Record `json:"items"`
+				NextCursor string   `json:"nextCursor"`
+			}
+			seen := 0
+			cursor := ""
+			for {
+				path := `/api/v1/collections/issues/records?filter=title%20=%20%22item%22&limit=2`
+				if cursor != "" {
+					path += "&cursor=" + cursor
+				}
+				w := invoke(t, h, s, "GET", path, nil, nil)
+				if w.Code != 200 {
+					t.Fatalf("page %d %s", w.Code, w.Body.String())
+				}
+				json.Unmarshal(w.Body.Bytes(), &page)
+				seen += len(page.Items)
+				cursor = page.NextCursor
+				if cursor == "" {
+					break
+				}
+			}
+			if seen != 5 {
+				t.Fatalf("filtered cursor total=%d", seen)
+			}
+		})
+	}
+}
+
+func TestQueryErrorMapping(t *testing.T) {
+	for _, provider := range storetest.Providers(t) {
+		t.Run(provider, func(t *testing.T) {
+			h, s := setup(t, provider)
+			w := invoke(t, h, s, "GET", `/api/v1/collections/issues/records?filter=missing%20=%20%22x%22`, nil, nil)
+			if w.Code != 400 {
+				t.Fatalf("unknown field %d %s", w.Code, w.Body.String())
+			}
+			w = invoke(t, h, s, "GET", `/api/v1/collections/issues/records?filter=score%20~%20%221%22`, nil, nil)
+			if w.Code != 400 {
+				t.Fatalf("invalid op %d %s", w.Code, w.Body.String())
+			}
+			w = invoke(t, h, s, "GET", `/api/v1/collections/issues/records?sort=missing`, nil, nil)
+			if w.Code != 400 {
+				t.Fatalf("unknown sort %d %s", w.Code, w.Body.String())
+			}
+		})
+	}
+}

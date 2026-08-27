@@ -555,7 +555,61 @@ Known limits: querying and pagination parity is PG07; files and automation
   remain pending; PostgreSQL 16 CI configured but not yet reviewed green
 ```
 
-## PG07 - Access rules, identities and file metadata
+## PG07 - Querying, filtering and pagination parity
+
+Status: complete
+
+The batch plan split the original records/querying scope so PG06 covers record
+mutation and PG07 covers querying, filtering and pagination. The typed filter
+AST compiles through the dialect, null semantics are explicit (`IS NULL` /
+`IS NOT NULL`), and number, datetime and case behavior are identical on both
+providers. Sort direction, filter+cursor pagination and typed error mapping
+share one corpus.
+
+### Application
+
+- Compile the typed filter AST through the dialect layer; never splice client
+  predicates into unreviewed SQL.
+- Freeze semantics for nulls, numeric conversion, booleans, JSON, timestamp
+  ordering, case behavior, uniqueness, affected-row counts and error mapping.
+- Keep sorting, opaque cursors, projections and limit bounds provider-neutral.
+
+### Dashboard
+
+- Run the existing record list, bulk selection and JavaScript pagination
+  unchanged against both providers.
+
+### Public website
+
+- Add side-by-side tested request/response examples and provider-neutral
+  explanations to Records, Queries, Pagination and Errors.
+
+### Exit evidence
+
+- The complete query corpus produces equivalent status, envelope, ordering and
+  committed state on both providers.
+
+Completion record:
+
+```text
+Status: complete
+Application commit: recorded by this commit
+Website output commit: fc9ee48
+Website source commit: fe90e3f
+SQLite evidence: query null/number/datetime/case/sort/cursor/error gates pass
+PostgreSQL evidence: real postgres 18.6 runs the same query corpus
+Parity evidence: IS NULL semantics, case-sensitive equality, datetime and number
+  comparisons and filter+cursor pagination are identical on both providers
+Findings repaired: `field = null` compiled to `= NULL` and never matched; it now
+  compiles to IS NULL on both engines
+Known limits: access rules and file metadata parity is deferred (see PG07+);
+  files and automation remain pending; PostgreSQL 16 CI not yet reviewed green
+```
+
+## PG07+ - Access rules, identities and file metadata (deferred to the next batch)
+
+The original PG07 scope was deferred when the batch plan split records into PG06
+and querying into PG07. It remains an open checkpoint for the next batch.
 
 Status: pending
 

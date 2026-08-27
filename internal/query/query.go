@@ -68,6 +68,14 @@ func Compile(expr Expr, fields map[string]Field, dialect store.Dialect) (string,
 		}
 		op := clause.Op
 		value := clause.Value
+		if value == nil {
+			if op == "=" {
+				parts = append(parts, quote(field.Column)+" IS NULL")
+			} else {
+				parts = append(parts, quote(field.Column)+" IS NOT NULL")
+			}
+			continue
+		}
 		if op == "~" {
 			op = "LIKE"
 			value = "%" + value.(string) + "%"
