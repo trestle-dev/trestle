@@ -20,7 +20,7 @@ type DatabaseBootstrap struct {
 	ConnMaxLifetime time.Duration `json:"connMaxLifetime"`
 }
 
-func (d DatabaseBootstrap) validate() error {
+func (d DatabaseBootstrap) Validate() error {
 	cfg := Defaults()
 	cfg.DatabaseProvider, cfg.DatabaseURL = d.Provider, d.URL
 	cfg.DatabaseMaxOpen, cfg.DatabaseMaxIdle = d.MaxOpen, d.MaxIdle
@@ -29,7 +29,7 @@ func (d DatabaseBootstrap) validate() error {
 }
 
 func PersistDatabaseBootstrap(dataDir string, value DatabaseBootstrap) error {
-	if err := value.validate(); err != nil {
+	if err := value.Validate(); err != nil {
 		return err
 	}
 	if err := os.MkdirAll(dataDir, 0o700); err != nil {
@@ -71,7 +71,7 @@ func ReadDatabaseBootstrap(dataDir string) (DatabaseBootstrap, bool, error) {
 	if err := json.Unmarshal(encoded, &value); err != nil {
 		return DatabaseBootstrap{}, false, errors.New("stored database configuration is invalid")
 	}
-	if err := value.validate(); err != nil {
+	if err := value.Validate(); err != nil {
 		return DatabaseBootstrap{}, false, fmt.Errorf("stored database configuration: %w", err)
 	}
 	return value, true, nil

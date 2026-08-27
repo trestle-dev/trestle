@@ -48,6 +48,10 @@ func Adapt(value any) Executor {
 func NewExecutor(db *sql.DB, dialect Dialect) Executor {
 	return &boundExecutor{db: db, dialect: dialect}
 }
+
+func NewExecutorTx(tx *sql.Tx, dialect Dialect) Transaction {
+	return &boundTransaction{tx: tx, dialect: dialect}
+}
 func (e *boundExecutor) Exec(q string, a ...any) (sql.Result, error) {
 	return e.db.Exec(Bind(e.dialect, q), a...)
 }

@@ -9,6 +9,7 @@ import (
 	"path/filepath"
 	"time"
 
+	_ "github.com/lib/pq"
 	_ "modernc.org/sqlite"
 )
 
@@ -20,6 +21,37 @@ type Store struct {
 	provider Provider
 	dialect  Dialect
 	executor Executor
+}
+
+type Options struct {
+	DataDir         string
+	Provider        Provider
+	URL             string
+	MaxOpen         int
+	MaxIdle         int
+	ConnMaxLifetime time.Duration
+}
+
+func Probe(ctx context.Context, provider Provider, url string) (string, error) {
+	if provider == SQLite {
+		return "sqlite", nil
+	}
+	if provider != Postgres {
+		return "", errors.New("unsupported database provider")
+	}
+	db, err := sql.Open("postgres", url)
+	if err != nil {
+		return "", errors.New("open postgres connection")
+	}
+	defer db.Close()
+	if err := db.PingContext(ctx); err != nil {
+		return "", errors.New("postgres connection failed")
+	}
+	var version string
+	if err := db.QueryRowContext(ctx, "SHOW server_version").Scan(&version); err != nil {
+		return "", errors.New("postgres version check failed")
+	}
+	return version, nil
 }
 
 type migration struct {
@@ -202,32 +234,58 @@ CREATE TABLE _trestle_functions (
 `}}
 
 func Open(ctx context.Context, dataDir string) (*Store, error) {
-	if err := os.MkdirAll(dataDir, 0o700); err != nil {
+	return OpenWith(ctx, Options{DataDir: dataDir, Provider: SQLite, MaxOpen: 1})
+}
+
+func OpenWith(ctx context.Context, options Options) (*Store, error) {
+	if options.Provider == "" {
+		options.Provider = SQLite
+	}
+	if options.MaxOpen < 1 {
+		options.MaxOpen = 10
+	}
+	if options.MaxIdle < 0 {
+		options.MaxIdle = 0
+	}
+	if err := os.MkdirAll(options.DataDir, 0o700); err != nil {
 		return nil, fmt.Errorf("create data directory: %w", err)
 	}
-	if err := os.Chmod(dataDir, 0o700); err != nil {
+	if err := os.Chmod(options.DataDir, 0o700); err != nil {
 		return nil, fmt.Errorf("secure data directory: %w", err)
 	}
-	path := filepath.Join(dataDir, "trestle.db")
-	dsn := "file:" + filepath.ToSlash(path) + "?_pragma=foreign_keys(1)&_pragma=busy_timeout(5000)&_pragma=journal_mode(WAL)"
-	db, err := sql.Open("sqlite", dsn)
+	path := "external-postgres"
+	driver, dsn := "postgres", options.URL
+	if options.Provider == SQLite {
+		path = filepath.Join(options.DataDir, "trestle.db")
+		driver = "sqlite"
+		dsn = "file:" + filepath.ToSlash(path) + "?_pragma=foreign_keys(1)&_pragma=busy_timeout(5000)&_pragma=journal_mode(WAL)"
+	}
+	db, err := sql.Open(driver, dsn)
 	if err != nil {
-		return nil, fmt.Errorf("open sqlite: %w", err)
+		return nil, fmt.Errorf("open %s database: %w", options.Provider, err)
 	}
 	db.SetMaxOpenConns(1)
 	db.SetConnMaxLifetime(0)
-	dialect := NewDialect(SQLite)
-	s := &Store{db: db, path: path, provider: SQLite, dialect: dialect, executor: NewExecutor(db, dialect)}
+	dialect := NewDialect(options.Provider)
+	s := &Store{db: db, path: path, provider: options.Provider, dialect: dialect, executor: NewExecutor(db, dialect)}
 	if err := s.initialize(ctx); err != nil {
 		_ = db.Close()
 		return nil, err
+	}
+	if options.Provider == Postgres {
+		db.SetMaxOpenConns(options.MaxOpen)
+		db.SetMaxIdleConns(options.MaxIdle)
+		db.SetConnMaxLifetime(options.ConnMaxLifetime)
 	}
 	return s, nil
 }
 
 func (s *Store) initialize(ctx context.Context) error {
 	if err := s.db.PingContext(ctx); err != nil {
-		return fmt.Errorf("ping sqlite: %w", err)
+		return fmt.Errorf("ping %s database: %w", s.provider, err)
+	}
+	if s.provider == Postgres {
+		return s.initializePostgres(ctx)
 	}
 	var foreignKeys int
 	if err := s.db.QueryRowContext(ctx, "PRAGMA foreign_keys").Scan(&foreignKeys); err != nil || foreignKeys != 1 {
@@ -247,23 +305,85 @@ func (s *Store) initialize(ctx context.Context) error {
 			}
 		}
 	}
+	return s.ensureIdentity(ctx)
+}
+
+func (s *Store) initializePostgres(ctx context.Context) error {
+	if _, err := s.db.ExecContext(ctx, "SELECT pg_advisory_lock(839201347561)"); err != nil {
+		return fmt.Errorf("lock postgres migrations: %w", err)
+	}
+	defer s.db.ExecContext(context.Background(), "SELECT pg_advisory_unlock(839201347561)")
+	var exists bool
+	if err := s.db.QueryRowContext(ctx, "SELECT to_regclass('_trestle_schema_migrations') IS NOT NULL").Scan(&exists); err != nil {
+		return fmt.Errorf("inspect postgres schema: %w", err)
+	}
+	version := 0
+	if exists {
+		if err := s.db.QueryRowContext(ctx, "SELECT COALESCE(MAX(version),0) FROM _trestle_schema_migrations").Scan(&version); err != nil {
+			return fmt.Errorf("read schema version: %w", err)
+		}
+	}
+	if version > CurrentVersion {
+		return fmt.Errorf("database schema version %d is newer than supported version %d", version, CurrentVersion)
+	}
+	for _, m := range migrations {
+		if m.version > version {
+			if err := s.apply(ctx, m); err != nil {
+				return err
+			}
+		}
+	}
+	return s.ensureIdentity(ctx)
+}
+
+func (s *Store) ensureIdentity(ctx context.Context) error {
+	provider := string(s.provider)
+	_, err := s.executor.ExecContext(ctx, "INSERT INTO _trestle_system_meta(key,value,updated_at) VALUES(?,?,?) ON CONFLICT(key) DO NOTHING", "database_provider", provider, time.Now().UTC().Format(time.RFC3339Nano))
+	if err != nil {
+		return fmt.Errorf("record database identity: %w", err)
+	}
+	var stored string
+	if err := s.executor.QueryRowContext(ctx, "SELECT value FROM _trestle_system_meta WHERE key=?", "database_provider").Scan(&stored); err != nil {
+		return fmt.Errorf("read database identity: %w", err)
+	}
+	if stored != provider {
+		return fmt.Errorf("database identity is %s, not configured provider %s", stored, provider)
+	}
 	return nil
 }
 
 func (s *Store) apply(ctx context.Context, m migration) error {
+	if s.provider == "" {
+		s.provider = SQLite
+	}
+	if s.dialect == nil {
+		s.dialect = NewDialect(s.provider)
+	}
+	if s.executor == nil {
+		s.executor = NewExecutor(s.db, s.dialect)
+	}
 	tx, err := s.db.BeginTx(ctx, nil)
 	if err != nil {
 		return fmt.Errorf("begin migration %d: %w", m.version, err)
 	}
 	defer tx.Rollback()
-	if _, err := tx.ExecContext(ctx, m.sql); err != nil {
+	sqlText := m.sql
+	if s.provider == Postgres {
+		sqlText = postgresMigrations[m.version]
+	}
+	if sqlText == "" {
+		return fmt.Errorf("migration %d has no %s definition", m.version, s.provider)
+	}
+	if _, err := tx.ExecContext(ctx, sqlText); err != nil {
 		return fmt.Errorf("apply migration %d (%s): %w", m.version, m.name, err)
 	}
-	if _, err := tx.ExecContext(ctx, "INSERT INTO _trestle_schema_migrations(version,name,applied_at) VALUES(?,?,?)", m.version, m.name, time.Now().UTC().Format(time.RFC3339Nano)); err != nil {
+	if _, err := NewExecutorTx(tx, s.dialect).ExecContext(ctx, "INSERT INTO _trestle_schema_migrations(version,name,applied_at) VALUES(?,?,?)", m.version, m.name, time.Now().UTC().Format(time.RFC3339Nano)); err != nil {
 		return fmt.Errorf("record migration %d: %w", m.version, err)
 	}
-	if _, err := tx.ExecContext(ctx, fmt.Sprintf("PRAGMA user_version = %d", m.version)); err != nil {
-		return fmt.Errorf("set schema version %d: %w", m.version, err)
+	if s.provider == SQLite {
+		if _, err := tx.ExecContext(ctx, fmt.Sprintf("PRAGMA user_version = %d", m.version)); err != nil {
+			return fmt.Errorf("set schema version %d: %w", m.version, err)
+		}
 	}
 	if err := tx.Commit(); err != nil {
 		return fmt.Errorf("commit migration %d: %w", m.version, err)

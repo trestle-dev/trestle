@@ -2,6 +2,7 @@ package store
 
 import (
 	"context"
+	"strings"
 	"testing"
 )
 
@@ -14,6 +15,21 @@ func TestProviderDiagnosticsDoNotExposeConnectionMaterial(t *testing.T) {
 	d := s.Diagnostics()
 	if d.Provider != SQLite || d.SchemaVersion != CurrentVersion || d.MaxOpen != 1 {
 		t.Fatalf("unexpected diagnostics: %#v", d)
+	}
+}
+
+func TestEveryLogicalMigrationHasPostgresDDL(t *testing.T) {
+	if len(postgresMigrations) != CurrentVersion {
+		t.Fatalf("got %d postgres migrations", len(postgresMigrations))
+	}
+	for _, migration := range migrations {
+		definition := postgresMigrations[migration.version]
+		if strings.TrimSpace(definition) == "" {
+			t.Fatalf("migration %d has no postgres DDL", migration.version)
+		}
+		if strings.Contains(definition, " STRICT") || strings.Contains(definition, " BLOB") || strings.Contains(definition, "AUTOINCREMENT") || strings.Contains(definition, "PRAGMA") {
+			t.Fatalf("migration %d contains SQLite-only DDL", migration.version)
+		}
 	}
 }
 

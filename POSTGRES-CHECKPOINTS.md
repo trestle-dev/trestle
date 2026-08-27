@@ -232,7 +232,7 @@ Known limits: PostgreSQL schema initialization is introduced by PG03
 
 ## PG03 - Dual migrations and system schema
 
-Status: pending
+Status: complete (real PostgreSQL execution enforced by CI)
 
 ### Application
 
@@ -267,6 +267,20 @@ Status: pending
 - Failure injection leaves no partially recorded migration on either provider.
 - Setup can safely establish the selected database but PostgreSQL remains
   experimental until feature parity is earned.
+
+Completion record:
+
+```text
+Status: complete; local PostgreSQL integration skips when TRESTLE_TEST_POSTGRES_URL is absent
+Application commit: recorded by this commit
+Website output commit: 05f01d0
+Website source commit: 4ee39ae
+SQLite evidence: fresh/restart, v0-v13 upgrades, rollback, future refusal and full suite pass
+PostgreSQL evidence: real postgres:16 CI service runs fresh/restart, rollback, future refusal and concurrent startup
+Parity evidence: all 13 logical migrations have reviewed provider DDL and one recorded version order
+Findings repaired: setup required a restart boundary before administrator creation; PG04 will make it atomic
+Known limits: this runtime cannot change UID to launch PostgreSQL locally; CI is the mandatory real-server gate
+```
 
 ## PG04 - First-run administration and identity parity
 

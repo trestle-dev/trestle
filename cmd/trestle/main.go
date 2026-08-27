@@ -20,6 +20,7 @@ import (
 	"github.com/trestle-dev/trestle/internal/buildinfo"
 	"github.com/trestle-dev/trestle/internal/collections"
 	"github.com/trestle-dev/trestle/internal/config"
+	"github.com/trestle-dev/trestle/internal/databasesetup"
 	"github.com/trestle-dev/trestle/internal/deployment"
 	"github.com/trestle-dev/trestle/internal/events"
 	filestore "github.com/trestle-dev/trestle/internal/files"
@@ -61,13 +62,15 @@ func main() {
 		os.Exit(2)
 	}
 	logger := slog.New(slog.NewJSONHandler(os.Stderr, &slog.HandlerOptions{}))
-	database, err := store.Open(context.Background(), cfg.DataDir)
+	databaseContext, cancelDatabase := context.WithTimeout(context.Background(), cfg.DatabaseConnectTimeout)
+	database, err := store.OpenWith(databaseContext, store.Options{DataDir: cfg.DataDir, Provider: store.Provider(cfg.DatabaseProvider), URL: cfg.DatabaseURL, MaxOpen: cfg.DatabaseMaxOpen, MaxIdle: cfg.DatabaseMaxIdle, ConnMaxLifetime: cfg.DatabaseConnMaxLifetime})
+	cancelDatabase()
 	if err != nil {
 		logger.Error("database initialization failed", "error", err)
 		os.Exit(1)
 	}
 	defer database.Close()
-	logger.Info("database ready", "path", database.Path(), "schema_version", store.CurrentVersion)
+	logger.Info("database ready", "provider", database.Provider(), "schema_version", store.CurrentVersion)
 	dashboard, err := web.New(cfg.StaticDir)
 	if err != nil {
 		logger.Error("dashboard initialization failed", "error", err)
@@ -117,6 +120,8 @@ func main() {
 	apiRoutes.Handle("/api/v1/openapi.json", apiDocs)
 	apiRoutes.Handle("/api/v1/capabilities", apiDocs)
 	adminRoutes := http.NewServeMux()
+	databaseSetup := databasesetup.New(admin, databasesetup.Options{DataDir: cfg.DataDir, Current: database.Provider(), Explicit: cfg.DatabaseExplicit, MaxOpen: cfg.DatabaseMaxOpen, MaxIdle: cfg.DatabaseMaxIdle, ConnectTimeout: cfg.DatabaseConnectTimeout, ConnMaxLifetime: cfg.DatabaseConnMaxLifetime})
+	adminRoutes.Handle("/admin/v1/database/setup", databaseSetup)
 	adminRoutes.Handle("/admin/v1/collections", collectionAdmin)
 	adminRoutes.Handle("/admin/v1/collections/", collectionAdmin)
 	adminRoutes.Handle("/admin/v1/data/", recordAPI)

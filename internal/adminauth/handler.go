@@ -1,6 +1,7 @@
 package adminauth
 
 import (
+	"context"
 	"crypto/rand"
 	"crypto/sha256"
 	"database/sql"
@@ -64,12 +65,20 @@ func (h *Handler) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 }
 
 func (h *Handler) setupStatus(w http.ResponseWriter, r *http.Request) {
-	var count int
-	if err := h.db.QueryRowContext(r.Context(), "SELECT count(*) FROM _trestle_admins").Scan(&count); err != nil {
+	required, err := h.SetupRequired(r.Context())
+	if err != nil {
 		writeError(w, 500, "internal_error", "The request could not be completed.")
 		return
 	}
-	writeJSON(w, 200, map[string]bool{"setupRequired": count == 0})
+	writeJSON(w, 200, map[string]bool{"setupRequired": required})
+}
+
+func (h *Handler) SetupRequired(ctx context.Context) (bool, error) {
+	var count int
+	if err := h.db.QueryRowContext(ctx, "SELECT count(*) FROM _trestle_admins").Scan(&count); err != nil {
+		return false, err
+	}
+	return count == 0, nil
 }
 
 func (h *Handler) setup(w http.ResponseWriter, r *http.Request) {

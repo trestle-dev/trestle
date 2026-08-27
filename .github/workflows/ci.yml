@@ -10,6 +10,22 @@ permissions:
 jobs:
   test:
     runs-on: ubuntu-latest
+    services:
+      postgres:
+        image: postgres:16
+        env:
+          POSTGRES_USER: postgres
+          POSTGRES_PASSWORD: postgres
+          POSTGRES_DB: trestle_test
+        ports:
+          - 5432:5432
+        options: >-
+          --health-cmd "pg_isready -U postgres -d trestle_test"
+          --health-interval 2s
+          --health-timeout 5s
+          --health-retries 20
+    env:
+      TRESTLE_TEST_POSTGRES_URL: postgres://postgres:postgres@127.0.0.1:5432/trestle_test?sslmode=disable
     steps:
       - uses: actions/checkout@v4
       - uses: actions/setup-go@v5
