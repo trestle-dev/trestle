@@ -85,7 +85,7 @@ func main() {
 	recordAPI.ConfigureAccess(applicationAuth, accessRules)
 	eventAPI := events.New(database.DB(), admin, credentials)
 	recordAPI.ConfigureEvents(eventAPI)
-	auditAPI := audit.New(database.DB(), admin)
+	auditAPI := audit.New(database.DB(), admin, string(database.Provider()))
 	jobAPI := jobs.New(database.DB(), admin)
 	webhookAPI, err := webhooks.New(database.DB(), admin, jobAPI, cfg.DataDir)
 	if err != nil {

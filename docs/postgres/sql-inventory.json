@@ -1,0 +1,13 @@
+{
+  "schemaVersion": 1,
+  "checkpoint": "PG00",
+  "currentProvider": "sqlite",
+  "categories": {
+    "portableDML": ["adminauth", "appauth", "records", "identities", "rules", "files", "events", "audit", "jobs", "webhooks", "functions", "apidocs"],
+    "placeholderBinding": ["all handler SQL currently uses SQLite question-mark parameters"],
+    "dialectDDL": ["13 system migrations", "dynamic collection tables", "collection table rebuilds"],
+    "providerOperations": ["PRAGMA foreign_keys", "PRAGMA user_version", "PRAGMA page_count", "PRAGMA page_size", "PRAGMA integrity_check", "VACUUM INTO"],
+    "semanticDecisions": ["NOCASE email and collection uniqueness", "integer booleans", "AUTOINCREMENT event sequences", "STRICT tables", "serialized job claims", "text timestamps", "JSON stored as text"]
+  },
+  "frozenParity": ["errors", "ordering", "nulls", "uniqueness", "timestamps", "json", "optimisticVersions", "atomicBatches", "events", "jobs"]
+}

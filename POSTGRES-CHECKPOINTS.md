@@ -78,7 +78,7 @@ Known limits: <honest remaining boundary>
 
 ## PG00 - SQL inventory and frozen parity contract
 
-Status: pending
+Status: complete
 
 ### Application
 
@@ -113,6 +113,20 @@ Status: pending
 - The frozen SQLite HTTP corpus passes unchanged.
 - CI can provision and destroy a real PostgreSQL test database without leaking
   credentials or leaving state.
+
+Completion record:
+
+```text
+Status: complete
+Application commit: recorded by this commit
+Website output commit: ee8ee51
+Website source commit: b690d63
+SQLite evidence: go test ./...; provider diagnostics and frozen inventory tests pass
+PostgreSQL evidence: CI provisioning contract classified; product is not selectable yet
+Parity evidence: existing SQLite HTTP regression corpus passes unchanged
+Findings repaired: provider was previously implicit and absent from authenticated diagnostics
+Known limits: PostgreSQL remains planned; real provider execution begins at PG03
+```
 
 ## PG01 - Database configuration and secret lifecycle
 

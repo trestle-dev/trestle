@@ -15,8 +15,9 @@ import (
 const CurrentVersion = 13
 
 type Store struct {
-	db   *sql.DB
-	path string
+	db       *sql.DB
+	path     string
+	provider Provider
 }
 
 type migration struct {
@@ -213,7 +214,7 @@ func Open(ctx context.Context, dataDir string) (*Store, error) {
 	}
 	db.SetMaxOpenConns(1)
 	db.SetConnMaxLifetime(0)
-	s := &Store{db: db, path: path}
+	s := &Store{db: db, path: path, provider: SQLite}
 	if err := s.initialize(ctx); err != nil {
 		_ = db.Close()
 		return nil, err
@@ -271,3 +272,7 @@ func (s *Store) Close() error                   { return s.db.Close() }
 func (s *Store) Ping(ctx context.Context) error { return s.db.PingContext(ctx) }
 func (s *Store) Path() string                   { return s.path }
 func (s *Store) DB() *sql.DB                    { return s.db }
+func (s *Store) Provider() Provider             { return s.provider }
+func (s *Store) Diagnostics() Diagnostics {
+	return Diagnostics{Provider: s.provider, SchemaVersion: CurrentVersion, MaxOpen: s.db.Stats().MaxOpenConnections}
+}

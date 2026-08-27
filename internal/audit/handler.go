@@ -12,9 +12,10 @@ import (
 )
 
 type Handler struct {
-	db    *sql.DB
-	admin *adminauth.Handler
-	now   func() time.Time
+	db       *sql.DB
+	admin    *adminauth.Handler
+	now      func() time.Time
+	provider string
 }
 type Fact struct {
 	ID         int64  `json:"id"`
@@ -28,8 +29,12 @@ type Fact struct {
 	Details    any    `json:"details"`
 }
 
-func New(db *sql.DB, admin *adminauth.Handler) *Handler {
-	return &Handler{db: db, admin: admin, now: time.Now}
+func New(db *sql.DB, admin *adminauth.Handler, provider ...string) *Handler {
+	name := "sqlite"
+	if len(provider) > 0 && provider[0] != "" {
+		name = provider[0]
+	}
+	return &Handler{db: db, admin: admin, now: time.Now, provider: name}
 }
 func (h *Handler) Emit(ctx context.Context, tx *sql.Tx, actorKind, actorID, action, target, outcome, requestID string, details any) error {
 	encoded, _ := json.Marshal(redact(details))
@@ -85,7 +90,7 @@ func (h *Handler) operations(w http.ResponseWriter, r *http.Request) {
 	var pageCount, pageSize int64
 	h.db.QueryRowContext(r.Context(), "PRAGMA page_count").Scan(&pageCount)
 	h.db.QueryRowContext(r.Context(), "PRAGMA page_size").Scan(&pageSize)
-	writeJSON(w, map[string]any{"counts": counts, "databaseBytes": pageCount * pageSize, "auditBoundary": "append-oriented, not tamper-proof"})
+	writeJSON(w, map[string]any{"provider": h.provider, "counts": counts, "databaseBytes": pageCount * pageSize, "auditBoundary": "append-oriented, not tamper-proof"})
 }
 func redact(value any) any {
 	object, ok := value.(map[string]any)
