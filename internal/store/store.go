@@ -5,8 +5,10 @@ import (
 	"database/sql"
 	"errors"
 	"fmt"
+	"net/url"
 	"os"
 	"path/filepath"
+	"strconv"
 	"time"
 
 	_ "github.com/lib/pq"
@@ -16,11 +18,12 @@ import (
 const CurrentVersion = 13
 
 type Store struct {
-	db       *sql.DB
-	path     string
-	provider Provider
-	dialect  Dialect
-	executor Executor
+	db            *sql.DB
+	path          string
+	provider      Provider
+	dialect       Dialect
+	executor      Executor
+	schemaVersion int
 }
 
 type Options struct {
@@ -30,16 +33,21 @@ type Options struct {
 	MaxOpen         int
 	MaxIdle         int
 	ConnMaxLifetime time.Duration
+	ConnectTimeout  time.Duration
 }
 
-func Probe(ctx context.Context, provider Provider, url string) (string, error) {
+func Probe(ctx context.Context, provider Provider, url string, connectTimeout time.Duration) (string, error) {
 	if provider == SQLite {
 		return "sqlite", nil
 	}
 	if provider != Postgres {
 		return "", errors.New("unsupported database provider")
 	}
-	db, err := sql.Open("postgres", url)
+	dsn, err := withConnectTimeout(url, connectTimeout)
+	if err != nil {
+		return "", err
+	}
+	db, err := sql.Open("postgres", dsn)
 	if err != nil {
 		return "", errors.New("open postgres connection")
 	}
@@ -52,6 +60,29 @@ func Probe(ctx context.Context, provider Provider, url string) (string, error) {
 		return "", errors.New("postgres version check failed")
 	}
 	return version, nil
+}
+
+// withConnectTimeout rewrites a PostgreSQL URL so the driver enforces the
+// Trestle-owned connection timeout through lib/pq's whole-second
+// connect_timeout parameter. Query parameters are modified through structured
+// URL handling, preserving escaping and credentials. A timeout that cannot be
+// represented as a whole number of seconds is rejected rather than rounded.
+func withConnectTimeout(rawURL string, timeout time.Duration) (string, error) {
+	if timeout <= 0 {
+		return rawURL, nil
+	}
+	seconds := timeout / time.Second
+	if seconds == 0 || time.Duration(seconds)*time.Second != timeout {
+		return "", errors.New("postgres connect timeout must be a whole number of seconds")
+	}
+	u, err := url.Parse(rawURL)
+	if err != nil || (u.Scheme != "postgres" && u.Scheme != "postgresql") {
+		return "", errors.New("invalid postgres connection URL")
+	}
+	query := u.Query()
+	query.Set("connect_timeout", strconv.FormatInt(int64(seconds), 10))
+	u.RawQuery = query.Encode()
+	return u.String(), nil
 }
 
 type migration struct {
@@ -253,12 +284,18 @@ func OpenWith(ctx context.Context, options Options) (*Store, error) {
 	if err := os.Chmod(options.DataDir, 0o700); err != nil {
 		return nil, fmt.Errorf("secure data directory: %w", err)
 	}
+	var err error
 	path := "external-postgres"
 	driver, dsn := "postgres", options.URL
 	if options.Provider == SQLite {
 		path = filepath.Join(options.DataDir, "trestle.db")
 		driver = "sqlite"
 		dsn = "file:" + filepath.ToSlash(path) + "?_pragma=foreign_keys(1)&_pragma=busy_timeout(5000)&_pragma=journal_mode(WAL)"
+	} else {
+		dsn, err = withConnectTimeout(options.URL, options.ConnectTimeout)
+		if err != nil {
+			return nil, err
+		}
 	}
 	db, err := sql.Open(driver, dsn)
 	if err != nil {
@@ -291,12 +328,9 @@ func (s *Store) initialize(ctx context.Context) error {
 	if err := s.db.QueryRowContext(ctx, "PRAGMA foreign_keys").Scan(&foreignKeys); err != nil || foreignKeys != 1 {
 		return errors.New("sqlite foreign keys are not enabled")
 	}
-	var version int
-	if err := s.db.QueryRowContext(ctx, "PRAGMA user_version").Scan(&version); err != nil {
-		return fmt.Errorf("read schema version: %w", err)
-	}
-	if version > CurrentVersion {
-		return fmt.Errorf("database schema version %d is newer than supported version %d", version, CurrentVersion)
+	version, err := s.sqliteVersion(ctx)
+	if err != nil {
+		return err
 	}
 	for _, m := range migrations {
 		if m.version > version {
@@ -313,27 +347,108 @@ func (s *Store) initializePostgres(ctx context.Context) error {
 		return fmt.Errorf("lock postgres migrations: %w", err)
 	}
 	defer s.db.ExecContext(context.Background(), "SELECT pg_advisory_unlock(839201347561)")
-	var exists bool
-	if err := s.db.QueryRowContext(ctx, "SELECT to_regclass('_trestle_schema_migrations') IS NOT NULL").Scan(&exists); err != nil {
-		return fmt.Errorf("inspect postgres schema: %w", err)
+	history, err := s.readHistory(ctx)
+	if err != nil {
+		return err
 	}
-	version := 0
-	if exists {
-		if err := s.db.QueryRowContext(ctx, "SELECT COALESCE(MAX(version),0) FROM _trestle_schema_migrations").Scan(&version); err != nil {
-			return fmt.Errorf("read schema version: %w", err)
-		}
-	}
-	if version > CurrentVersion {
-		return fmt.Errorf("database schema version %d is newer than supported version %d", version, CurrentVersion)
-	}
+	s.schemaVersion = history.version
 	for _, m := range migrations {
-		if m.version > version {
+		if m.version > history.version {
 			if err := s.apply(ctx, m); err != nil {
 				return err
 			}
 		}
 	}
 	return s.ensureIdentity(ctx)
+}
+
+type migrationHistory struct {
+	exists  bool
+	version int
+}
+
+// readHistory returns the highest contiguous applied migration version derived
+// from the validated _trestle_schema_migrations history. A database without the
+// history table is treated as blank. Damaged, non-contiguous, future or
+// misnamed history fails closed instead of guessing.
+func (s *Store) readHistory(ctx context.Context) (migrationHistory, error) {
+	var exists bool
+	var err error
+	if s.provider == Postgres {
+		err = s.db.QueryRowContext(ctx, "SELECT to_regclass('_trestle_schema_migrations') IS NOT NULL").Scan(&exists)
+	} else {
+		var count int
+		err = s.db.QueryRowContext(ctx, "SELECT count(*) FROM sqlite_master WHERE type='table' AND name='_trestle_schema_migrations'").Scan(&count)
+		exists = count > 0
+	}
+	if err != nil {
+		return migrationHistory{}, fmt.Errorf("inspect migration history: %w", err)
+	}
+	if !exists {
+		return migrationHistory{}, nil
+	}
+	rows, err := s.db.QueryContext(ctx, "SELECT version,name FROM _trestle_schema_migrations ORDER BY version")
+	if err != nil {
+		return migrationHistory{}, fmt.Errorf("read migration history: %w", err)
+	}
+	defer rows.Close()
+	history := migrationHistory{exists: true}
+	expected := 1
+	for rows.Next() {
+		var version int
+		var name string
+		if err := rows.Scan(&version, &name); err != nil {
+			return migrationHistory{}, fmt.Errorf("read migration history: %w", err)
+		}
+		if version > CurrentVersion {
+			return migrationHistory{}, fmt.Errorf("database schema version %d is newer than supported version %d", version, CurrentVersion)
+		}
+		if version != expected {
+			return migrationHistory{}, fmt.Errorf("database migration history is not contiguous (expected version %d, found %d)", expected, version)
+		}
+		if name != migrations[version-1].name {
+			return migrationHistory{}, fmt.Errorf("database migration %d has an unexpected name", version)
+		}
+		history.version = version
+		expected++
+	}
+	if err := rows.Err(); err != nil {
+		return migrationHistory{}, fmt.Errorf("read migration history: %w", err)
+	}
+	return history, nil
+}
+
+// sqliteVersion derives the applied SQLite version from validated migration
+// history, treating PRAGMA user_version only as a compatibility mirror and
+// reconciliation signal. A blank database may initialize; an absent mirror is
+// restored; disagreement fails closed rather than reconstructing history.
+func (s *Store) sqliteVersion(ctx context.Context) (int, error) {
+	history, err := s.readHistory(ctx)
+	if err != nil {
+		return 0, err
+	}
+	var mirror int
+	if err := s.db.QueryRowContext(ctx, "PRAGMA user_version").Scan(&mirror); err != nil {
+		return 0, fmt.Errorf("read schema version mirror: %w", err)
+	}
+	if mirror > CurrentVersion {
+		return 0, fmt.Errorf("database schema version %d is newer than supported version %d", mirror, CurrentVersion)
+	}
+	if history.version == 0 {
+		if mirror != 0 {
+			return 0, fmt.Errorf("database has a schema version marker but no migration history")
+		}
+		return 0, nil
+	}
+	if mirror == 0 {
+		if _, err := s.db.ExecContext(ctx, fmt.Sprintf("PRAGMA user_version = %d", history.version)); err != nil {
+			return 0, fmt.Errorf("restore schema version mirror: %w", err)
+		}
+	} else if mirror != history.version {
+		return 0, fmt.Errorf("database schema version marker %d does not match migration history version %d", mirror, history.version)
+	}
+	s.schemaVersion = history.version
+	return history.version, nil
 }
 
 func (s *Store) ensureIdentity(ctx context.Context) error {
@@ -388,6 +503,7 @@ func (s *Store) apply(ctx context.Context, m migration) error {
 	if err := tx.Commit(); err != nil {
 		return fmt.Errorf("commit migration %d: %w", m.version, err)
 	}
+	s.schemaVersion = m.version
 	return nil
 }
 
@@ -398,5 +514,5 @@ func (s *Store) DB() Executor                   { return s.executor }
 func (s *Store) Provider() Provider             { return s.provider }
 func (s *Store) Dialect() Dialect               { return s.dialect }
 func (s *Store) Diagnostics() Diagnostics {
-	return Diagnostics{Provider: s.provider, SchemaVersion: CurrentVersion, MaxOpen: s.db.Stats().MaxOpenConnections}
+	return Diagnostics{Provider: s.provider, SchemaVersion: s.schemaVersion, MaxOpen: s.db.Stats().MaxOpenConnections}
 }

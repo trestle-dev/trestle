@@ -21,9 +21,10 @@ import (
 const cookieName = "trestle_admin_session"
 
 type Handler struct {
-	db      store.Executor
-	now     func() time.Time
-	limiter *limiter
+	db       store.Executor
+	provider string
+	now      func() time.Time
+	limiter  *limiter
 }
 type credentials struct {
 	Email    string `json:"email"`
@@ -34,6 +35,7 @@ type sessionResponse struct {
 	AdminID       string `json:"adminId,omitempty"`
 	Email         string `json:"email,omitempty"`
 	CSRFToken     string `json:"csrfToken,omitempty"`
+	Provider      string `json:"provider,omitempty"`
 }
 
 type Principal struct {
@@ -42,8 +44,12 @@ type Principal struct {
 	SessionID string
 }
 
-func New(db any) *Handler {
-	return &Handler{db: store.Adapt(db), now: time.Now, limiter: newLimiter(10, time.Minute)}
+func New(db any, provider ...string) *Handler {
+	name := ""
+	if len(provider) > 0 {
+		name = provider[0]
+	}
+	return &Handler{db: store.Adapt(db), provider: name, now: time.Now, limiter: newLimiter(10, time.Minute)}
 }
 
 func (h *Handler) ServeHTTP(w http.ResponseWriter, r *http.Request) {
@@ -163,7 +169,7 @@ func (h *Handler) issueSession(w http.ResponseWriter, r *http.Request, adminID, 
 		return
 	}
 	http.SetCookie(w, &http.Cookie{Name: cookieName, Value: token, Path: "/", HttpOnly: true, Secure: requestmeta.Scheme(r) == "https", SameSite: http.SameSiteStrictMode, Expires: expires, MaxAge: int((12 * time.Hour).Seconds())})
-	writeJSON(w, 200, sessionResponse{Authenticated: true, AdminID: adminID, Email: email, CSRFToken: csrf})
+	writeJSON(w, 200, sessionResponse{Authenticated: true, AdminID: adminID, Email: email, CSRFToken: csrf, Provider: h.provider})
 }
 
 func (h *Handler) current(w http.ResponseWriter, r *http.Request) {
@@ -178,7 +184,7 @@ func (h *Handler) current(w http.ResponseWriter, r *http.Request) {
 		writeError(w, 500, "internal_error", "The request could not be completed.")
 		return
 	}
-	writeJSON(w, 200, sessionResponse{Authenticated: true, AdminID: id, Email: email, CSRFToken: csrf})
+	writeJSON(w, 200, sessionResponse{Authenticated: true, AdminID: id, Email: email, CSRFToken: csrf, Provider: h.provider})
 }
 
 func (h *Handler) Authorize(r *http.Request, mutation bool) (Principal, bool) {

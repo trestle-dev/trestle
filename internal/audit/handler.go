@@ -87,10 +87,14 @@ func (h *Handler) operations(w http.ResponseWriter, r *http.Request) {
 		h.db.QueryRowContext(r.Context(), "SELECT count(*) FROM "+table).Scan(&count)
 		counts[name] = count
 	}
-	var pageCount, pageSize int64
-	h.db.QueryRowContext(r.Context(), "PRAGMA page_count").Scan(&pageCount)
-	h.db.QueryRowContext(r.Context(), "PRAGMA page_size").Scan(&pageSize)
-	writeJSON(w, map[string]any{"provider": h.provider, "counts": counts, "databaseBytes": pageCount * pageSize, "auditBoundary": "append-oriented, not tamper-proof"})
+	var databaseBytes any
+	if h.provider == "sqlite" {
+		var pageCount, pageSize int64
+		h.db.QueryRowContext(r.Context(), "PRAGMA page_count").Scan(&pageCount)
+		h.db.QueryRowContext(r.Context(), "PRAGMA page_size").Scan(&pageSize)
+		databaseBytes = pageCount * pageSize
+	}
+	writeJSON(w, map[string]any{"provider": h.provider, "counts": counts, "databaseBytes": databaseBytes, "auditBoundary": "append-oriented, not tamper-proof"})
 }
 func redact(value any) any {
 	object, ok := value.(map[string]any)

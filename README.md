@@ -20,6 +20,12 @@ S3-compatible files, realtime events, audit, durable jobs, webhooks, AWS Lambda,
 OpenAPI, reference clients, backup/recovery, and whole-product dogfooding.
 Deployment, release automation and the release-candidate matrix are implemented.
 
+A separate PostgreSQL parity campaign (PG00-PG11) is underway. PostgreSQL
+configuration, provider-neutral execution and dual system migrations exist and
+are exercised against a real server, but product-level parity is **not**
+complete; PostgreSQL is experimental until the campaign closes. See
+`POSTGRES-CHECKPOINTS.md`.
+
 ## Requirements
 
 - Go 1.22 or newer
@@ -68,6 +74,12 @@ On first run, open that address and create the first administrator. The setup
 route closes once the administrator is committed. Administrator passwords
 currently require at least 7 characters.
 
+First-run setup offers SQLite and PostgreSQL. **SQLite is the complete,
+recommended default**; PostgreSQL is labelled experimental because only its
+configuration and system migrations are available for testing. The setup
+selector is the campaign's test path and stays enabled; the warning will only be
+removed when the parity matrix is promoted at PG11.
+
 Trestle creates `./data/trestle.db` by default. The data directory is set to
 owner-only permissions and must live on a local filesystem; shared/network
 filesystem operation is not supported.
@@ -115,6 +127,38 @@ Flags override environment variables, which override defaults:
 | `--read-timeout` | `TRESTLE_READ_TIMEOUT` | `5m` |
 | `--idle-timeout` | `TRESTLE_IDLE_TIMEOUT` | `60s` |
 | `--max-header-bytes` | `TRESTLE_MAX_HEADER_BYTES` | `1048576` |
+| `--database-provider` | `TRESTLE_DATABASE_PROVIDER` | `sqlite` |
+| `--database-url` | `TRESTLE_DATABASE_URL` | none (PostgreSQL only) |
+| `--database-max-open` | `TRESTLE_DATABASE_MAX_OPEN` | `10` |
+| `--database-max-idle` | `TRESTLE_DATABASE_MAX_IDLE` | `2` |
+| `--database-connect-timeout` | `TRESTLE_DATABASE_CONNECT_TIMEOUT` | `10s` |
+| `--database-conn-max-lifetime` | `TRESTLE_DATABASE_CONN_MAX_LIFETIME` | `30m` |
+
+### Database providers
+
+- `sqlite` (default) is the complete provider: one process owns one local
+  database at `<data-dir>/trestle.db` with WAL, owner-only permissions, and
+  refused unknown future schemas.
+- `postgres` is experimental. Explicit startup configuration
+  (`--database-provider postgres --database-url postgres://...`) or the stored
+  first-run bootstrap selects it. Remote connections require TLS unless the
+  host is loopback. The URL is stored atomically in a `0600`
+  `<data-dir>/database.json` and is never returned by an API or written to
+  logs, diagnostics, or support bundles.
+- `--database-connect-timeout` must be a whole number of seconds. Trestle
+  injects it as the driver's `connect_timeout` into every PostgreSQL connection
+  configuration (startup, stored bootstrap, explicit flags, and the first-run
+  connection test) so a hanging peer cannot stall startup indefinitely.
+- The applied schema version is derived from validated
+  `_trestle_schema_migrations` history on both providers. On SQLite,
+  `PRAGMA user_version` is a compatibility mirror: a valid history restores an
+  absent mirror, but history is never reconstructed from the marker, and
+  disagreement or damaged history fails closed.
+- Interrupted first-run setup is resumable: provider selection persists before
+  restart, administrator creation stays available until one administrator
+  commits, and setup never reopens afterward. A persisted but unreachable
+  PostgreSQL configuration fails startup with a redacted error and requires
+  manual `database.json` recovery.
 
 The static-directory override is intended for frontend development. For
 example, after running Nift in another terminal:

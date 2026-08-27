@@ -63,7 +63,7 @@ func main() {
 	}
 	logger := slog.New(slog.NewJSONHandler(os.Stderr, &slog.HandlerOptions{}))
 	databaseContext, cancelDatabase := context.WithTimeout(context.Background(), cfg.DatabaseConnectTimeout)
-	database, err := store.OpenWith(databaseContext, store.Options{DataDir: cfg.DataDir, Provider: store.Provider(cfg.DatabaseProvider), URL: cfg.DatabaseURL, MaxOpen: cfg.DatabaseMaxOpen, MaxIdle: cfg.DatabaseMaxIdle, ConnMaxLifetime: cfg.DatabaseConnMaxLifetime})
+	database, err := store.OpenWith(databaseContext, store.Options{DataDir: cfg.DataDir, Provider: store.Provider(cfg.DatabaseProvider), URL: cfg.DatabaseURL, MaxOpen: cfg.DatabaseMaxOpen, MaxIdle: cfg.DatabaseMaxIdle, ConnMaxLifetime: cfg.DatabaseConnMaxLifetime, ConnectTimeout: cfg.DatabaseConnectTimeout})
 	cancelDatabase()
 	if err != nil {
 		logger.Error("database initialization failed", "error", err)
@@ -79,7 +79,7 @@ func main() {
 	if cfg.StaticDir != "" {
 		logger.Warn("using development static override", "directory", cfg.StaticDir)
 	}
-	admin := adminauth.New(database.DB())
+	admin := adminauth.New(database.DB(), string(database.Provider()))
 	collectionAdmin := collections.New(database.DB(), admin)
 	credentials := identities.New(database.DB(), admin)
 	recordAPI := records.New(database.DB(), admin, credentials)

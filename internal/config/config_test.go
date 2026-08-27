@@ -83,7 +83,7 @@ func TestHTTPBoundaryValidation(t *testing.T) {
 }
 
 func TestRejectsAmbiguousOrUnsafeValues(t *testing.T) {
-	tests := [][]string{{"--listen", ":8090"}, {"--listen", "localhost:0"}, {"--data-dir", ""}, {"--shutdown-timeout", "0s"}, {"--shutdown-timeout", (6 * time.Minute).String()}, {"--log-level", "verbose"}}
+	tests := [][]string{{"--listen", ":8090"}, {"--listen", "localhost:0"}, {"--data-dir", ""}, {"--shutdown-timeout", "0s"}, {"--shutdown-timeout", (6 * time.Minute).String()}, {"--log-level", "verbose"}, {"--database-connect-timeout", "500ms"}}
 	for _, args := range tests {
 		if _, err := Load(args, func(string) string { return "" }); err == nil {
 			t.Errorf("Load(%q) succeeded", args)

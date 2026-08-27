@@ -282,9 +282,101 @@ Findings repaired: setup required a restart boundary before administrator creati
 Known limits: this runtime cannot change UID to launch PostgreSQL locally; CI is the mandatory real-server gate
 ```
 
+## PG03R - PG03 repair: history authority, connect timeout, diagnostics and dashboard truthfulness
+
+Status: complete
+
+### Defects confirmed under the PostgreSQL 18 baseline
+
+- **Migration authority.** SQLite's applied version was derived from
+  `PRAGMA user_version`, not from validated `_trestle_schema_migrations`
+  history, contrary to the PG03 contract. Runtime proof: a database with
+  `user_version=13` but an emptied history table still opened.
+- **Connect timeout.** `--database-connect-timeout` was not enforced for a
+  hanging peer. lib/pq registers only the legacy `driver.Driver`, so
+  `database/sql` establishes connections outside the request context and the
+  Trestle deadline never reached the dial; a silent-drop peer stalled startup
+  and the first-run connection test well past the configured timeout.
+- **Applied diagnostics.** `Store.Diagnostics().SchemaVersion` reported the
+  compiled constant rather than the applied version.
+- **Dashboard truthfulness.** The overview and readiness copy claimed SQLite
+  regardless of provider; first-run setup did not label PostgreSQL
+  experimental; the setup endpoint returned a non-standard error envelope; the
+  operations card portrayed `0 bytes` as a genuine PostgreSQL database size.
+
+### Repair
+
+Application:
+
+- Migration history is now the provider-neutral source of truth. `PRAGMA
+  user_version` is a compatibility mirror: a valid history may restore an
+  absent mirror, history is never reconstructed from a nonzero marker, and
+  disagreement or damaged/non-contiguous history fails closed with useful,
+  non-secret errors. Migration DDL and its history row remain one transaction.
+- The configured whole-second connect timeout is injected as the driver's
+  `connect_timeout` into every PostgreSQL connection configuration (startup,
+  stored bootstrap, explicit flags, `store.Probe` and the first-run connection
+  test) through structured URL handling; sub-second values are rejected rather
+  than rounded; the rewritten DSN is never exposed.
+- `Store.Diagnostics().SchemaVersion` reports the version established from
+  validated migration history.
+- The authenticated dashboard shows the actual configured provider with neutral
+  copy; readiness no longer claims SQLite.
+- First-run setup labels PostgreSQL experimental, explains that SQLite is the
+  complete default, and keeps the selection path enabled for the campaign.
+- The database-setup endpoint uses the standard error envelope; authentication,
+  TLS, timeout and unavailable-database failures surface useful redacted
+  messages.
+- PostgreSQL database size is reported as "Not reported" until PG09 supplies a
+  provider-neutral operations summary.
+
+Dashboard, website and documentation slices updated to match.
+
+### Evidence
+
+- SQLite: reconciliation matrix (blank, current, retained historical,
+  absent-mirror restore, marker-without-history, empty-history, mirror
+  disagreement both directions, missing/non-contiguous rows, unknown names,
+  future history, interrupted migration, restart after reconciliation) and the
+  full upgrade-from-every-version matrix pass.
+- Deterministic connection-timeout tests use a local TCP listener that accepts
+  and stalls; both startup and the setup probe return within the configured
+  bound without leaked goroutines.
+- Real PostgreSQL (18.6): the three existing PG03 tests, the applied-version
+  diagnostics test and the migration-history validation test pass against a
+  disposable server.
+- Full Go, race and vet suites run with the PostgreSQL tests enabled.
+- The complete first-run PostgreSQL lifecycle (selection, restart, migrations,
+  single administrator, login, dashboard, logout) passes and shows the
+  provider-neutral dashboard state.
+
+Completion record:
+
+```text
+Status: complete
+Application commit: recorded by this commit
+Website output commit: 8b939f6
+Website source commit: aa18623
+SQLite evidence: full suite plus reconciliation and connect-timeout gates pass
+PostgreSQL evidence: real postgres 18.6 baseline passes the existing and new store tests
+Parity evidence: no product-level parity is claimed; PG04-PG11 remain pending
+Findings repaired: migration authority, connect timeout enforcement, applied
+  diagnostics, dashboard truthfulness, setup error envelope, experimental label
+Known limits: PostgreSQL 16 CI is configured but no green run has been reviewed;
+  the concurrent first-administrator race is a confirmed PG04 entry condition
+```
+
 ## PG04 - First-run administration and identity parity
 
 Status: pending
+
+Confirmed entry condition from the PG03R baseline: concurrent first-admin
+submissions with distinct emails created two administrators on PostgreSQL.
+The count-then-insert setup guard is not race-safe under PostgreSQL READ
+COMMITTED; SQLite's single-connection serialization masked the defect. PG04
+must introduce a provider-safe single-winner invariant and a
+provider-parameterized concurrency test. This is deliberately not patched in
+PG03R; it belongs to the complete crash-safe first-run state-machine design.
 
 ### Application
 

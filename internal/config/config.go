@@ -257,6 +257,9 @@ func (c Config) Validate() error {
 	if c.DatabaseConnectTimeout <= 0 || c.DatabaseConnectTimeout > time.Minute {
 		return errors.New("database connect timeout must be greater than zero and no more than 1m")
 	}
+	if c.DatabaseConnectTimeout%time.Second != 0 {
+		return errors.New("database connect timeout must be a whole number of seconds")
+	}
 	if c.DatabaseConnMaxLifetime < 0 || c.DatabaseConnMaxLifetime > 24*time.Hour {
 		return errors.New("database connection lifetime must be between 0 and 24h")
 	}

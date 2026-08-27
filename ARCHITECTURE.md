@@ -2,13 +2,15 @@
 
 ## Deployment shape
 
-The first supported topology is one Go process owning one SQLite database and
-serving an embedded Nift-built dashboard. External object storage and AWS Lambda
-are optional adapters. This constraint is a feature: installation, backup,
-upgrades, and failure ownership must remain understandable.
+The first supported topology is one Go process owning one configured database
+provider and serving an embedded Nift-built dashboard. SQLite is the complete
+default; PostgreSQL is an experimental peer whose product parity is earned
+checkpoint by checkpoint. External object storage and AWS Lambda are optional
+adapters. This constraint is a feature: installation, backup, upgrades, and
+failure ownership must remain understandable.
 
 ```text
-clients ──HTTP/JSON/SSE──> Go server ──transactions──> SQLite
+clients ──HTTP/JSON/SSE──> Go server ──transactions──> configured database
                               │
                               ├── files ──> local or S3-compatible storage
                               ├── jobs ───> webhooks or AWS Lambda
@@ -42,9 +44,18 @@ Domain services must not depend on HTTP request objects or dashboard code.
 ## Persistence model
 
 SQLite runs with foreign keys enabled, a finite busy timeout, and WAL where the
-deployment filesystem supports its correctness requirements. Startup validates
-the database and refuses unknown future schema versions. Migrations are ordered,
-transactional where SQLite permits, and tested from every released version.
+deployment filesystem supports its correctness requirements. PostgreSQL connects
+through a bounded pool with the configured whole-second connection timeout
+injected as the driver's `connect_timeout`. Startup validates the database and
+refuses unknown future schema versions. Migrations are ordered, transactional
+where the provider permits, and tested from every released version.
+
+The applied schema version is derived from validated
+`_trestle_schema_migrations` history on both providers. SQLite's
+`PRAGMA user_version` is only a compatibility mirror and reconciliation signal:
+a valid history may restore an absent mirror, but history is never reconstructed
+from a nonzero marker, and disagreement or damaged/non-contiguous history fails
+closed. Migration DDL and its history row commit in one transaction.
 
 Each collection receives a physical table rather than storing all values in one
 JSON blob. System metadata lives in reserved tables, including equivalents of:
