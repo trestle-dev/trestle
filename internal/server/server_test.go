@@ -28,6 +28,11 @@ func TestHealthReadinessAndRequestID(t *testing.T) {
 		if w.Header().Get("X-Request-ID") == "" {
 			t.Fatal("missing request ID")
 		}
+		for _, header := range []string{"Content-Security-Policy", "Permissions-Policy", "X-Content-Type-Options", "X-Frame-Options", "Referrer-Policy"} {
+			if w.Header().Get(header) == "" {
+				t.Fatalf("%s: missing %s", test.path, header)
+			}
+		}
 	}
 	s.SetReady(true)
 	w := httptest.NewRecorder()
