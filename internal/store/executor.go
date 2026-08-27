@@ -118,6 +118,7 @@ type Dialect interface {
 	JSONCheck(column string) string
 	NumberCheck(column string) string
 	TableSuffix() string
+	ContainsOperator() string
 }
 type sqliteDialect struct{}
 
@@ -161,6 +162,11 @@ func (sqliteDialect) NumberCheck(column string) string {
 	return fmt.Sprintf(" CHECK(typeof(%s) IN ('real','integer','null'))", column)
 }
 func (sqliteDialect) TableSuffix() string { return " STRICT" }
+func (sqliteDialect) ContainsOperator() string {
+	// SQLite's default ASCII LIKE is case-insensitive, so the contains
+	// operator matches that behavior directly.
+	return "LIKE"
+}
 
 type postgresDialect struct{}
 
@@ -190,9 +196,20 @@ func (postgresDialect) ColumnType(kind string) (string, error) {
 	}
 }
 func (postgresDialect) BooleanCheck(column string) string { return "" }
-func (postgresDialect) JSONCheck(column string) string    { return "" }
-func (postgresDialect) NumberCheck(column string) string  { return "" }
-func (postgresDialect) TableSuffix() string               { return "" }
+func (postgresDialect) JSONCheck(column string) string {
+	// Keep JSON as TEXT but enforce validity at the database level so an
+	// invalid value written outside the HTTP validator is rejected exactly as
+	// SQLite's json_valid check rejects it. SQL NULL (unset) is allowed; the
+	// JSON literal "null" is valid text that still passes the cast.
+	return fmt.Sprintf(" CHECK(%s IS NULL OR (%s::jsonb) IS NOT NULL)", column, column)
+}
+func (postgresDialect) NumberCheck(column string) string { return "" }
+func (postgresDialect) TableSuffix() string              { return "" }
+func (postgresDialect) ContainsOperator() string {
+	// PostgreSQL LIKE is case-sensitive, which would diverge from SQLite's
+	// case-insensitive contains behavior. ILIKE restores parity.
+	return "ILIKE"
+}
 func NewDialect(provider Provider) Dialect {
 	if provider == Postgres {
 		return postgresDialect{}

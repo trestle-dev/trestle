@@ -77,8 +77,12 @@ func Compile(expr Expr, fields map[string]Field, dialect store.Dialect) (string,
 			continue
 		}
 		if op == "~" {
-			op = "LIKE"
-			value = "%" + value.(string) + "%"
+			// Case-insensitive substring match with frozen semantics: the
+			// dialect owns the operator (LIKE on SQLite, ILIKE on PostgreSQL)
+			// and % and _ act as SQL wildcards. Escaping is not supported.
+			parts = append(parts, quote(field.Column)+" "+dialect.ContainsOperator()+" ?")
+			args = append(args, "%"+value.(string)+"%")
+			continue
 		}
 		parts = append(parts, quote(field.Column)+" "+op+" ?")
 		args = append(args, normalize(dialect, field.Type, value))

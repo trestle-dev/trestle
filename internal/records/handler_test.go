@@ -427,3 +427,80 @@ func TestQueryErrorMapping(t *testing.T) {
 		})
 	}
 }
+
+func TestContainsCaseSemanticsAndWildcards(t *testing.T) {
+	for _, provider := range storetest.Providers(t) {
+		t.Run(provider, func(t *testing.T) {
+			h, s := setup(t, provider)
+			for _, title := range []string{"Alpha", "beta", "gamma"} {
+				invoke(t, h, s, "POST", "/api/v1/collections/issues/records", map[string]any{"values": map[string]any{"title": title}}, nil)
+			}
+			contains := func(filter string) bool {
+				w := invoke(t, h, s, "GET", "/api/v1/collections/issues/records?filter="+filter, nil, nil)
+				if w.Code != 200 {
+					t.Fatalf("filter %s: %d %s", filter, w.Code, w.Body.String())
+				}
+				return strings.Contains(w.Body.String(), `"Alpha"`) || strings.Contains(w.Body.String(), `"beta"`) || strings.Contains(w.Body.String(), `"gamma"`)
+			}
+			matches := func(filter string) []Record {
+				w := invoke(t, h, s, "GET", "/api/v1/collections/issues/records?filter="+filter, nil, nil)
+				var out struct {
+					Items []Record `json:"items"`
+				}
+				json.Unmarshal(w.Body.Bytes(), &out)
+				return out.Items
+			}
+			// Case-insensitive contains on both providers.
+			if !contains(`title%20~%20%22alpha%22`) || !contains(`title%20~%20%22ALPHA%22`) || !contains(`title%20~%20%22ET%22`) {
+				t.Fatal("case-insensitive contains failed")
+			}
+			// Wildcards are intentional: % matches any run, _ any single char.
+			if items := matches(`title%20~%20%22b%25a%22`); len(items) != 1 || items[0].Values["title"] != "beta" {
+				t.Fatalf("percent wildcard: %#v", items)
+			}
+			if items := matches(`title%20~%20%22a_pha%22`); len(items) != 1 || items[0].Values["title"] != "Alpha" {
+				t.Fatalf("underscore wildcard: %#v", items)
+			}
+			// A value that is not present still matches nothing.
+			if items := matches(`title%20~%20%22zzz%22`); len(items) != 0 {
+				t.Fatalf("absent contains matched: %#v", items)
+			}
+		})
+	}
+}
+
+func TestJSONRecordRoundTrip(t *testing.T) {
+	for _, provider := range storetest.Providers(t) {
+		t.Run(provider, func(t *testing.T) {
+			s := storetest.Open(t, provider)
+			auth := adminauth.New(s.DB(), string(s.Provider()))
+			w := invoke(t, auth, session{}, "POST", "/admin/v1/setup", map[string]any{"email": "admin@example.com", "password": "correct horse battery staple"}, nil)
+			var login struct {
+				CSRF string `json:"csrfToken"`
+			}
+			json.Unmarshal(w.Body.Bytes(), &login)
+			sess := session{w.Result().Cookies()[0], login.CSRF}
+			schemas := collections.New(s.DB(), auth)
+			w = invoke(t, schemas, sess, "POST", "/admin/v1/collections", map[string]any{"name": "payloads", "fields": []map[string]any{{"name": "meta", "type": "json"}}}, nil)
+			if w.Code != 201 {
+				t.Fatal(w.Body.String())
+			}
+			h := New(s.DB(), auth)
+			value := map[string]any{"nested": map[string]any{"tags": []any{"a", "b"}, "n": 3.5, "ok": true}}
+			w = invoke(t, h, sess, "POST", "/api/v1/collections/payloads/records", map[string]any{"values": map[string]any{"meta": value}}, nil)
+			if w.Code != 201 {
+				t.Fatal(w.Body.String())
+			}
+			var created Record
+			json.Unmarshal(w.Body.Bytes(), &created)
+			w = invoke(t, h, sess, "GET", "/api/v1/collections/payloads/records/"+created.ID, nil, nil)
+			var got Record
+			json.Unmarshal(w.Body.Bytes(), &got)
+			encoded, _ := json.Marshal(got.Values["meta"])
+			want, _ := json.Marshal(value)
+			if string(encoded) != string(want) {
+				t.Fatalf("json round trip got %s want %s", encoded, want)
+			}
+		})
+	}
+}

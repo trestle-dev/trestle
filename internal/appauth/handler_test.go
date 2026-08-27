@@ -160,3 +160,38 @@ func TestAccessTokenIsSeparateAndExpiresWithSession(t *testing.T) {
 		})
 	}
 }
+
+func TestConcurrentLoginsCoexistAndRevokeIndependently(t *testing.T) {
+	for _, provider := range storetest.Providers(t) {
+		t.Run(provider, func(t *testing.T) {
+			h := setup(t, provider)
+			registerAndLogin(t, h)
+			first := call(t, h, "/api/v1/auth/login", map[string]any{"email": "user@example.com", "password": "1234567"})
+			var firstOut struct {
+				AccessToken, RefreshToken string
+			}
+			json.Unmarshal(first.Body.Bytes(), &firstOut)
+			second := call(t, h, "/api/v1/auth/login", map[string]any{"email": "user@example.com", "password": "1234567"})
+			var secondOut struct {
+				AccessToken, RefreshToken string
+			}
+			json.Unmarshal(second.Body.Bytes(), &secondOut)
+			authenticate := func(token string) bool {
+				r := httptest.NewRequest("GET", "/", nil)
+				r.Header.Set("Authorization", "Bearer "+token)
+				_, ok := h.Authenticate(r)
+				return ok
+			}
+			if !authenticate(firstOut.AccessToken) || !authenticate(secondOut.AccessToken) {
+				t.Fatal("concurrent logins did not both authenticate")
+			}
+			call(t, h, "/api/v1/auth/logout", map[string]any{"refreshToken": firstOut.RefreshToken})
+			if authenticate(firstOut.AccessToken) {
+				t.Fatal("first session survived revocation")
+			}
+			if !authenticate(secondOut.AccessToken) {
+				t.Fatal("second session was revoked by the first logout")
+			}
+		})
+	}
+}

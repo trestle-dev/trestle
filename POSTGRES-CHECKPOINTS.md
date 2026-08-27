@@ -390,11 +390,16 @@ concurrent-startup test proving only one migration owner proceeds.
   and first-administrator creation recover correctly across crashes without
   reopening setup after an administrator commits.
 - Port administrator sessions, application users, refresh/access tokens,
-  service accounts, personal tokens, TOTP/security state and revocation paths.
+  service accounts, personal tokens and revocation paths.
 - Preserve case-insensitive email uniqueness, hash/blob comparisons, expiry
   ordering and race-safe single-winner setup across both providers.
-- Test session rotation, concurrent logins, password changes, CSRF, revocation
-  and restart behavior through the same public suite.
+- Test session rotation, concurrent logins, CSRF, revocation and restart
+  behavior through the same public suite.
+
+Capability boundary: TOTP/security state and administrator password-change
+workflows are not part of the accepted SQLite product contract, so they are
+outside PostgreSQL parity work and were not invented here. Concurrent logins
+(multiple coexisting sessions) do exist and are provider-parameterized.
 
 ### Dashboard
 
@@ -430,7 +435,7 @@ Parity evidence: exactly one winner per competing setup on both providers;
   case-insensitive email uniqueness, rotation, revocation and CSRF behave alike
 Findings repaired: PostgreSQL first-admin race; advisory-lock ownership now uses
   a pinned connection
-Known limits: collection, record, query and file parity remain PG05-PG07/PG07+;
+Known limits: collection, record, query and file parity remain PG05-PG07; PG08+ cover access rules, files and automation;
   PostgreSQL 16 CI configured but not yet reviewed green
 ```
 
@@ -489,7 +494,7 @@ Parity evidence: all nine field types map to reviewed provider DDL; rename and
   additive changes preserve stable columns; incompatible changes fail closed
 Findings repaired: SQLite-only physical DDL; boolean metadata codec on BOOLEAN
   columns; SQLite accepted incompatible number copies that PostgreSQL rejected
-Known limits: records, querying, files and automation parity remain PG06-PG07+;
+Known limits: records and querying parity are PG06-PG07; PG08+ cover files and automation;
   PostgreSQL 16 CI configured but not yet reviewed green
 ```
 
@@ -602,14 +607,69 @@ Parity evidence: IS NULL semantics, case-sensitive equality, datetime and number
   comparisons and filter+cursor pagination are identical on both providers
 Findings repaired: `field = null` compiled to `= NULL` and never matched; it now
   compiles to IS NULL on both engines
-Known limits: access rules and file metadata parity is deferred (see PG07+);
+Known limits: access rules, scoped identities and file metadata parity is PG08;
   files and automation remain pending; PostgreSQL 16 CI not yet reviewed green
 ```
 
-## PG07+ - Access rules, identities and file metadata (deferred to the next batch)
+## PG07R - Inter-batch repair: contains-case semantics, JSON constraint and scope reconciliation
 
-The original PG07 scope was deferred when the batch plan split records into PG06
-and querying into PG07. It remains an open checkpoint for the next batch.
+Status: complete
+
+Source review of PG04-PG07 found two provider-parity defects and one scope
+reconciliation problem; this is a distinct inter-batch repair, not a rewrite.
+
+- **Contains operator.** The `~` operator compiled to plain `LIKE` for both
+  providers, so SQLite's case-insensitive ASCII behavior diverged from
+  PostgreSQL's case-sensitive `LIKE`. The dialect now owns the operator:
+  SQLite keeps `LIKE`, PostgreSQL uses `ILIKE`, freezing case-insensitive
+  substring semantics. `%` and `_` remain SQL wildcards by design (documented
+  and tested); escaping is not supported.
+- **PostgreSQL JSON validation.** JSON fields stayed plain `TEXT` on
+  PostgreSQL, so invalid JSON written outside the HTTP validator was accepted
+  there but rejected by SQLite's `json_valid` check. PostgreSQL now keeps
+  `TEXT` storage with a database-level `CHECK (col IS NULL OR (col::jsonb)
+  IS NOT NULL)` constraint, preserving the logical JSON contract: valid JSON
+  accepted, invalid JSON rejected, JSON `null` distinct from SQL `NULL`,
+  rebuilds preserve valid JSON, and API round-trips stay structurally
+  identical.
+- **PG04 scope reconciliation.** TOTP/security state and administrator
+  password-change workflows do not exist in the accepted SQLite product, so
+  they are marked outside PostgreSQL parity work rather than silently invented.
+  Concurrent logins (multiple coexisting sessions) do exist and are now
+  provider-parameterized, including per-session revocation independence.
+- **Site-wide documentation reconciliation.** Stale SQLite-only and pre-PG05
+  statements were corrected across records, collections, field-types,
+  schema-changes, database-architecture, postgresql, database-support and
+  roadmap; Battle Tested gained a scoped PostgreSQL evidence section listing
+  the real provider tested, PG04-PG07 evidence, the PostgreSQL 16 CI
+  limitation and the functionality still excluded.
+- **Final-batch mapping.** The remaining work is fixed at exactly four
+  checkpoints: PG08 access rules / scoped identities / file metadata, PG09
+  events / audit / jobs / webhooks / functions, PG10 backup / restore /
+  operations / provider recovery, PG11 cross-provider migration / complete
+  parity matrix / CI / release boundary. No capability was lost.
+
+Completion record:
+
+```text
+Status: complete
+Application commit: recorded by this commit
+Website output commit: d8a38ce
+Website source commit: 61c53af
+SQLite evidence: contains-case, JSON-constraint and concurrent-login gates pass
+PostgreSQL evidence: real postgres 18.6 runs the same gates with ILIKE and the
+  JSON validation constraint
+Parity evidence: case-insensitive contains and JSON validation now behave
+  identically at the database and API boundary
+Findings repaired: LIKE/ILIKE divergence; missing PostgreSQL JSON constraint;
+  overstated PG04 scope; stale site-wide provider language
+Known limits: PG08-PG11 remain; PostgreSQL 16 CI not yet reviewed green
+```
+
+## PG08 - Access rules, scoped identities, and file metadata
+
+The batch plan split records into PG06 and querying into PG07, deferring this
+scope. In the final-batch mapping it is PG08 and must not be lost.
 
 Status: pending
 
@@ -641,7 +701,7 @@ Status: pending
   providers.
 - Database selection does not change access decisions, quotas or object keys.
 
-## PG08 - Events, audit, jobs, webhooks and functions
+## PG09 - Events, audit, jobs, webhooks, and functions
 
 Status: pending
 
@@ -675,7 +735,7 @@ Status: pending
 - Contention tests show each claimed job is executed once per successful claim
   and expired leases recover without provider-specific API behavior.
 
-## PG09 - Operations, backup, restore and portable export
+## PG10 - Backup, restore, operations, and provider recovery
 
 Status: pending
 
@@ -711,7 +771,7 @@ Status: pending
   data and files.
 - Failed restore never mutates or partially publishes the destination.
 
-## PG10 - Offline SQLite/PostgreSQL migration
+## PG11 - Cross-provider migration, complete parity matrix, CI, and release boundary
 
 Status: pending
 
@@ -732,28 +792,6 @@ Status: pending
 - Test interruption at each phase, restart/resume or clean rollback, and both
   migration directions with non-trivial fixtures.
 
-### Dashboard
-
-- Do not perform migration from a live browser. Add a read-only Settings guide
-  that reports the current provider and links to the exact offline command.
-
-### Public website
-
-- Add a database migration guide with dry-run, downtime, secret treatment,
-  validation, cutover and rollback walkthroughs for both directions.
-
-### Exit evidence
-
-- The destination passes the whole product/API parity corpus before cutover.
-- An interrupted or rejected migration leaves the source untouched and the
-  destination clearly incomplete or removed.
-
-## PG11 - Whole-product parity, dogfood and release closure
-
-Status: pending
-
-### Application
-
 - Run every supported API, dashboard and operational workflow through a
   provider matrix from clean setup through upgrade, backup, migration and
   shutdown.
@@ -769,13 +807,21 @@ Status: pending
   bundles, logs, website claims and repository history. Close or publish every
   retained difference.
 
+
 ### Dashboard
+
+- Do not perform migration from a live browser. Add a read-only Settings guide
+  that reports the current provider and links to the exact offline command.
 
 - Complete responsive/browser testing of setup and all administration pages on
   both providers. Provider badges stay subtle and informational; ordinary
   product workflows remain identical.
 
+
 ### Public website
+
+- Add a database migration guide with dry-run, downtime, secret treatment,
+  validation, cutover and rollback walkthroughs for both directions.
 
 - Promote PostgreSQL from experimental to available only after the matrix is
   green. Update Home, Product, Architecture, Stability, Quickstart, deployment,
@@ -784,7 +830,12 @@ Status: pending
   PostgreSQL evidence to Battle Tested. Retain SQLite-specific operational
   advice on its own page.
 
+
 ### Exit evidence
+
+- The destination passes the whole product/API parity corpus before cutover.
+- An interrupted or rejected migration leaves the source untouched and the
+  destination clearly incomplete or removed.
 
 - A fresh user can select either database in setup and run the same external
   application without changing its code.
@@ -792,6 +843,7 @@ Status: pending
   provider-specific with a justified contract.
 - All three repositories are clean, generated outputs are current, public
   claims match the tested release and every checkpoint has its own commits.
+
 
 ## Campaign-wide retained questions
 
@@ -801,7 +853,7 @@ silently:
 1. Which PostgreSQL major versions form the initial support window?
 2. Is browser persistence of a PostgreSQL DSN acceptable for the release, or
    must browser setup emit configuration for an operator-managed secret?
-3. Does initial PostgreSQL support remain single-process, or will PG08 earn a
+3. Does initial PostgreSQL support remain single-process, or will PG09 earn a
    documented multi-process worker contract?
 4. Which secrets and sessions survive portable cross-provider migration?
 5. Is a managed-provider/serverless PostgreSQL topology supportable given

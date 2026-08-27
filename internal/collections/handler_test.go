@@ -5,6 +5,7 @@ import (
 	"encoding/json"
 	"net/http"
 	"net/http/httptest"
+	"strconv"
 	"strings"
 	"testing"
 
@@ -341,6 +342,63 @@ func TestIncompatibleSchemaChangePreservesMetadataAndRows(t *testing.T) {
 			var value string
 			if err := h.db.QueryRow("SELECT " + quote(column) + " FROM " + quote(table) + " WHERE _id='rec_1'").Scan(&value); err != nil || value != "not-a-number" {
 				t.Fatalf("row after failure value=%q err=%v", value, err)
+			}
+		})
+	}
+}
+
+func TestJSONPhysicalConstraint(t *testing.T) {
+	for _, provider := range storetest.Providers(t) {
+		t.Run(provider, func(t *testing.T) {
+			h, s := setupTest(t, provider)
+			payload := input{Name: "notes", Fields: []Field{{Name: "meta", Type: "json"}}}
+			w := call(t, h, s, "POST", "/admin/v1/collections", payload)
+			if w.Code != 201 {
+				t.Fatal(w.Body.String())
+			}
+			var created Collection
+			json.Unmarshal(w.Body.Bytes(), &created)
+			table := `"` + PhysicalTableName(created.ID) + `"`
+			column := `"` + physicalColumn(created.Fields[0].ID) + `"`
+			seq := 0
+			insert := func(value any) error {
+				seq++
+				_, err := h.db.Exec("INSERT INTO "+table+"(_id,_created,_updated,"+column+") VALUES(?,?,?,?)", "rec_"+strconv.Itoa(seq), "2026-01-01T00:00:00Z", "2026-01-01T00:00:00Z", value)
+				return err
+			}
+			if err := insert(`{"a":1}`); err != nil {
+				t.Fatalf("valid JSON rejected: %v", err)
+			}
+			if err := insert(`null`); err != nil {
+				t.Fatalf("JSON null rejected: %v", err)
+			}
+			if err := insert(nil); err != nil {
+				t.Fatalf("SQL NULL rejected: %v", err)
+			}
+			if err := insert(`{invalid`); err == nil {
+				t.Fatal("invalid JSON accepted by physical table")
+			}
+			if err := insert(`{"keep":true}`); err != nil {
+				t.Fatal(err)
+			}
+			payload.Fields[0].ID = created.Fields[0].ID
+			payload.Fields[0].Name = "metadata"
+			var b bytes.Buffer
+			json.NewEncoder(&b).Encode(payload)
+			r := httptest.NewRequest("PATCH", "http://example.test/admin/v1/collections/notes", &b)
+			r.Host = "example.test"
+			r.Header.Set("Origin", "http://example.test")
+			r.Header.Set("X-Trestle-CSRF", s.csrf)
+			r.Header.Set("X-Trestle-Acknowledge-Schema", "true")
+			r.AddCookie(s.cookie)
+			w = httptest.NewRecorder()
+			h.ServeHTTP(w, r)
+			if w.Code != 200 {
+				t.Fatalf("rebuild: %d %s", w.Code, w.Body.String())
+			}
+			var value string
+			if err := h.db.QueryRow("SELECT " + column + " FROM " + table + " WHERE _id='rec_5'").Scan(&value); err != nil || value != `{"keep":true}` {
+				t.Fatalf("preserved json=%q err=%v", value, err)
 			}
 		})
 	}
