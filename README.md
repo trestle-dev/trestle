@@ -7,6 +7,11 @@ administration, backups, and event-driven integrations in one compact binary.
 Its stable HTTP/JSON/SSE contracts are intended to work from browsers, mobile
 applications, and trusted backends written in any language.
 
+For a complete external application, see
+[Incident Desk](https://github.com/trestle-dev/trestle-example). It combines
+application users, collection rules, typed records, realtime SSE and files
+without importing Trestle packages or opening the SQLite database.
+
 The repository is currently a release candidate. Checkpoints CP00-CP22 and all
 ten CP23 hardening campaigns are implemented,
 covering the process and SQLite foundation, embedded administration, typed
