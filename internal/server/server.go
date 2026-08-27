@@ -3,14 +3,20 @@ package server
 import (
 	"encoding/json"
 	"log/slog"
+	"net"
 	"net/http"
+	"net/netip"
 	"strconv"
+	"strings"
 	"sync/atomic"
 	"time"
 
 	"github.com/trestle-dev/trestle/internal/buildinfo"
 	"github.com/trestle-dev/trestle/internal/httperr"
+	"github.com/trestle-dev/trestle/internal/requestmeta"
 )
+
+type Options struct{ TrustedProxies []netip.Prefix }
 
 type Server struct {
 	logger  *slog.Logger
@@ -20,14 +26,17 @@ type Server struct {
 }
 
 func New(logger *slog.Logger, dashboard ...http.Handler) *Server {
-	return newServer(logger, first(dashboard), nil, nil)
+	return newServer(logger, first(dashboard), nil, nil, Options{})
 }
 
 func NewWithAdmin(logger *slog.Logger, dashboard, admin http.Handler) *Server {
-	return newServer(logger, dashboard, nil, admin)
+	return newServer(logger, dashboard, nil, admin, Options{})
 }
 func NewWithHandlers(logger *slog.Logger, dashboard, api, admin http.Handler) *Server {
-	return newServer(logger, dashboard, api, admin)
+	return newServer(logger, dashboard, api, admin, Options{})
+}
+func NewWithOptions(logger *slog.Logger, dashboard, api, admin http.Handler, options Options) *Server {
+	return newServer(logger, dashboard, api, admin, options)
 }
 func first(handlers []http.Handler) http.Handler {
 	if len(handlers) == 0 {
@@ -35,7 +44,7 @@ func first(handlers []http.Handler) http.Handler {
 	}
 	return handlers[0]
 }
-func newServer(logger *slog.Logger, dashboard, api, admin http.Handler) *Server {
+func newServer(logger *slog.Logger, dashboard, api, admin http.Handler, options Options) *Server {
 	s := &Server{logger: logger}
 	mux := http.NewServeMux()
 	mux.HandleFunc("GET /system/health", s.health)
@@ -50,7 +59,7 @@ func newServer(logger *slog.Logger, dashboard, api, admin http.Handler) *Server 
 	if dashboard != nil {
 		mux.Handle("/", dashboard)
 	}
-	s.handler = s.requestContext(mux)
+	s.handler = s.proxyContext(options.TrustedProxies, s.requestContext(mux))
 	return s
 }
 
@@ -66,8 +75,68 @@ func (s *Server) requestContext(next http.Handler) http.Handler {
 		w.Header().Set("X-Content-Type-Options", "nosniff")
 		w.Header().Set("Referrer-Policy", "no-referrer")
 		next.ServeHTTP(w, r)
-		s.logger.Info("request", "request_id", id, "method", r.Method, "path", r.URL.Path, "duration_ms", time.Since(started).Milliseconds())
+		s.logger.Info("request", "request_id", id, "method", r.Method, "path", r.URL.Path, "client_ip", requestmeta.ClientIP(r), "scheme", requestmeta.Scheme(r), "duration_ms", time.Since(started).Milliseconds())
 	})
+}
+
+func (s *Server) proxyContext(trusted []netip.Prefix, next http.Handler) http.Handler {
+	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		peer := parseRemoteIP(r.RemoteAddr)
+		scheme := "http"
+		if r.TLS != nil {
+			scheme = "https"
+		}
+		client := peer.String()
+		if trustedIP(peer, trusted) {
+			if forwarded := strings.TrimSpace(r.Header.Get("X-Forwarded-Proto")); forwarded == "http" || forwarded == "https" {
+				scheme = forwarded
+			}
+			if forwarded := forwardedClient(r.Header.Get("X-Forwarded-For"), peer, trusted); forwarded.IsValid() {
+				client = forwarded.String()
+			}
+		}
+		r.Header.Del("Forwarded")
+		r.Header.Del("X-Forwarded-For")
+		r.Header.Del("X-Forwarded-Host")
+		r.Header.Del("X-Forwarded-Proto")
+		next.ServeHTTP(w, requestmeta.With(r, scheme, client))
+	})
+}
+
+func parseRemoteIP(value string) netip.Addr {
+	host, _, err := net.SplitHostPort(value)
+	if err == nil {
+		value = host
+	}
+	address, _ := netip.ParseAddr(strings.Trim(value, "[]"))
+	return address.Unmap()
+}
+func trustedIP(address netip.Addr, trusted []netip.Prefix) bool {
+	if !address.IsValid() {
+		return false
+	}
+	for _, prefix := range trusted {
+		if prefix.Contains(address) {
+			return true
+		}
+	}
+	return false
+}
+func forwardedClient(header string, peer netip.Addr, trusted []netip.Prefix) netip.Addr {
+	chain := strings.Split(header, ",")
+	addresses := make([]netip.Addr, 0, len(chain)+1)
+	for _, raw := range chain {
+		if address, err := netip.ParseAddr(strings.TrimSpace(raw)); err == nil {
+			addresses = append(addresses, address.Unmap())
+		}
+	}
+	addresses = append(addresses, peer)
+	for i := len(addresses) - 1; i >= 0; i-- {
+		if !trustedIP(addresses[i], trusted) {
+			return addresses[i]
+		}
+	}
+	return netip.Addr{}
 }
 
 func (s *Server) health(w http.ResponseWriter, _ *http.Request) {

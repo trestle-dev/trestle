@@ -9,6 +9,7 @@ import (
 	"strings"
 	"testing"
 
+	"github.com/trestle-dev/trestle/internal/requestmeta"
 	"github.com/trestle-dev/trestle/internal/store"
 )
 
@@ -20,6 +21,22 @@ func testHandler(t *testing.T) *Handler {
 	}
 	t.Cleanup(func() { s.Close() })
 	return New(s.DB())
+}
+
+func TestTrustedHTTPSIssuesSecureCookie(t *testing.T) {
+	h := testHandler(t)
+	r := httptest.NewRequest(http.MethodPost, "/admin/v1/setup", strings.NewReader(`{"email":"admin@example.com","password":"mudblood"}`))
+	r.Host = "example.test"
+	r.Header.Set("Origin", "https://example.test")
+	r = requestmeta.With(r, "https", "203.0.113.9")
+	w := httptest.NewRecorder()
+	h.ServeHTTP(w, r)
+	if w.Code != 200 {
+		t.Fatalf("setup: %d %s", w.Code, w.Body.String())
+	}
+	if cookies := w.Result().Cookies(); len(cookies) != 1 || !cookies[0].Secure {
+		t.Fatalf("expected secure cookie: %#v", cookies)
+	}
 }
 func request(t *testing.T, h http.Handler, method, path string, body any, cookie *http.Cookie, csrf string) *httptest.ResponseRecorder {
 	t.Helper()

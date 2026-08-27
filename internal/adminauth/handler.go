@@ -6,7 +6,6 @@ import (
 	"database/sql"
 	"encoding/base64"
 	"encoding/json"
-	"net"
 	"net/http"
 	"net/mail"
 	"strings"
@@ -14,6 +13,7 @@ import (
 	"time"
 
 	"github.com/trestle-dev/trestle/internal/httperr"
+	"github.com/trestle-dev/trestle/internal/requestmeta"
 )
 
 const cookieName = "trestle_admin_session"
@@ -152,7 +152,7 @@ func (h *Handler) issueSession(w http.ResponseWriter, r *http.Request, adminID, 
 		writeError(w, 500, "internal_error", "The request could not be completed.")
 		return
 	}
-	http.SetCookie(w, &http.Cookie{Name: cookieName, Value: token, Path: "/", HttpOnly: true, Secure: r.TLS != nil, SameSite: http.SameSiteStrictMode, Expires: expires, MaxAge: int((12 * time.Hour).Seconds())})
+	http.SetCookie(w, &http.Cookie{Name: cookieName, Value: token, Path: "/", HttpOnly: true, Secure: requestmeta.Scheme(r) == "https", SameSite: http.SameSiteStrictMode, Expires: expires, MaxAge: int((12 * time.Hour).Seconds())})
 	writeJSON(w, 200, sessionResponse{Authenticated: true, AdminID: adminID, Email: email, CSRFToken: csrf})
 }
 
@@ -192,7 +192,7 @@ func (h *Handler) logout(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	_, _ = h.db.ExecContext(r.Context(), "UPDATE _trestle_admin_sessions SET revoked_at=? WHERE id=?", h.now().UTC().Format(time.RFC3339Nano), sessionID)
-	http.SetCookie(w, &http.Cookie{Name: cookieName, Value: "", Path: "/", HttpOnly: true, SameSite: http.SameSiteStrictMode, MaxAge: -1})
+	http.SetCookie(w, &http.Cookie{Name: cookieName, Value: "", Path: "/", HttpOnly: true, Secure: requestmeta.Scheme(r) == "https", SameSite: http.SameSiteStrictMode, MaxAge: -1})
 	w.WriteHeader(204)
 }
 
@@ -253,18 +253,11 @@ func sameOrigin(r *http.Request) bool {
 	if origin == "" {
 		return true
 	}
-	scheme := "http"
-	if r.TLS != nil {
-		scheme = "https"
-	}
+	scheme := requestmeta.Scheme(r)
 	return origin == scheme+"://"+r.Host
 }
 func clientKey(r *http.Request) string {
-	host, _, err := net.SplitHostPort(r.RemoteAddr)
-	if err != nil {
-		return r.RemoteAddr
-	}
-	return host
+	return requestmeta.ClientIP(r)
 }
 func writeJSON(w http.ResponseWriter, status int, value any) {
 	w.Header().Set("Content-Type", "application/json")

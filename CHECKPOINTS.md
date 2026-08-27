@@ -683,7 +683,7 @@ Gate: a clean-machine operator follows only public docs to recreate, use, back
 
 ## CP22 - Deployment, reverse proxies, and release automation
 
-Status: pending
+Status: complete
 
 Application:
 

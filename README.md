@@ -7,12 +7,12 @@ administration, backups, and event-driven integrations in one compact binary.
 Its stable HTTP/JSON/SSE contracts are intended to work from browsers, mobile
 applications, and trusted backends written in any language.
 
-The repository is currently pre-release. Checkpoints CP00–CP21 are implemented,
+The repository is currently pre-release. Checkpoints CP00-CP22 are implemented,
 covering the process and SQLite foundation, embedded administration, typed
 collections and records, authentication and access rules, local and
 S3-compatible files, realtime events, audit, durable jobs, webhooks, AWS Lambda,
 OpenAPI, reference clients, backup/recovery, and whole-product dogfooding.
-Deployment automation and stable-release hardening remain.
+Deployment and release automation are implemented. Stable-release hardening remains.
 
 ## Requirements
 
@@ -66,6 +66,24 @@ Trestle creates `./data/trestle.db` by default. The data directory is set to
 owner-only permissions and must live on a local filesystem; shared/network
 filesystem operation is not supported.
 
+## Install a release
+
+The installer defaults to the current user's `~/.local/bin` and does not use
+root privileges:
+
+```sh
+curl -fsSL https://trestle.dev/install.sh | sh
+```
+
+For an explicit machine-wide install:
+
+```sh
+curl -fsSL https://trestle.dev/install.sh | sudo sh -s -- --system
+```
+
+Tagged releases contain Linux, macOS, and Windows archives for amd64 and arm64,
+plus checksums and build provenance.
+
 ## Configuration
 
 Flags override environment variables, which override defaults:
@@ -77,6 +95,11 @@ Flags override environment variables, which override defaults:
 | `--shutdown-timeout` | `TRESTLE_SHUTDOWN_TIMEOUT` | `10s` |
 | `--log-level` | `TRESTLE_LOG_LEVEL` | `info` |
 | `--static-dir` | `TRESTLE_STATIC_DIR` | embedded assets |
+| `--trusted-proxies` | `TRESTLE_TRUSTED_PROXIES` | none |
+| `--read-header-timeout` | `TRESTLE_READ_HEADER_TIMEOUT` | `5s` |
+| `--read-timeout` | `TRESTLE_READ_TIMEOUT` | `5m` |
+| `--idle-timeout` | `TRESTLE_IDLE_TIMEOUT` | `60s` |
+| `--max-header-bytes` | `TRESTLE_MAX_HEADER_BYTES` | `1048576` |
 
 The static-directory override is intended for frontend development. For
 example, after running Nift in another terminal:
@@ -86,6 +109,11 @@ go run ./cmd/trestle --static-dir internal/web/public
 ```
 
 Trestle logs a warning whenever the override is active.
+
+Forwarded client and scheme headers are ignored unless the immediate peer is
+inside an explicitly configured trusted-proxy CIDR. Bind Trestle to loopback
+behind Caddy or nginx, preserve the public `Host`, and configure only the exact
+proxy addresses you administer.
 
 ## Verify a change
 
@@ -97,6 +125,7 @@ node scripts/check-web.mjs internal/web/public
 go test ./...
 go test -race ./...
 go vet ./...
+./scripts/test-release.sh
 ```
 
 CI additionally compiles Linux, macOS, and Windows targets for both amd64 and
@@ -104,9 +133,9 @@ arm64.
 
 ## Current safety boundary
 
-Trestle has no supported release yet. Keep development instances on loopback or
-a trusted private network. Reverse-proxy, TLS, upgrade, backup, and stable-release
-guidance arrives in later checkpoints; the current schema is not stable.
+Trestle has no supported stable release yet. CP22 provides deployment and
+release machinery, but CP23 must complete the adversarial hardening campaign
+before the project claims stable contracts or a supported production version.
 
 ## Project documents
 

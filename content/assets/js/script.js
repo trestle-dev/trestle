@@ -9,6 +9,7 @@ async function refreshCSRF(){try{const session=await jsonRequest("/admin/v1/sess
 @input("content/assets/js/users.js")
 @input("content/assets/js/credentials.js")
 @input("content/assets/js/rules.js")
+@input("content/assets/js/deployment.js")
 @input("content/assets/js/files.js")
 @input("content/assets/js/realtime.js")
 @input("content/assets/js/audit.js")

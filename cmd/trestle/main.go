@@ -18,6 +18,7 @@ import (
 	"github.com/trestle-dev/trestle/internal/buildinfo"
 	"github.com/trestle-dev/trestle/internal/collections"
 	"github.com/trestle-dev/trestle/internal/config"
+	"github.com/trestle-dev/trestle/internal/deployment"
 	"github.com/trestle-dev/trestle/internal/events"
 	filestore "github.com/trestle-dev/trestle/internal/files"
 	functionapi "github.com/trestle-dev/trestle/internal/functions"
@@ -82,6 +83,7 @@ func main() {
 		logger.Error("backup initialization failed", "error", err)
 		os.Exit(1)
 	}
+	deploymentAPI := deployment.New(admin, deployment.Options{Listen: cfg.Listen, StorageBackend: cfg.StorageBackend, TrustedProxies: cfg.TrustedProxies, ReadHeaderTimeout: cfg.ReadHeaderTimeout, ReadTimeout: cfg.ReadTimeout, IdleTimeout: cfg.IdleTimeout, MaxHeaderBytes: cfg.MaxHeaderBytes})
 	eventAPI.ConfigureDispatcher(functionAPI)
 	recordAPI.ConfigureAudit(auditAPI)
 	fileAPI, err := filestore.New(database.DB(), admin, credentials, cfg.DataDir, filestore.Options{Backend: cfg.StorageBackend, S3Endpoint: cfg.S3Endpoint, S3Region: cfg.S3Region, S3Bucket: cfg.S3Bucket, S3AccessKey: cfg.S3AccessKey, S3SecretKey: cfg.S3SecretKey})
@@ -124,15 +126,17 @@ func main() {
 	adminRoutes.Handle("/admin/v1/restores/preflight", backupAPI)
 	adminRoutes.Handle("/admin/v1/export", backupAPI)
 	adminRoutes.Handle("/admin/v1/imports/dry-run", backupAPI)
+	adminRoutes.Handle("/admin/v1/deployment", deploymentAPI)
+	adminRoutes.Handle("/admin/v1/support-bundle", deploymentAPI)
 	adminRoutes.Handle("/", admin)
-	app := server.NewWithHandlers(logger, dashboard, apiRoutes, adminRoutes)
-	httpServer := &http.Server{Addr: cfg.Listen, Handler: app.Handler(), ReadHeaderTimeout: 5_000_000_000, IdleTimeout: 60_000_000_000}
+	app := server.NewWithOptions(logger, dashboard, apiRoutes, adminRoutes, server.Options{TrustedProxies: cfg.TrustedProxies})
+	httpServer := &http.Server{Addr: cfg.Listen, Handler: app.Handler(), ReadHeaderTimeout: cfg.ReadHeaderTimeout, ReadTimeout: cfg.ReadTimeout, IdleTimeout: cfg.IdleTimeout, MaxHeaderBytes: cfg.MaxHeaderBytes}
 	ctx, stop := signal.NotifyContext(context.Background(), os.Interrupt, syscall.SIGTERM)
 	defer stop()
 	jobAPI.Start(ctx)
 	errCh := make(chan error, 1)
 	go func() {
-		logger.Info("server starting", "listen", cfg.Listen, "data_dir", cfg.DataDir)
+		logger.Info("server starting", "listen", cfg.Listen, "data_dir", cfg.DataDir, "trusted_proxy_count", len(cfg.TrustedProxies), "read_header_timeout", cfg.ReadHeaderTimeout, "read_timeout", cfg.ReadTimeout, "idle_timeout", cfg.IdleTimeout, "max_header_bytes", cfg.MaxHeaderBytes)
 		app.SetReady(true)
 		errCh <- httpServer.ListenAndServe()
 	}()

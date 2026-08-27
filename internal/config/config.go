@@ -6,6 +6,7 @@ import (
 	"fmt"
 	"io"
 	"net"
+	"net/netip"
 	"os"
 	"strconv"
 	"strings"
@@ -13,24 +14,29 @@ import (
 )
 
 type Config struct {
-	Listen          string
-	DataDir         string
-	ShutdownTimeout time.Duration
-	LogLevel        string
-	StaticDir       string
-	StorageBackend  string
-	S3Endpoint      string
-	S3Region        string
-	S3Bucket        string
-	S3AccessKey     string
-	S3SecretKey     string
-	AWSRegion       string
-	AWSAccessKey    string
-	AWSSecretKey    string
+	Listen            string
+	DataDir           string
+	ShutdownTimeout   time.Duration
+	LogLevel          string
+	StaticDir         string
+	StorageBackend    string
+	S3Endpoint        string
+	S3Region          string
+	S3Bucket          string
+	S3AccessKey       string
+	S3SecretKey       string
+	AWSRegion         string
+	AWSAccessKey      string
+	AWSSecretKey      string
+	TrustedProxies    []netip.Prefix
+	ReadHeaderTimeout time.Duration
+	ReadTimeout       time.Duration
+	IdleTimeout       time.Duration
+	MaxHeaderBytes    int
 }
 
 func Defaults() Config {
-	return Config{Listen: "127.0.0.1:8090", DataDir: "./data", ShutdownTimeout: 10 * time.Second, LogLevel: "info", StorageBackend: "local", S3Region: "us-east-1"}
+	return Config{Listen: "127.0.0.1:8090", DataDir: "./data", ShutdownTimeout: 10 * time.Second, LogLevel: "info", StorageBackend: "local", S3Region: "us-east-1", ReadHeaderTimeout: 5 * time.Second, ReadTimeout: 5 * time.Minute, IdleTimeout: 60 * time.Second, MaxHeaderBytes: 1 << 20}
 }
 
 func Load(args []string, getenv func(string) string) (Config, error) {
@@ -67,6 +73,41 @@ func Load(args []string, getenv func(string) string) (Config, error) {
 	cfg.AWSRegion = getenv("TRESTLE_AWS_REGION")
 	cfg.AWSAccessKey = getenv("TRESTLE_AWS_ACCESS_KEY")
 	cfg.AWSSecretKey = getenv("TRESTLE_AWS_SECRET_KEY")
+	if value := getenv("TRESTLE_TRUSTED_PROXIES"); value != "" {
+		prefixes, err := parsePrefixes(value)
+		if err != nil {
+			return Config{}, fmt.Errorf("TRESTLE_TRUSTED_PROXIES: %w", err)
+		}
+		cfg.TrustedProxies = prefixes
+	}
+	if value := getenv("TRESTLE_READ_HEADER_TIMEOUT"); value != "" {
+		duration, err := time.ParseDuration(value)
+		if err != nil {
+			return Config{}, fmt.Errorf("TRESTLE_READ_HEADER_TIMEOUT: %w", err)
+		}
+		cfg.ReadHeaderTimeout = duration
+	}
+	if value := getenv("TRESTLE_IDLE_TIMEOUT"); value != "" {
+		duration, err := time.ParseDuration(value)
+		if err != nil {
+			return Config{}, fmt.Errorf("TRESTLE_IDLE_TIMEOUT: %w", err)
+		}
+		cfg.IdleTimeout = duration
+	}
+	if value := getenv("TRESTLE_READ_TIMEOUT"); value != "" {
+		duration, err := time.ParseDuration(value)
+		if err != nil {
+			return Config{}, fmt.Errorf("TRESTLE_READ_TIMEOUT: %w", err)
+		}
+		cfg.ReadTimeout = duration
+	}
+	if value := getenv("TRESTLE_MAX_HEADER_BYTES"); value != "" {
+		n, err := strconv.Atoi(value)
+		if err != nil {
+			return Config{}, fmt.Errorf("TRESTLE_MAX_HEADER_BYTES: %w", err)
+		}
+		cfg.MaxHeaderBytes = n
+	}
 
 	set := flag.NewFlagSet("trestle", flag.ContinueOnError)
 	set.SetOutput(io.Discard)
@@ -76,12 +117,26 @@ func Load(args []string, getenv func(string) string) (Config, error) {
 	set.StringVar(&cfg.LogLevel, "log-level", cfg.LogLevel, "debug, info, warn, or error")
 	set.StringVar(&cfg.StaticDir, "static-dir", cfg.StaticDir, "development static asset override")
 	set.StringVar(&cfg.StorageBackend, "storage-backend", cfg.StorageBackend, "local or s3")
+	var trustedProxies string
+	if len(cfg.TrustedProxies) > 0 {
+		trustedProxies = joinPrefixes(cfg.TrustedProxies)
+	}
+	set.StringVar(&trustedProxies, "trusted-proxies", trustedProxies, "comma-separated proxy CIDRs allowed to supply forwarded headers")
+	set.DurationVar(&cfg.ReadHeaderTimeout, "read-header-timeout", cfg.ReadHeaderTimeout, "HTTP request header timeout")
+	set.DurationVar(&cfg.ReadTimeout, "read-timeout", cfg.ReadTimeout, "HTTP request read timeout including request bodies")
+	set.DurationVar(&cfg.IdleTimeout, "idle-timeout", cfg.IdleTimeout, "HTTP keep-alive idle timeout")
+	set.IntVar(&cfg.MaxHeaderBytes, "max-header-bytes", cfg.MaxHeaderBytes, "maximum HTTP request header bytes")
 	if err := set.Parse(args); err != nil {
 		return Config{}, err
 	}
 	if set.NArg() != 0 {
 		return Config{}, fmt.Errorf("unexpected arguments: %s", strings.Join(set.Args(), " "))
 	}
+	prefixes, err := parsePrefixes(trustedProxies)
+	if err != nil {
+		return Config{}, fmt.Errorf("trusted proxies: %w", err)
+	}
+	cfg.TrustedProxies = prefixes
 	return cfg, cfg.Validate()
 }
 
@@ -103,6 +158,18 @@ func (c Config) Validate() error {
 	if c.ShutdownTimeout <= 0 || c.ShutdownTimeout > 5*time.Minute {
 		return errors.New("shutdown timeout must be greater than zero and no more than 5m")
 	}
+	if c.ReadHeaderTimeout <= 0 || c.ReadHeaderTimeout > time.Minute {
+		return errors.New("read header timeout must be greater than zero and no more than 1m")
+	}
+	if c.ReadTimeout <= 0 || c.ReadTimeout > time.Hour {
+		return errors.New("read timeout must be greater than zero and no more than 1h")
+	}
+	if c.IdleTimeout <= 0 || c.IdleTimeout > 10*time.Minute {
+		return errors.New("idle timeout must be greater than zero and no more than 10m")
+	}
+	if c.MaxHeaderBytes < 8<<10 || c.MaxHeaderBytes > 4<<20 {
+		return errors.New("max header bytes must be between 8192 and 4194304")
+	}
 	switch c.LogLevel {
 	case "debug", "info", "warn", "error":
 	default:
@@ -123,3 +190,26 @@ func (c Config) Validate() error {
 }
 
 func FromOS(args []string) (Config, error) { return Load(args, os.Getenv) }
+
+func parsePrefixes(value string) ([]netip.Prefix, error) {
+	if strings.TrimSpace(value) == "" {
+		return nil, nil
+	}
+	var out []netip.Prefix
+	for _, raw := range strings.Split(value, ",") {
+		prefix, err := netip.ParsePrefix(strings.TrimSpace(raw))
+		if err != nil {
+			return nil, fmt.Errorf("invalid CIDR %q", strings.TrimSpace(raw))
+		}
+		out = append(out, prefix.Masked())
+	}
+	return out, nil
+}
+
+func joinPrefixes(values []netip.Prefix) string {
+	parts := make([]string, len(values))
+	for i, value := range values {
+		parts[i] = value.String()
+	}
+	return strings.Join(parts, ",")
+}
