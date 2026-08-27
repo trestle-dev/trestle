@@ -4,6 +4,7 @@ import (
 	"archive/zip"
 	"database/sql"
 	"encoding/json"
+	"errors"
 	"github.com/trestle-dev/trestle/internal/adminauth"
 	"github.com/trestle-dev/trestle/internal/store"
 	"io"
@@ -78,19 +79,37 @@ func (h *Handler) create(w http.ResponseWriter, r *http.Request) {
 	}
 	archive := zip.NewWriter(out)
 	manifest := Manifest{Format: "trestle-backup-v1", CreatedAt: h.now().UTC().Format(time.RFC3339Nano), SchemaVersion: store.CurrentVersion, StorageProvider: h.provider, IncludesDatabase: true, IncludesLocalFiles: h.provider == "local", Secrets: "administrator password hashes and encrypted integration secrets are included; live sessions are included and should be revoked after cross-host restore"}
-	addJSON(archive, "manifest.json", manifest)
-	addFile(archive, "trestle.db", snapshot)
-	if h.provider == "local" {
-		filepath.Walk(filepath.Join(h.dataDir, "files"), func(path string, info os.FileInfo, err error) error {
-			if err != nil || info.IsDir() || strings.Contains(path, string(filepath.Separator)+".staging"+string(filepath.Separator)) {
+	archiveErr := addJSON(archive, "manifest.json", manifest)
+	if archiveErr == nil {
+		archiveErr = addFile(archive, "trestle.db", snapshot)
+	}
+	filesRoot := filepath.Join(h.dataDir, "files")
+	if archiveErr == nil && h.provider == "local" {
+		archiveErr = filepath.Walk(filesRoot, func(path string, info os.FileInfo, walkErr error) error {
+			if walkErr != nil {
+				if os.IsNotExist(walkErr) && path == filesRoot {
+					return nil
+				}
+				return walkErr
+			}
+			if info.IsDir() || strings.Contains(path, string(filepath.Separator)+".staging"+string(filepath.Separator)) {
 				return nil
 			}
-			relative, _ := filepath.Rel(filepath.Join(h.dataDir, "files"), path)
+			if info.Mode()&os.ModeSymlink != 0 {
+				return errors.New("local backup refuses symlinked file objects")
+			}
+			relative, err := filepath.Rel(filesRoot, path)
+			if err != nil {
+				return err
+			}
 			return addFile(archive, filepath.ToSlash(filepath.Join("files", relative)), path)
 		})
 	}
 	closeErr := archive.Close()
-	if err = out.Close(); err == nil {
+	if err = out.Close(); err == nil && archiveErr != nil {
+		err = archiveErr
+	}
+	if err == nil {
 		err = closeErr
 	}
 	if err != nil || os.Rename(temp, final) != nil {

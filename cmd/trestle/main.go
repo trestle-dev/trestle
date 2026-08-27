@@ -4,6 +4,8 @@ import (
 	"context"
 	"encoding/json"
 	"errors"
+	"flag"
+	"fmt"
 	"log/slog"
 	"net/http"
 	"os"
@@ -35,6 +37,21 @@ import (
 func main() {
 	if len(os.Args) == 2 && os.Args[1] == "version" {
 		_ = json.NewEncoder(os.Stdout).Encode(buildinfo.Current())
+		return
+	}
+	if len(os.Args) > 1 && os.Args[1] == "restore" {
+		set := flag.NewFlagSet("restore", flag.ContinueOnError)
+		archive := set.String("backup", "", "backup archive path")
+		dataDir := set.String("data-dir", "", "new restore data directory")
+		if err := set.Parse(os.Args[2:]); err != nil || *archive == "" || *dataDir == "" {
+			fmt.Fprintln(os.Stderr, "usage: trestle restore --backup ARCHIVE --data-dir NEW_DIRECTORY")
+			os.Exit(2)
+		}
+		if err := backup.Restore(context.Background(), *archive, *dataDir); err != nil {
+			fmt.Fprintln(os.Stderr, "restore failed:", err)
+			os.Exit(1)
+		}
+		fmt.Fprintln(os.Stdout, "restore complete:", *dataDir)
 		return
 	}
 
