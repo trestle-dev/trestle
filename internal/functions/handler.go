@@ -6,7 +6,6 @@ import (
 	"crypto/hmac"
 	"crypto/rand"
 	"crypto/sha256"
-	"database/sql"
 	"encoding/base64"
 	"encoding/hex"
 	"encoding/json"
@@ -14,6 +13,7 @@ import (
 	"fmt"
 	"github.com/trestle-dev/trestle/internal/adminauth"
 	"github.com/trestle-dev/trestle/internal/jobs"
+	"github.com/trestle-dev/trestle/internal/store"
 	"io"
 	"net/http"
 	"net/url"
@@ -24,7 +24,7 @@ import (
 
 type Options struct{ Region, AccessKey, SecretKey string }
 type Handler struct {
-	db      *sql.DB
+	db      store.Executor
 	admin   *adminauth.Handler
 	jobs    *jobs.Handler
 	options Options
@@ -38,12 +38,12 @@ type invocation struct {
 
 var regionPattern = regexp.MustCompile(`^[a-z]{2}(?:-gov)?-[a-z]+-\d$`)
 
-func New(db *sql.DB, admin *adminauth.Handler, queue *jobs.Handler, options Options) *Handler {
-	h := &Handler{db: db, admin: admin, jobs: queue, options: options, now: time.Now, client: &http.Client{Timeout: 15 * time.Second}}
+func New(db any, admin *adminauth.Handler, queue *jobs.Handler, options Options) *Handler {
+	h := &Handler{db: store.Adapt(db), admin: admin, jobs: queue, options: options, now: time.Now, client: &http.Client{Timeout: 15 * time.Second}}
 	queue.Register("aws-lambda", h.execute)
 	return h
 }
-func (h *Handler) Dispatch(ctx context.Context, tx *sql.Tx, topic, collection, recordID string, payload any) error {
+func (h *Handler) Dispatch(ctx context.Context, tx store.Transaction, topic, collection, recordID string, payload any) error {
 	rows, err := tx.QueryContext(ctx, "SELECT id,topics FROM _trestle_functions WHERE enabled=1")
 	if err != nil {
 		return err

@@ -13,6 +13,7 @@ import (
 
 	"github.com/trestle-dev/trestle/internal/adminauth"
 	"github.com/trestle-dev/trestle/internal/httperr"
+	"github.com/trestle-dev/trestle/internal/store"
 )
 
 var namePattern = regexp.MustCompile(`^[a-z][a-z0-9_]{0,62}$`)
@@ -20,7 +21,7 @@ var fieldTypes = map[string]bool{"text": true, "number": true, "boolean": true, 
 var reserved = map[string]bool{"admin": true, "api": true, "system": true, "trestle": true}
 
 type Handler struct {
-	db   *sql.DB
+	db   store.Executor
 	auth *adminauth.Handler
 	now  func() time.Time
 }
@@ -45,8 +46,8 @@ type input struct {
 	Fields []Field `json:"fields"`
 }
 
-func New(db *sql.DB, auth *adminauth.Handler) *Handler {
-	return &Handler{db: db, auth: auth, now: time.Now}
+func New(db any, auth *adminauth.Handler) *Handler {
+	return &Handler{db: store.Adapt(db), auth: auth, now: time.Now}
 }
 
 func (h *Handler) ServeHTTP(w http.ResponseWriter, r *http.Request) {
@@ -311,7 +312,7 @@ func resolveFieldIDs(fields []Field, existing map[string]string) {
 		}
 	}
 }
-func insertFields(r *http.Request, tx *sql.Tx, collectionID, now string, fields []Field) error {
+func insertFields(r *http.Request, tx store.Transaction, collectionID, now string, fields []Field) error {
 	for i, f := range fields {
 		var def any
 		if len(f.Default) > 0 {

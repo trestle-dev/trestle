@@ -6,15 +6,18 @@ import (
 	"github.com/trestle-dev/trestle/internal/adminauth"
 	"github.com/trestle-dev/trestle/internal/buildinfo"
 	"github.com/trestle-dev/trestle/internal/files"
+	"github.com/trestle-dev/trestle/internal/store"
 	"net/http"
 )
 
 type Handler struct {
-	db    *sql.DB
+	db    store.Executor
 	admin *adminauth.Handler
 }
 
-func New(db *sql.DB, admin *adminauth.Handler) *Handler { return &Handler{db: db, admin: admin} }
+func New(db any, admin *adminauth.Handler) *Handler {
+	return &Handler{db: store.Adapt(db), admin: admin}
+}
 func (h *Handler) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 	switch r.URL.Path {
 	case "/api/v1/openapi.json":

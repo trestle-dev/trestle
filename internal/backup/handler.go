@@ -17,7 +17,7 @@ import (
 )
 
 type Handler struct {
-	db                *sql.DB
+	db                store.Executor
 	admin             *adminauth.Handler
 	dataDir, provider string
 	now               func() time.Time
@@ -32,12 +32,12 @@ type Manifest struct {
 	Secrets            string `json:"secrets"`
 }
 
-func New(db *sql.DB, admin *adminauth.Handler, dataDir, provider string) (*Handler, error) {
+func New(db any, admin *adminauth.Handler, dataDir, provider string) (*Handler, error) {
 	dir := filepath.Join(dataDir, "backups")
 	if err := os.MkdirAll(dir, 0700); err != nil {
 		return nil, err
 	}
-	return &Handler{db: db, admin: admin, dataDir: dataDir, provider: provider, now: time.Now}, nil
+	return &Handler{db: store.Adapt(db), admin: admin, dataDir: dataDir, provider: provider, now: time.Now}, nil
 }
 func (h *Handler) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 	mutation := r.Method != http.MethodGet

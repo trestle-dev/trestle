@@ -8,7 +8,6 @@ import (
 	"crypto/hmac"
 	"crypto/rand"
 	"crypto/sha256"
-	"database/sql"
 	"encoding/base64"
 	"encoding/hex"
 	"encoding/json"
@@ -16,6 +15,7 @@ import (
 	"fmt"
 	"github.com/trestle-dev/trestle/internal/adminauth"
 	"github.com/trestle-dev/trestle/internal/jobs"
+	"github.com/trestle-dev/trestle/internal/store"
 	"io"
 	"net"
 	"net/http"
@@ -27,7 +27,7 @@ import (
 )
 
 type Handler struct {
-	db     *sql.DB
+	db     store.Executor
 	admin  *adminauth.Handler
 	jobs   *jobs.Handler
 	aead   cipher.AEAD
@@ -52,18 +52,18 @@ type delivery struct {
 	DeliveryID string `json:"deliveryId"`
 }
 
-func New(db *sql.DB, admin *adminauth.Handler, queue *jobs.Handler, dataDir string) (*Handler, error) {
+func New(db any, admin *adminauth.Handler, queue *jobs.Handler, dataDir string) (*Handler, error) {
 	key, err := loadKey(filepath.Join(dataDir, "webhook.key"))
 	if err != nil {
 		return nil, err
 	}
 	block, _ := aes.NewCipher(key)
 	aead, _ := cipher.NewGCM(block)
-	h := &Handler{db: db, admin: admin, jobs: queue, aead: aead, now: time.Now, client: &http.Client{Timeout: 12 * time.Second, CheckRedirect: func(*http.Request, []*http.Request) error { return errors.New("redirects refused") }}}
+	h := &Handler{db: store.Adapt(db), admin: admin, jobs: queue, aead: aead, now: time.Now, client: &http.Client{Timeout: 12 * time.Second, CheckRedirect: func(*http.Request, []*http.Request) error { return errors.New("redirects refused") }}}
 	queue.Register("webhook", h.execute)
 	return h, nil
 }
-func (h *Handler) Dispatch(ctx context.Context, tx *sql.Tx, topic, collection, recordID string, payload any) error {
+func (h *Handler) Dispatch(ctx context.Context, tx store.Transaction, topic, collection, recordID string, payload any) error {
 	rows, err := tx.QueryContext(ctx, "SELECT id,topics FROM _trestle_webhooks WHERE enabled=1")
 	if err != nil {
 		return err

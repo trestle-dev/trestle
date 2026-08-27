@@ -14,12 +14,13 @@ import (
 
 	"github.com/trestle-dev/trestle/internal/httperr"
 	"github.com/trestle-dev/trestle/internal/requestmeta"
+	"github.com/trestle-dev/trestle/internal/store"
 )
 
 const cookieName = "trestle_admin_session"
 
 type Handler struct {
-	db      *sql.DB
+	db      store.Executor
 	now     func() time.Time
 	limiter *limiter
 }
@@ -40,8 +41,8 @@ type Principal struct {
 	SessionID string
 }
 
-func New(db *sql.DB) *Handler {
-	return &Handler{db: db, now: time.Now, limiter: newLimiter(10, time.Minute)}
+func New(db any) *Handler {
+	return &Handler{db: store.Adapt(db), now: time.Now, limiter: newLimiter(10, time.Minute)}
 }
 
 func (h *Handler) ServeHTTP(w http.ResponseWriter, r *http.Request) {

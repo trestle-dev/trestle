@@ -2,7 +2,6 @@ package events
 
 import (
 	"context"
-	"database/sql"
 	"encoding/json"
 	"fmt"
 	"net/http"
@@ -12,13 +11,14 @@ import (
 
 	"github.com/trestle-dev/trestle/internal/adminauth"
 	"github.com/trestle-dev/trestle/internal/identities"
+	"github.com/trestle-dev/trestle/internal/store"
 )
 
 type Dispatcher interface {
-	Dispatch(context.Context, *sql.Tx, string, string, string, any) error
+	Dispatch(context.Context, store.Transaction, string, string, string, any) error
 }
 type Handler struct {
-	db          *sql.DB
+	db          store.Executor
 	admin       *adminauth.Handler
 	credentials *identities.Handler
 	now         func() time.Time
@@ -38,10 +38,10 @@ type Event struct {
 	Payload    any    `json:"payload"`
 }
 
-func New(db *sql.DB, admin *adminauth.Handler, credentials *identities.Handler) *Handler {
-	return &Handler{db: db, admin: admin, credentials: credentials, now: time.Now}
+func New(db any, admin *adminauth.Handler, credentials *identities.Handler) *Handler {
+	return &Handler{db: store.Adapt(db), admin: admin, credentials: credentials, now: time.Now}
 }
-func (h *Handler) Emit(ctx context.Context, tx *sql.Tx, topic, collection, recordID string, payload any) error {
+func (h *Handler) Emit(ctx context.Context, tx store.Transaction, topic, collection, recordID string, payload any) error {
 	encoded, err := json.Marshal(payload)
 	if err != nil {
 		return err

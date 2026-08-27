@@ -3,11 +3,11 @@ package jobs
 import (
 	"context"
 	"crypto/rand"
-	"database/sql"
 	"encoding/base64"
 	"encoding/json"
 	"errors"
 	"github.com/trestle-dev/trestle/internal/adminauth"
+	"github.com/trestle-dev/trestle/internal/store"
 	"net/http"
 	"strings"
 	"sync"
@@ -16,7 +16,7 @@ import (
 
 type Executor func(context.Context, json.RawMessage) error
 type Handler struct {
-	db        *sql.DB
+	db        store.Executor
 	admin     *adminauth.Handler
 	now       func() time.Time
 	mu        sync.RWMutex
@@ -36,15 +36,15 @@ type Job struct {
 	UpdatedAt   string          `json:"updatedAt"`
 }
 
-func New(db *sql.DB, admin *adminauth.Handler) *Handler {
-	return &Handler{db: db, admin: admin, now: time.Now, executors: map[string]Executor{"noop": func(context.Context, json.RawMessage) error { return nil }}}
+func New(db any, admin *adminauth.Handler) *Handler {
+	return &Handler{db: store.Adapt(db), admin: admin, now: time.Now, executors: map[string]Executor{"noop": func(context.Context, json.RawMessage) error { return nil }}}
 }
 func (h *Handler) Register(kind string, executor Executor) {
 	h.mu.Lock()
 	defer h.mu.Unlock()
 	h.executors[kind] = executor
 }
-func (h *Handler) Enqueue(ctx context.Context, tx *sql.Tx, kind string, payload any, idempotency string) (string, error) {
+func (h *Handler) Enqueue(ctx context.Context, tx store.Transaction, kind string, payload any, idempotency string) (string, error) {
 	encoded, err := json.Marshal(payload)
 	if err != nil {
 		return "", err

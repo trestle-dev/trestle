@@ -2,9 +2,9 @@ package audit
 
 import (
 	"context"
-	"database/sql"
 	"encoding/json"
 	"github.com/trestle-dev/trestle/internal/adminauth"
+	"github.com/trestle-dev/trestle/internal/store"
 	"net/http"
 	"strconv"
 	"strings"
@@ -12,7 +12,7 @@ import (
 )
 
 type Handler struct {
-	db       *sql.DB
+	db       store.Executor
 	admin    *adminauth.Handler
 	now      func() time.Time
 	provider string
@@ -29,14 +29,14 @@ type Fact struct {
 	Details    any    `json:"details"`
 }
 
-func New(db *sql.DB, admin *adminauth.Handler, provider ...string) *Handler {
+func New(db any, admin *adminauth.Handler, provider ...string) *Handler {
 	name := "sqlite"
 	if len(provider) > 0 && provider[0] != "" {
 		name = provider[0]
 	}
-	return &Handler{db: db, admin: admin, now: time.Now, provider: name}
+	return &Handler{db: store.Adapt(db), admin: admin, now: time.Now, provider: name}
 }
-func (h *Handler) Emit(ctx context.Context, tx *sql.Tx, actorKind, actorID, action, target, outcome, requestID string, details any) error {
+func (h *Handler) Emit(ctx context.Context, tx store.Transaction, actorKind, actorID, action, target, outcome, requestID string, details any) error {
 	encoded, _ := json.Marshal(redact(details))
 	_, err := tx.ExecContext(ctx, "INSERT INTO _trestle_audit(occurred_at,actor_kind,actor_id,action,target,outcome,request_id,details_json) VALUES(?,?,?,?,?,?,?,?)", h.now().UTC().Format(time.RFC3339Nano), actorKind, null(actorID), action, null(target), outcome, null(requestID), string(encoded))
 	return err

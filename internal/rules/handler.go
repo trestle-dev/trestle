@@ -6,6 +6,7 @@ import (
 	"errors"
 	"github.com/trestle-dev/trestle/internal/adminauth"
 	"github.com/trestle-dev/trestle/internal/httperr"
+	"github.com/trestle-dev/trestle/internal/store"
 	"net/http"
 	"strings"
 	"time"
@@ -13,15 +14,15 @@ import (
 
 type Actor struct{ ID, Kind string }
 type Handler struct {
-	db    *sql.DB
+	db    store.Executor
 	admin *adminauth.Handler
 	now   func() time.Time
 }
 
 var operations = map[string]bool{"list": true, "view": true, "create": true, "update": true, "delete": true}
 
-func New(db *sql.DB, admin *adminauth.Handler) *Handler {
-	return &Handler{db: db, admin: admin, now: time.Now}
+func New(db any, admin *adminauth.Handler) *Handler {
+	return &Handler{db: store.Adapt(db), admin: admin, now: time.Now}
 }
 func (h *Handler) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 	if _, ok := h.admin.Authorize(r, r.Method != http.MethodGet); !ok {

@@ -182,7 +182,7 @@ Known limits: selector remains a disabled preview until PG03 can migrate Postgre
 
 ## PG02 - Provider-neutral execution boundary
 
-Status: pending
+Status: complete
 
 ### Application
 
@@ -215,6 +215,20 @@ Status: pending
 - Binder fuzz/property tests reject ambiguous SQL and produce correct numbered
   PostgreSQL parameters.
 - Existing SQLite tests and race tests remain green.
+
+Completion record:
+
+```text
+Status: complete
+Application commit: recorded by this commit
+Website output commit: 1d4d1a0
+Website source commit: 44d8df7
+SQLite evidence: complete Go and race suites pass through the bound executor
+PostgreSQL evidence: numbered-parameter binder, SQLSTATE classifier and driver compile cleanly
+Parity evidence: handlers no longer own raw database connections or transactions
+Findings repaired: question-mark replacement needed quote/comment awareness and mixed-style refusal
+Known limits: PostgreSQL schema initialization is introduced by PG03
+```
 
 ## PG03 - Dual migrations and system schema
 

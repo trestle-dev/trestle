@@ -15,11 +15,12 @@ import (
 
 	"github.com/trestle-dev/trestle/internal/adminauth"
 	"github.com/trestle-dev/trestle/internal/httperr"
+	"github.com/trestle-dev/trestle/internal/store"
 	"golang.org/x/crypto/argon2"
 )
 
 type Handler struct {
-	db    *sql.DB
+	db    store.Executor
 	admin *adminauth.Handler
 	now   func() time.Time
 }
@@ -28,8 +29,8 @@ type refreshInput struct {
 	RefreshToken string `json:"refreshToken"`
 }
 
-func New(db *sql.DB, admin *adminauth.Handler) *Handler {
-	return &Handler{db: db, admin: admin, now: time.Now}
+func New(db any, admin *adminauth.Handler) *Handler {
+	return &Handler{db: store.Adapt(db), admin: admin, now: time.Now}
 }
 
 func (h *Handler) ServeHTTP(w http.ResponseWriter, r *http.Request) {

@@ -23,10 +23,11 @@ import (
 	"github.com/trestle-dev/trestle/internal/identities"
 	querylang "github.com/trestle-dev/trestle/internal/query"
 	"github.com/trestle-dev/trestle/internal/rules"
+	"github.com/trestle-dev/trestle/internal/store"
 )
 
 type Handler struct {
-	db          *sql.DB
+	db          store.Executor
 	auth        *adminauth.Handler
 	credentials *identities.Handler
 	users       *appauth.Handler
@@ -56,8 +57,8 @@ type createInput struct {
 	Values map[string]any `json:"values"`
 }
 
-func New(db *sql.DB, auth *adminauth.Handler, credentials ...*identities.Handler) *Handler {
-	h := &Handler{db: db, auth: auth, now: time.Now}
+func New(db any, auth *adminauth.Handler, credentials ...*identities.Handler) *Handler {
+	h := &Handler{db: store.Adapt(db), auth: auth, now: time.Now}
 	if len(credentials) > 0 {
 		h.credentials = credentials[0]
 	}
@@ -328,7 +329,7 @@ func (h *Handler) batchCreate(w http.ResponseWriter, r *http.Request, s schema) 
 	}
 	writeJSON(w, 201, map[string]any{"items": items})
 }
-func (h *Handler) insert(r *http.Request, tx *sql.Tx, s schema, in createInput) (Record, []httperr.Field, error) {
+func (h *Handler) insert(r *http.Request, tx store.Transaction, s schema, in createInput) (Record, []httperr.Field, error) {
 	values, details := validateValues(s, in.Values)
 	if len(details) > 0 {
 		return Record{}, details, nil

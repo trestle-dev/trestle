@@ -3,10 +3,11 @@ package collections
 import (
 	"context"
 	"crypto/sha256"
-	"database/sql"
 	"encoding/hex"
 	"fmt"
 	"strings"
+
+	"github.com/trestle-dev/trestle/internal/store"
 )
 
 func PhysicalTableName(collectionID string) string {
@@ -20,7 +21,7 @@ func physicalColumn(fieldID string) string {
 func PhysicalColumnName(fieldID string) string { return physicalColumn(fieldID) }
 func quote(identifier string) string           { return `"` + strings.ReplaceAll(identifier, `"`, `""`) + `"` }
 
-func createPhysical(ctx context.Context, tx *sql.Tx, collectionID string, fields []Field) error {
+func createPhysical(ctx context.Context, tx store.Transaction, collectionID string, fields []Field) error {
 	parts := []string{`_id TEXT PRIMARY KEY`, `_version INTEGER NOT NULL DEFAULT 1 CHECK(_version > 0)`, `_created TEXT NOT NULL`, `_updated TEXT NOT NULL`}
 	for _, f := range fields {
 		parts = append(parts, columnDDL(f))
@@ -49,7 +50,7 @@ func columnDDL(f Field) string {
 	return part
 }
 
-func rebuildPhysical(ctx context.Context, tx *sql.Tx, collectionID string, oldFields, newFields []Field) error {
+func rebuildPhysical(ctx context.Context, tx store.Transaction, collectionID string, oldFields, newFields []Field) error {
 	table := PhysicalTableName(collectionID)
 	temporary := table + "_next"
 	if _, err := tx.ExecContext(ctx, "DROP TABLE IF EXISTS "+quote(temporary)); err != nil {

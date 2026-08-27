@@ -11,6 +11,7 @@ import (
 	"github.com/trestle-dev/trestle/internal/adminauth"
 	"github.com/trestle-dev/trestle/internal/httperr"
 	"github.com/trestle-dev/trestle/internal/identities"
+	"github.com/trestle-dev/trestle/internal/store"
 	"io"
 	"mime"
 	"net/http"
@@ -24,7 +25,7 @@ const MaxUpload int64 = 10 << 20
 const DefaultQuota int64 = 100 << 20
 
 type Handler struct {
-	db          *sql.DB
+	db          store.Executor
 	admin       *adminauth.Handler
 	credentials *identities.Handler
 	root        string
@@ -45,7 +46,7 @@ type Metadata struct {
 	CreatedAt   string `json:"createdAt"`
 }
 
-func New(db *sql.DB, admin *adminauth.Handler, credentials *identities.Handler, dataDir string, options ...Options) (*Handler, error) {
+func New(db any, admin *adminauth.Handler, credentials *identities.Handler, dataDir string, options ...Options) (*Handler, error) {
 	root := filepath.Join(dataDir, "files")
 	if err := os.MkdirAll(filepath.Join(root, ".staging"), 0700); err != nil {
 		return nil, err
@@ -56,7 +57,7 @@ func New(db *sql.DB, admin *adminauth.Handler, credentials *identities.Handler, 
 		storage = newS3Storage(options[0])
 		provider = "s3"
 	}
-	return &Handler{db: db, admin: admin, credentials: credentials, root: root, storage: storage, provider: provider, now: time.Now, quota: DefaultQuota}, nil
+	return &Handler{db: store.Adapt(db), admin: admin, credentials: credentials, root: root, storage: storage, provider: provider, now: time.Now, quota: DefaultQuota}, nil
 }
 func (h *Handler) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 	mutation := r.Method != http.MethodGet
