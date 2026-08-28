@@ -22,7 +22,7 @@ Deployment, release automation and the release-candidate matrix are implemented.
 
 A separate PostgreSQL parity campaign (PG00-PG11) is complete. PostgreSQL is an
 available external-database option for deployments needing its operational
-model; SQLite remains the recommended zero-configuration default. The parity
+model; SQLite remains the embedded zero-configuration option. The parity
 corpus, migration safety and recovery semantics are exercised against
 PostgreSQL 16, 17 and 18 in CI and PostgreSQL 18.6 locally. See
 `POSTGRES-CHECKPOINTS.md`.
@@ -75,8 +75,8 @@ On first run, open that address and create the first administrator. The setup
 route closes once the administrator is committed. Administrator passwords
 currently require at least 7 characters.
 
-First-run setup offers SQLite and PostgreSQL. **SQLite is the recommended
-zero-configuration default**; PostgreSQL is the available external-database
+First-run setup offers SQLite and PostgreSQL. **SQLite is the embedded
+zero-configuration option**; PostgreSQL is the available external-database
 option for deployments needing a server database. The setup selector persists
 the chosen provider in an owner-only configuration file.
 
