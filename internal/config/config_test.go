@@ -66,7 +66,7 @@ func TestStoredDatabaseBootstrapMarksDatabaseConfigured(t *testing.T) {
 	if err := PersistDatabaseBootstrap(dir, value); err != nil {
 		t.Fatal(err)
 	}
-	cfg, err := FromOS([]string{"--data-dir", dir}, func(string) string { return "" })
+	cfg, err := FromOS([]string{"--data-dir", dir})
 	if err != nil {
 		t.Fatal(err)
 	}

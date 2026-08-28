@@ -38,7 +38,7 @@ func New(staticDir string) (http.Handler, error) {
 	for _, name := range []string{"assets/css/style.css", "assets/js/script.js"} {
 		data, err := fs.ReadFile(root, name)
 		if err != nil {
-			return nil, err
+			continue
 		}
 		_, _ = hash.Write(data)
 	}
