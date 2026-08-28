@@ -9,10 +9,15 @@ permissions:
 
 jobs:
   test:
+    name: PostgreSQL ${{ matrix.postgres }} suite
     runs-on: ubuntu-latest
+    strategy:
+      fail-fast: false
+      matrix:
+        postgres: [16, 17, 18]
     services:
       postgres:
-        image: postgres:16
+        image: postgres:${{ matrix.postgres }}
         env:
           POSTGRES_USER: postgres
           POSTGRES_PASSWORD: postgres
@@ -32,15 +37,25 @@ jobs:
         with:
           go-version-file: go.mod
           cache: true
+      - name: Test
+        run: go test ./...
+      - name: Race test
+        run: go test -race ./...
+
+  gate:
+    name: Format, vet, builds and proxy gate
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-go@v5
+        with:
+          go-version-file: go.mod
+          cache: true
       - uses: actions/setup-node@v4
         with:
           node-version: 24
       - name: Format
         run: test -z "$(gofmt -l .)"
-      - name: Test
-        run: go test ./...
-      - name: Race test
-        run: go test -race ./...
       - name: Vet
         run: go vet ./...
       - name: Frontend checks
