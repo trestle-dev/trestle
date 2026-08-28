@@ -26,6 +26,24 @@ func TestEmbeddedDashboardAndSPAFallback(t *testing.T) {
 	}
 }
 
+func TestDashboardAssetsAreContentVersionedAndUnversionedRequestsRevalidate(t *testing.T) {
+	h, err := New("")
+	if err != nil {
+		t.Fatal(err)
+	}
+	page := httptest.NewRecorder()
+	h.ServeHTTP(page, httptest.NewRequest(http.MethodGet, "/", nil))
+	body := page.Body.String()
+	if strings.Contains(body, "__TRESTLE_ASSET_VERSION__") || !strings.Contains(body, "/assets/js/script.js?v=") || !strings.Contains(body, "/assets/css/style.css?v=") {
+		t.Fatalf("dashboard does not contain resolved asset versions: %s", body)
+	}
+	unversioned := httptest.NewRecorder()
+	h.ServeHTTP(unversioned, httptest.NewRequest(http.MethodGet, "/assets/js/script.js", nil))
+	if unversioned.Header().Get("Cache-Control") != "no-cache" {
+		t.Fatalf("unversioned cache policy=%q", unversioned.Header().Get("Cache-Control"))
+	}
+}
+
 func TestStaticOverride(t *testing.T) {
 	dir := t.TempDir()
 	if err := os.WriteFile(filepath.Join(dir, "index.html"), []byte("override-marker"), 0o600); err != nil {

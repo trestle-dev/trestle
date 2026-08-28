@@ -1,7 +1,9 @@
 package web
 
 import (
+	"crypto/sha256"
 	"embed"
+	"encoding/hex"
 	"errors"
 	"io/fs"
 	"mime"
@@ -32,10 +34,22 @@ func New(staticDir string) (http.Handler, error) {
 		}
 		root = os.DirFS(staticDir)
 	}
-	return handler{root: root}, nil
+	hash := sha256.New()
+	for _, name := range []string{"assets/css/style.css", "assets/js/script.js"} {
+		data, err := fs.ReadFile(root, name)
+		if err != nil {
+			return nil, err
+		}
+		_, _ = hash.Write(data)
+	}
+	version := hex.EncodeToString(hash.Sum(nil))[:12]
+	return handler{root: root, assetVersion: version}, nil
 }
 
-type handler struct{ root fs.FS }
+type handler struct {
+	root         fs.FS
+	assetVersion string
+}
 
 func (h handler) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 	if r.Method != http.MethodGet && r.Method != http.MethodHead {
@@ -58,9 +72,12 @@ func (h handler) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 		w.Header().Set("Content-Type", contentType)
 	}
 	if strings.HasSuffix(name, ".html") || name == "index.html" {
+		data = []byte(strings.ReplaceAll(string(data), "__TRESTLE_ASSET_VERSION__", h.assetVersion))
 		w.Header().Set("Cache-Control", "no-cache")
+	} else if r.URL.Query().Get("v") == h.assetVersion {
+		w.Header().Set("Cache-Control", "public, max-age=31536000, immutable")
 	} else {
-		w.Header().Set("Cache-Control", "public, max-age=3600")
+		w.Header().Set("Cache-Control", "no-cache")
 	}
 	w.Header().Set("Content-Security-Policy", "default-src 'self'; script-src 'self'; style-src 'self'; img-src 'self' data:; connect-src 'self'; frame-ancestors 'none'; base-uri 'none'; form-action 'self'")
 	_, _ = w.Write(data)

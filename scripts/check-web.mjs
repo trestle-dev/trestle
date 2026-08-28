@@ -24,10 +24,11 @@ for (const file of html) {
   for (const match of source.matchAll(/(?:href|src)="([^"#]+)(?:#[^"]*)?"/g)) {
     const value = match[1];
     if (/^(?:https?:|mailto:|data:)/.test(value)) continue;
-    if (value.startsWith("/") && value !== "/" && !path.extname(value)) continue;
+    const clean = value.split(/[?#]/, 1)[0];
+    if (clean.startsWith("/") && clean !== "/" && !path.extname(clean)) continue;
     let target;
-    if (value.startsWith("/")) target = path.join(root, value);
-    else target = path.resolve(path.dirname(file), value);
+    if (clean.startsWith("/")) target = path.join(root, clean);
+    else target = path.resolve(path.dirname(file), clean);
     if (target.endsWith(path.sep)) target = path.join(target, "index.html");
     try {
       await stat(target);
@@ -53,11 +54,14 @@ for (const file of scripts) {
 
 const appCSS = await readFile(path.join(root, "assets/css/style.css"), "utf8");
 const appJS = await readFile(path.join(root, "assets/js/script.js"), "utf8");
+const appHTML = await readFile(path.join(root, "index.html"), "utf8");
 for (const contract of [
   [appCSS, "#administrator-fields[hidden]", "administrator hidden-state CSS"],
   [appCSS, "#postgres-configuration[hidden]", "PostgreSQL hidden-state CSS"],
   [appJS, 'selectedDatabase()==="postgres"', "PostgreSQL setup selection"],
   [appJS, "Test and save the PostgreSQL connection", "database selection submit guard"],
+  [appHTML, "/assets/js/script.js?v=__TRESTLE_ASSET_VERSION__", "versioned dashboard script"],
+  [appHTML, "/assets/css/style.css?v=__TRESTLE_ASSET_VERSION__", "versioned dashboard stylesheet"],
 ]) {
   if (!contract[0].includes(contract[1])) throw new Error(`missing ${contract[2]}`);
 }
