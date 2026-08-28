@@ -63,7 +63,7 @@ func TestRestoreRejectsHostileAndCorruptArchives(t *testing.T) {
 	}{
 		{"traversal", Manifest{Format: "trestle-backup-v1", SchemaVersion: 13}, map[string][]byte{"../escape": []byte("x"), "trestle.db": []byte("x")}, "unsafe archive path"},
 		{"backslash", Manifest{Format: "trestle-backup-v1", SchemaVersion: 13}, map[string][]byte{`files\escape`: []byte("x"), "trestle.db": []byte("x")}, "unsafe archive path"},
-		{"missing database", Manifest{Format: "trestle-backup-v1", SchemaVersion: 13}, nil, "database snapshot missing"},
+		{"missing database", Manifest{Format: "trestle-backup-v1", SchemaVersion: 13}, nil, "database snapshot or portable archive missing"},
 		{"future schema", Manifest{Format: "trestle-backup-v1", SchemaVersion: 999}, map[string][]byte{"trestle.db": []byte("x")}, "newer Trestle schema"},
 		{"corrupt database", Manifest{Format: "trestle-backup-v1", SchemaVersion: 13}, map[string][]byte{"trestle.db": []byte("not sqlite")}, "verify restored database"},
 	}

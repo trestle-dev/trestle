@@ -93,6 +93,10 @@ func (h *Handler) operations(w http.ResponseWriter, r *http.Request) {
 		h.db.QueryRowContext(r.Context(), "PRAGMA page_count").Scan(&pageCount)
 		h.db.QueryRowContext(r.Context(), "PRAGMA page_size").Scan(&pageSize)
 		databaseBytes = pageCount * pageSize
+	} else if h.provider == "postgres" {
+		var size int64
+		h.db.QueryRowContext(r.Context(), "SELECT pg_database_size(current_database())").Scan(&size)
+		databaseBytes = size
 	}
 	writeJSON(w, map[string]any{"provider": h.provider, "counts": counts, "databaseBytes": databaseBytes, "auditBoundary": "append-oriented, not tamper-proof"})
 }

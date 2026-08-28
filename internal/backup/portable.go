@@ -1,0 +1,506 @@
+package backup
+
+import (
+	"context"
+	"crypto/rand"
+	"database/sql"
+	"encoding/base64"
+	"encoding/json"
+	"errors"
+	"fmt"
+	"io"
+	"strings"
+	"time"
+
+	"github.com/trestle-dev/trestle/internal/collections"
+	"github.com/trestle-dev/trestle/internal/store"
+)
+
+// PortableFormat is the versioned logical archive used for PostgreSQL backup
+// and for cross-provider migration. It is a transactionally consistent logical
+// snapshot, not a copy of an operator's whole database service.
+const PortableFormat = "trestle-portable-v1"
+
+// blobColumns are the system-table columns stored as byte arrays on both
+// providers; on export they are base64-encoded and on import they are decoded.
+var blobColumns = map[string]bool{"token_hash": true, "csrf_hash": true, "refresh_hash": true, "secret_hash": true, "secret_cipher": true}
+
+type PortableBundle struct {
+	Format        string               `json:"format"`
+	SchemaVersion int                  `json:"schemaVersion"`
+	Provider      string               `json:"provider"`
+	ExportedAt    string               `json:"exportedAt"`
+	Collections   []PortableCollection `json:"collections"`
+	System        PortableSystem       `json:"system"`
+}
+
+type PortableCollection struct {
+	ID      string           `json:"id"`
+	Name    string           `json:"name"`
+	Kind    string           `json:"kind"`
+	Fields  []PortableField  `json:"fields"`
+	Records []PortableRecord `json:"records"`
+}
+
+type PortableField struct {
+	ID       string          `json:"id"`
+	Name     string          `json:"name"`
+	Type     string          `json:"type"`
+	Required bool            `json:"required"`
+	Unique   bool            `json:"unique"`
+	Default  json.RawMessage `json:"default,omitempty"`
+}
+
+type PortableRecord struct {
+	ID        string         `json:"id"`
+	Version   int            `json:"version"`
+	CreatedAt string         `json:"createdAt"`
+	UpdatedAt string         `json:"updatedAt"`
+	Values    map[string]any `json:"values"`
+}
+
+type PortableSystem struct {
+	Admins          []map[string]any `json:"admins"`
+	AdminSessions   []map[string]any `json:"adminSessions"`
+	AppUsers        []map[string]any `json:"appUsers"`
+	AppSessions     []map[string]any `json:"appSessions"`
+	Credentials     []map[string]any `json:"credentials"`
+	AppAccess       []map[string]any `json:"appAccess"`
+	CollectionRules []map[string]any `json:"collectionRules"`
+	Events          []map[string]any `json:"events"`
+	Audit           []map[string]any `json:"audit"`
+	Jobs            []map[string]any `json:"jobs"`
+	Webhooks        []map[string]any `json:"webhooks"`
+	Functions       []map[string]any `json:"functions"`
+	Files           []map[string]any `json:"files"`
+	SystemMeta      []map[string]any `json:"systemMeta"`
+}
+
+func quote(identifier string) string { return `"` + strings.ReplaceAll(identifier, `"`, `""`) + `"` }
+
+// Export writes a portable logical snapshot of every table to w in bounded
+// deterministic order. Reads happen inside one read-only transaction so the
+// snapshot is consistent. Blobs are base64-encoded JSON byte arrays; booleans
+// are decoded through the dialect before encoding.
+func Export(ctx context.Context, db store.Executor, dialect store.Dialect, w io.Writer) error {
+	tx, err := db.BeginTx(ctx, nil)
+	if err != nil {
+		return err
+	}
+	defer tx.Rollback()
+	bundle := PortableBundle{Format: PortableFormat, SchemaVersion: store.CurrentVersion, Provider: string(dialect.Provider()), ExportedAt: time.Now().UTC().Format(time.RFC3339Nano)}
+
+	rows, err := tx.QueryContext(ctx, "SELECT id,name,kind,created_at,updated_at FROM _trestle_collections ORDER BY name")
+	if err != nil {
+		return err
+	}
+	type collectionMeta struct{ id, name, kind, createdAt, updatedAt string }
+	var metas []collectionMeta
+	for rows.Next() {
+		var m collectionMeta
+		if err := rows.Scan(&m.id, &m.name, &m.kind, &m.createdAt, &m.updatedAt); err != nil {
+			rows.Close()
+			return err
+		}
+		metas = append(metas, m)
+	}
+	if err := rows.Close(); err != nil {
+		return err
+	}
+	for _, meta := range metas {
+		pc, err := exportCollection(ctx, tx, dialect, meta.id, meta.name, meta.kind, meta.createdAt, meta.updatedAt)
+		if err != nil {
+			return err
+		}
+		bundle.Collections = append(bundle.Collections, pc)
+	}
+
+	metaRows, err := tx.QueryContext(ctx, "SELECT key,value,updated_at FROM _trestle_system_meta WHERE key <> 'database_provider' ORDER BY key")
+	if err != nil {
+		return err
+	}
+	for metaRows.Next() {
+		var key, value, updated string
+		if err := metaRows.Scan(&key, &value, &updated); err != nil {
+			metaRows.Close()
+			return err
+		}
+		bundle.System.SystemMeta = append(bundle.System.SystemMeta, map[string]any{"key": key, "value": value, "updated_at": updated})
+	}
+	if err := metaRows.Close(); err != nil {
+		return err
+	}
+
+	for _, item := range []struct {
+		name string
+		dst  *[]map[string]any
+		base string
+	}{
+		{"admins", &bundle.System.Admins, "_trestle_admins"},
+		{"adminSessions", &bundle.System.AdminSessions, "_trestle_admin_sessions"},
+		{"appUsers", &bundle.System.AppUsers, "_trestle_app_users"},
+		{"appSessions", &bundle.System.AppSessions, "_trestle_app_sessions"},
+		{"credentials", &bundle.System.Credentials, "_trestle_credentials"},
+		{"appAccess", &bundle.System.AppAccess, "_trestle_app_access"},
+		{"collectionRules", &bundle.System.CollectionRules, "_trestle_collection_rules"},
+		{"events", &bundle.System.Events, "_trestle_events"},
+		{"audit", &bundle.System.Audit, "_trestle_audit"},
+		{"jobs", &bundle.System.Jobs, "_trestle_jobs"},
+		{"webhooks", &bundle.System.Webhooks, "_trestle_webhooks"},
+		{"functions", &bundle.System.Functions, "_trestle_functions"},
+		{"files", &bundle.System.Files, "_trestle_files"},
+	} {
+		values, err := dumpTable(ctx, tx, dialect, item.base)
+		if err != nil {
+			return fmt.Errorf("export %s: %w", item.name, err)
+		}
+		*item.dst = values
+	}
+
+	encoder := json.NewEncoder(w)
+	encoder.SetIndent("", "  ")
+	if err := encoder.Encode(bundle); err != nil {
+		return err
+	}
+	return tx.Rollback()
+}
+
+func exportCollection(ctx context.Context, tx store.Transaction, dialect store.Dialect, id, name, kind, createdAt, updatedAt string) (PortableCollection, error) {
+	pc := PortableCollection{ID: id, Name: name, Kind: kind}
+	fieldRows, err := tx.QueryContext(ctx, "SELECT id,name,type,required,is_unique,default_json FROM _trestle_fields WHERE collection_id=? ORDER BY position", id)
+	if err != nil {
+		return pc, err
+	}
+	type fieldMeta struct {
+		fieldID          string
+		column           string
+		name, typ        string
+		required, unique bool
+		def              sql.NullString
+	}
+	var fields []fieldMeta
+	for fieldRows.Next() {
+		var f fieldMeta
+		var reqRaw, uniqRaw any
+		if err := fieldRows.Scan(&f.fieldID, &f.name, &f.typ, &reqRaw, &uniqRaw, &f.def); err != nil {
+			fieldRows.Close()
+			return pc, err
+		}
+		f.column = collections.PhysicalColumnName(f.fieldID)
+		f.required, _ = dialect.DecodeBoolean(reqRaw)
+		f.unique, _ = dialect.DecodeBoolean(uniqRaw)
+		fields = append(fields, f)
+	}
+	if err := fieldRows.Close(); err != nil {
+		return pc, err
+	}
+	for _, f := range fields {
+		pf := PortableField{ID: f.fieldID, Name: f.name, Type: f.typ, Required: f.required, Unique: f.unique}
+		if f.def.Valid {
+			pf.Default = json.RawMessage(f.def.String)
+		}
+		pc.Fields = append(pc.Fields, pf)
+	}
+	selectParts := []string{`_id`, `_version`, `_created`, `_updated`}
+	for _, f := range fields {
+		selectParts = append(selectParts, quote(f.column))
+	}
+	table := collections.PhysicalTableName(id)
+	recRows, err := tx.QueryContext(ctx, "SELECT "+strings.Join(selectParts, ",")+" FROM "+quote(table)+" ORDER BY _id")
+	if err != nil {
+		return pc, err
+	}
+	defer recRows.Close()
+	for recRows.Next() {
+		var rec PortableRecord
+		dest := []any{&rec.ID, &rec.Version, &rec.CreatedAt, &rec.UpdatedAt}
+		raw := make([]any, len(fields))
+		for i := range raw {
+			dest = append(dest, &raw[i])
+		}
+		if err := recRows.Scan(dest...); err != nil {
+			return pc, err
+		}
+		rec.Values = map[string]any{}
+		for i, f := range fields {
+			rec.Values[f.name] = decodeValue(dialect, f.typ, raw[i])
+		}
+		pc.Records = append(pc.Records, rec)
+	}
+	return pc, recRows.Err()
+}
+
+func dumpTable(ctx context.Context, tx store.Transaction, dialect store.Dialect, table string) ([]map[string]any, error) {
+	rows, err := tx.QueryContext(ctx, "SELECT * FROM "+quote(table)+" ORDER BY 1")
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	columns, err := rows.Columns()
+	if err != nil {
+		return nil, err
+	}
+	var out []map[string]any
+	for rows.Next() {
+		raw := make([]any, len(columns))
+		dest := make([]any, len(columns))
+		for i := range raw {
+			dest[i] = &raw[i]
+		}
+		if err := rows.Scan(dest...); err != nil {
+			return nil, err
+		}
+		row := map[string]any{}
+		for i, col := range columns {
+			row[col] = encodeValue(dialect, raw[i])
+		}
+		out = append(out, row)
+	}
+	return out, rows.Err()
+}
+
+func encodeValue(dialect store.Dialect, v any) any {
+	switch t := v.(type) {
+	case []byte:
+		return base64.StdEncoding.EncodeToString(t)
+	case bool:
+		return t
+	case int64:
+		return t
+	case float64:
+		return t
+	case string:
+		return t
+	default:
+		return t
+	}
+}
+
+func decodeValue(dialect store.Dialect, kind string, v any) any {
+	if v == nil {
+		return nil
+	}
+	switch kind {
+	case "boolean":
+		if b, err := dialect.DecodeBoolean(v); err == nil {
+			return b
+		}
+	case "number":
+		switch t := v.(type) {
+		case int64:
+			return t
+		case float64:
+			return t
+		}
+	case "json":
+		if s, ok := v.(string); ok {
+			var decoded any
+			if json.Unmarshal([]byte(s), &decoded) == nil {
+				return decoded
+			}
+			return s
+		}
+	}
+	return v
+}
+
+// Import restores a portable bundle into an empty destination. It validates
+// the format and schema first, then creates collections and inserts system
+// rows inside one transaction so a failure leaves the destination untouched.
+func Import(ctx context.Context, db store.Executor, dialect store.Dialect, r io.Reader) error {
+	var bundle PortableBundle
+	decoder := json.NewDecoder(io.LimitReader(r, 1<<30))
+	if err := decoder.Decode(&bundle); err != nil {
+		return errors.New("invalid portable archive")
+	}
+	if bundle.Format != PortableFormat {
+		return errors.New("unsupported portable archive format")
+	}
+	if bundle.SchemaVersion > store.CurrentVersion {
+		return errors.New("archive requires a newer schema")
+	}
+	var collectionCount int
+	if err := db.QueryRowContext(ctx, "SELECT count(*) FROM _trestle_collections").Scan(&collectionCount); err != nil || collectionCount != 0 {
+		return errors.New("import destination is not empty")
+	}
+	var adminCount int
+	if err := db.QueryRowContext(ctx, "SELECT count(*) FROM _trestle_admins").Scan(&adminCount); err != nil || adminCount != 0 {
+		return errors.New("import destination is not empty")
+	}
+
+	tx, err := db.BeginTx(ctx, nil)
+	if err != nil {
+		return err
+	}
+	defer tx.Rollback()
+	for _, pc := range bundle.Collections {
+		if err := importCollection(ctx, tx, dialect, pc); err != nil {
+			return err
+		}
+	}
+	for _, item := range []struct {
+		src   []map[string]any
+		table string
+	}{
+		{bundle.System.Admins, "_trestle_admins"},
+		{bundle.System.AdminSessions, "_trestle_admin_sessions"},
+		{bundle.System.AppUsers, "_trestle_app_users"},
+		{bundle.System.AppSessions, "_trestle_app_sessions"},
+		{bundle.System.Credentials, "_trestle_credentials"},
+		{bundle.System.AppAccess, "_trestle_app_access"},
+		{bundle.System.CollectionRules, "_trestle_collection_rules"},
+		{bundle.System.Events, "_trestle_events"},
+		{bundle.System.Audit, "_trestle_audit"},
+		{bundle.System.Jobs, "_trestle_jobs"},
+		{bundle.System.Webhooks, "_trestle_webhooks"},
+		{bundle.System.Functions, "_trestle_functions"},
+		{bundle.System.Files, "_trestle_files"},
+	} {
+		if err := insertRows(ctx, tx, dialect, item.table, item.src); err != nil {
+			return err
+		}
+	}
+	for _, row := range bundle.System.SystemMeta {
+		key, _ := row["key"].(string)
+		value, _ := row["value"].(string)
+		updated, _ := row["updated_at"].(string)
+		if key == "" || value == "" {
+			continue
+		}
+		if _, err := tx.ExecContext(ctx, "INSERT INTO _trestle_system_meta(key,value,updated_at) VALUES(?,?,?) ON CONFLICT(key) DO NOTHING", key, value, updated); err != nil {
+			return err
+		}
+	}
+	return tx.Commit()
+}
+
+func importCollection(ctx context.Context, tx store.Transaction, dialect store.Dialect, pc PortableCollection) error {
+	now := time.Now().UTC().Format(time.RFC3339Nano)
+	id := pc.ID
+	if id == "" {
+		id = "col_import_" + token(12)
+	}
+	if _, err := tx.ExecContext(ctx, "INSERT INTO _trestle_collections(id,name,kind,created_at,updated_at) VALUES(?,?,?,?,?)", id, pc.Name, pc.Kind, now, now); err != nil {
+		return err
+	}
+	fieldIDs := make([]string, len(pc.Fields))
+	for i, pf := range pc.Fields {
+		fid := pf.ID
+		if fid == "" {
+			fid = "fld_import_" + token(12)
+		}
+		fieldIDs[i] = fid
+		var def any
+		if len(pf.Default) > 0 {
+			def = string(pf.Default)
+		}
+		if _, err := tx.ExecContext(ctx, "INSERT INTO _trestle_fields(id,collection_id,position,name,type,required,is_unique,default_json,created_at) VALUES(?,?,?,?,?,?,?,?,?)", fid, id, i, pf.Name, pf.Type, dialect.Boolean(pf.Required), dialect.Boolean(pf.Unique), def, now); err != nil {
+			return err
+		}
+	}
+	if err := createPhysical(ctx, tx, dialect, id, fieldIDs, pc.Fields); err != nil {
+		return err
+	}
+	for _, rec := range pc.Records {
+		if err := insertRecord(ctx, tx, dialect, id, fieldIDs, pc.Fields, rec); err != nil {
+			return err
+		}
+	}
+	return nil
+}
+
+func createPhysical(ctx context.Context, tx store.Transaction, dialect store.Dialect, collectionID string, fieldIDs []string, fields []PortableField) error {
+	parts := []string{`_id TEXT PRIMARY KEY`, `_version INTEGER NOT NULL DEFAULT 1 CHECK(_version > 0)`, `_created TEXT NOT NULL`, `_updated TEXT NOT NULL`}
+	for i, f := range fields {
+		column := quote(collections.PhysicalColumnName(fieldIDs[i]))
+		base, err := dialect.ColumnType(f.Type)
+		if err != nil {
+			return err
+		}
+		part := column + " " + base
+		switch f.Type {
+		case "boolean":
+			part += dialect.BooleanCheck(column)
+		case "json":
+			part += dialect.JSONCheck(column)
+		case "number":
+			part += dialect.NumberCheck(column)
+		}
+		if f.Required {
+			part += " NOT NULL"
+		}
+		if f.Unique {
+			part += " UNIQUE"
+		}
+		parts = append(parts, part)
+	}
+	_, err := tx.ExecContext(ctx, "CREATE TABLE "+quote(collections.PhysicalTableName(collectionID))+" ("+strings.Join(parts, ",")+")"+dialect.TableSuffix())
+	return err
+}
+
+func insertRecord(ctx context.Context, tx store.Transaction, dialect store.Dialect, collectionID string, fieldIDs []string, fields []PortableField, rec PortableRecord) error {
+	columns := []string{`_id`, `_version`, `_created`, `_updated`}
+	marks := []string{"?", "?", "?", "?"}
+	args := []any{rec.ID, rec.Version, rec.CreatedAt, rec.UpdatedAt}
+	for i, pf := range fields {
+		columns = append(columns, quote(collections.PhysicalColumnName(fieldIDs[i])))
+		marks = append(marks, "?")
+		args = append(args, encodeField(dialect, pf.Type, rec.Values[pf.Name]))
+	}
+	_, err := tx.ExecContext(ctx, "INSERT INTO "+quote(collections.PhysicalTableName(collectionID))+" ("+strings.Join(columns, ",")+") VALUES ("+strings.Join(marks, ",")+")", args...)
+	return err
+}
+
+func encodeField(dialect store.Dialect, kind string, v any) any {
+	if v == nil {
+		return nil
+	}
+	switch kind {
+	case "boolean":
+		if b, ok := v.(bool); ok {
+			return dialect.Boolean(b)
+		}
+	case "json":
+		b, _ := json.Marshal(v)
+		return string(b)
+	}
+	return v
+}
+
+func insertRows(ctx context.Context, tx store.Transaction, dialect store.Dialect, table string, rows []map[string]any) error {
+	for _, row := range rows {
+		if len(row) == 0 {
+			continue
+		}
+		columns := make([]string, 0, len(row))
+		args := make([]any, 0, len(row))
+		marks := make([]string, 0, len(row))
+		for col, value := range row {
+			columns = append(columns, quote(col))
+			marks = append(marks, "?")
+			args = append(args, decodeRowValue(col, value))
+		}
+		stmt := "INSERT INTO " + quote(table) + " (" + strings.Join(columns, ",") + ") VALUES (" + strings.Join(marks, ",") + ")"
+		if _, err := tx.ExecContext(ctx, stmt, args...); err != nil {
+			return fmt.Errorf("insert %s: %w", table, err)
+		}
+	}
+	return nil
+}
+
+func decodeRowValue(column string, v any) any {
+	if blobColumns[column] {
+		if s, ok := v.(string); ok {
+			if decoded, err := base64.StdEncoding.DecodeString(s); err == nil {
+				return decoded
+			}
+		}
+	}
+	return v
+}
+
+func token(n int) string {
+	b := make([]byte, n)
+	rand.Read(b)
+	return base64.RawURLEncoding.EncodeToString(b)
+}

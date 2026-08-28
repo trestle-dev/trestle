@@ -46,7 +46,7 @@ func Restore(ctx context.Context, archivePath, targetDir string) error {
 		return err
 	}
 	var manifest Manifest
-	hasManifest, hasDB := false, false
+	hasManifest, hasDB, hasPortable := false, false, false
 	var total int64
 	for _, item := range reader.File {
 		name, err := safeArchiveName(item.Name)
@@ -59,7 +59,7 @@ func Restore(ctx context.Context, archivePath, targetDir string) error {
 		if item.FileInfo().IsDir() {
 			continue
 		}
-		if name != "manifest.json" && name != "trestle.db" && !strings.HasPrefix(name, "files/") {
+		if name != "manifest.json" && name != "trestle.db" && name != "portable.json" && !strings.HasPrefix(name, "files/") {
 			return fmt.Errorf("unexpected archive entry %q", item.Name)
 		}
 		total += int64(item.UncompressedSize64)
@@ -99,6 +99,9 @@ func Restore(ctx context.Context, archivePath, targetDir string) error {
 		if name == "trestle.db" {
 			hasDB = true
 		}
+		if name == "portable.json" {
+			hasPortable = true
+		}
 	}
 	if !hasManifest || manifest.Format != "trestle-backup-v1" {
 		return errors.New("unsupported or missing backup manifest")
@@ -106,18 +109,41 @@ func Restore(ctx context.Context, archivePath, targetDir string) error {
 	if manifest.SchemaVersion > store.CurrentVersion {
 		return errors.New("backup comes from a newer Trestle schema")
 	}
-	if !hasDB {
-		return errors.New("database snapshot missing")
-	}
-	verified, err := store.Open(ctx, staging)
-	if err != nil {
-		return fmt.Errorf("verify restored database: %w", err)
-	}
-	var integrity string
-	err = verified.DB().QueryRowContext(ctx, "PRAGMA integrity_check").Scan(&integrity)
-	verified.Close()
-	if err != nil || integrity != "ok" {
-		return fmt.Errorf("restored database integrity failed: %s", integrity)
+	if hasDB {
+		verified, err := store.Open(ctx, staging)
+		if err != nil {
+			return fmt.Errorf("verify restored database: %w", err)
+		}
+		var integrity string
+		err = verified.DB().QueryRowContext(ctx, "PRAGMA integrity_check").Scan(&integrity)
+		verified.Close()
+		if err != nil || integrity != "ok" {
+			return fmt.Errorf("restored database integrity failed: %s", integrity)
+		}
+	} else if hasPortable {
+		restored, err := store.Open(ctx, staging)
+		if err != nil {
+			return fmt.Errorf("initialize restore destination: %w", err)
+		}
+		portableFile, err := os.Open(filepath.Join(staging, "portable.json"))
+		if err != nil {
+			restored.Close()
+			return err
+		}
+		if err := Import(ctx, restored.DB(), restored.Dialect(), portableFile); err != nil {
+			portableFile.Close()
+			restored.Close()
+			return fmt.Errorf("restore portable archive: %w", err)
+		}
+		portableFile.Close()
+		var collectionsCount int
+		if err := restored.DB().QueryRowContext(ctx, "SELECT count(*) FROM _trestle_collections").Scan(&collectionsCount); err != nil {
+			restored.Close()
+			return fmt.Errorf("verify restored archive: %w", err)
+		}
+		restored.Close()
+	} else {
+		return errors.New("database snapshot or portable archive missing")
 	}
 	if err := os.Rename(staging, targetDir); err != nil {
 		return fmt.Errorf("publish restored data: %w", err)

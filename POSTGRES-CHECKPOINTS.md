@@ -855,6 +855,66 @@ Status: pending
   data and files.
 - Failed restore never mutates or partially publishes the destination.
 
+## PG10 - Backup, restore, operations, and provider recovery
+
+Status: complete
+
+A portable Trestle logical archive now backs up and restores both providers.
+SQLite retains its native consistent snapshot; PostgreSQL uses the portable
+logical archive, which never implies a backup of an operator's whole PostgreSQL
+service. The operations summary reports provider-specific storage facts, and
+failed restores leave the destination untouched.
+
+### Application
+
+- Replace SQLite-only page metrics with a provider-neutral operations summary
+  and clearly labelled provider-specific storage/pool facts.
+- Retain native consistent SQLite archives. Define PostgreSQL backup honestly:
+  a transactionally consistent Trestle logical archive, not an implied backup
+  of an operator's whole PostgreSQL cluster.
+- Stream logical export in bounded order from one consistent snapshot, including
+  schema metadata, records, identities, events, jobs and file manifest.
+- Restore only into an empty destination through preflight, staged validation
+  and all-or-nothing publication. Document optional operator `pg_dump`/managed
+  backup responsibilities separately.
+- Drill corrupt, truncated, future-schema, occupied-target and object mismatch
+  failures on both providers.
+
+### Dashboard
+
+- Make Backups and operations cards provider-aware. Use portable Trestle
+  backup and SQLite snapshot precisely rather than one ambiguous button.
+
+### Public website
+
+- Rewrite Backups, Restore, Export/import, Observability and Rollback with a
+  provider capability table, complete commands and recovery examples.
+
+### Exit evidence
+
+- Each provider completes repeated backup/restore round trips with representative
+  data and files.
+- Failed restore never mutates or partially publishes the destination.
+
+Completion record:
+
+```text
+Status: complete
+Application commit: recorded by this commit
+Website output commit: 170ea8c
+Website source commit: 3c3d793
+SQLite evidence: native snapshot backup/restore and portable round trips pass
+PostgreSQL evidence: real postgres 18.6 portable logical export/import and
+  restore into an empty destination pass
+Parity evidence: the portable archive round-trips SQLite to/from PostgreSQL in
+  all four directions with stable IDs, JSON, booleans and system state
+Findings repaired: the backup handler conflated storage provider with database
+  provider; the portable archive now preserves stable IDs so foreign keys and
+  rules survive; PostgreSQL operations reports a real database size
+Known limits: operator pg_dump/managed backup is documented separately;
+  cross-provider migration remains PG11; PostgreSQL 16 CI not yet reviewed green
+```
+
 ## PG11 - Cross-provider migration, complete parity matrix, CI, and release boundary
 
 Status: pending

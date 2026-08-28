@@ -78,12 +78,8 @@ func TestAuditFactsFilterRedactionAndCounts(t *testing.T) {
 			if body.Provider != provider {
 				t.Fatalf("provider=%q", body.Provider)
 			}
-			if provider == "sqlite" {
-				if _, ok := body.DatabaseBytes.(float64); !ok {
-					t.Fatalf("sqlite databaseBytes=%v", body.DatabaseBytes)
-				}
-			} else if body.DatabaseBytes != nil {
-				t.Fatalf("postgres databaseBytes=%v, want null", body.DatabaseBytes)
+			if _, ok := body.DatabaseBytes.(float64); !ok {
+				t.Fatalf("%s databaseBytes=%v", provider, body.DatabaseBytes)
 			}
 			_ = csrf
 		})

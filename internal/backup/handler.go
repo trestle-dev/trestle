@@ -2,6 +2,7 @@ package backup
 
 import (
 	"archive/zip"
+	"bytes"
 	"database/sql"
 	"encoding/json"
 	"errors"
@@ -67,21 +68,34 @@ func (h *Handler) create(w http.ResponseWriter, r *http.Request) {
 	final := filepath.Join(h.dataDir, "backups", id)
 	temp := final + ".tmp"
 	snapshot := filepath.Join(h.dataDir, "backups", id+".db")
-	if _, err := h.db.ExecContext(r.Context(), "VACUUM INTO ?", snapshot); err != nil {
-		http.Error(w, "database snapshot failed", 500)
-		return
+	sqliteSnapshot := h.db.Dialect().Provider() == store.SQLite
+	if sqliteSnapshot {
+		if _, err := h.db.ExecContext(r.Context(), "VACUUM INTO ?", snapshot); err != nil {
+			http.Error(w, "database snapshot failed", 500)
+			return
+		}
+		defer os.Remove(snapshot)
 	}
-	defer os.Remove(snapshot)
 	out, err := os.OpenFile(temp, os.O_CREATE|os.O_EXCL|os.O_WRONLY, 0600)
 	if err != nil {
 		http.Error(w, "backup create failed", 500)
 		return
 	}
 	archive := zip.NewWriter(out)
-	manifest := Manifest{Format: "trestle-backup-v1", CreatedAt: h.now().UTC().Format(time.RFC3339Nano), SchemaVersion: store.CurrentVersion, StorageProvider: h.provider, IncludesDatabase: true, IncludesLocalFiles: h.provider == "local", Secrets: "administrator password hashes and encrypted integration secrets are included; live sessions are included and should be revoked after cross-host restore"}
+	manifest := Manifest{Format: "trestle-backup-v1", CreatedAt: h.now().UTC().Format(time.RFC3339Nano), SchemaVersion: store.CurrentVersion, StorageProvider: h.provider, IncludesDatabase: sqliteSnapshot, IncludesLocalFiles: h.provider == "local", Secrets: "administrator password hashes and encrypted integration secrets are included; live sessions are included and should be revoked after cross-host restore"}
 	archiveErr := addJSON(archive, "manifest.json", manifest)
 	if archiveErr == nil {
-		archiveErr = addFile(archive, "trestle.db", snapshot)
+		if sqliteSnapshot {
+			archiveErr = addFile(archive, "trestle.db", snapshot)
+		}
+	}
+	if archiveErr == nil {
+		var portable bytes.Buffer
+		if err := Export(r.Context(), h.db, h.db.Dialect(), &portable); err != nil {
+			archiveErr = errors.New("portable archive failed")
+		} else {
+			archiveErr = addBytes(archive, "portable.json", portable.Bytes())
+		}
 	}
 	filesRoot := filepath.Join(h.dataDir, "files")
 	if archiveErr == nil && h.provider == "local" {
@@ -167,6 +181,7 @@ func (h *Handler) preflight(w http.ResponseWriter, r *http.Request) {
 	defer reader.Close()
 	var manifest Manifest
 	hasDB := false
+	hasPortable := false
 	issues := []string{}
 	for _, item := range reader.File {
 		if item.Name == "manifest.json" {
@@ -176,6 +191,9 @@ func (h *Handler) preflight(w http.ResponseWriter, r *http.Request) {
 		}
 		if item.Name == "trestle.db" {
 			hasDB = true
+		}
+		if item.Name == "portable.json" {
+			hasPortable = true
 		}
 		if strings.Contains(item.Name, "..") || strings.HasPrefix(item.Name, "/") {
 			issues = append(issues, "unsafe archive path")
@@ -187,8 +205,8 @@ func (h *Handler) preflight(w http.ResponseWriter, r *http.Request) {
 	if manifest.SchemaVersion > store.CurrentVersion {
 		issues = append(issues, "backup comes from a newer Trestle schema")
 	}
-	if !hasDB {
-		issues = append(issues, "database snapshot missing")
+	if !hasDB && !hasPortable {
+		issues = append(issues, "database snapshot or portable archive missing")
 	}
 	writeJSON(w, 200, map[string]any{"valid": len(issues) == 0, "manifest": manifest, "issues": issues, "next": "Stop Trestle and use the documented offline restore procedure; live replacement is deliberately refused."})
 }
@@ -249,6 +267,14 @@ func addJSON(archive *zip.Writer, name string, value any) error {
 		return err
 	}
 	return json.NewEncoder(writer).Encode(value)
+}
+func addBytes(archive *zip.Writer, name string, value []byte) error {
+	writer, err := archive.Create(name)
+	if err != nil {
+		return err
+	}
+	_, err = writer.Write(value)
+	return err
 }
 func addFile(archive *zip.Writer, name, path string) error {
 	source, err := os.Open(path)
