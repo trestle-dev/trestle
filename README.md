@@ -20,10 +20,11 @@ S3-compatible files, realtime events, audit, durable jobs, webhooks, AWS Lambda,
 OpenAPI, reference clients, backup/recovery, and whole-product dogfooding.
 Deployment, release automation and the release-candidate matrix are implemented.
 
-A separate PostgreSQL parity campaign (PG00-PG11) is underway. PostgreSQL
-configuration, provider-neutral execution and dual system migrations exist and
-are exercised against a real server, but product-level parity is **not**
-complete; PostgreSQL is experimental until the campaign closes. See
+A separate PostgreSQL parity campaign (PG00-PG11) is complete. PostgreSQL is an
+available external-database option for deployments needing its operational
+model; SQLite remains the recommended zero-configuration default. The parity
+corpus, migration safety and recovery semantics are exercised against
+PostgreSQL 16, 17 and 18 in CI and PostgreSQL 18.6 locally. See
 `POSTGRES-CHECKPOINTS.md`.
 
 ## Requirements
@@ -74,11 +75,10 @@ On first run, open that address and create the first administrator. The setup
 route closes once the administrator is committed. Administrator passwords
 currently require at least 7 characters.
 
-First-run setup offers SQLite and PostgreSQL. **SQLite is the complete,
-recommended default**; PostgreSQL is labelled experimental because only its
-configuration and system migrations are available for testing. The setup
-selector is the campaign's test path and stays enabled; the warning will only be
-removed when the parity matrix is promoted at PG11.
+First-run setup offers SQLite and PostgreSQL. **SQLite is the recommended
+zero-configuration default**; PostgreSQL is the available external-database
+option for deployments needing a server database. The setup selector persists
+the chosen provider in an owner-only configuration file.
 
 Trestle creates `./data/trestle.db` by default. The data directory is set to
 owner-only permissions and must live on a local filesystem; shared/network
@@ -139,7 +139,7 @@ Flags override environment variables, which override defaults:
 - `sqlite` (default) is the complete provider: one process owns one local
   database at `<data-dir>/trestle.db` with WAL, owner-only permissions, and
   refused unknown future schemas.
-- `postgres` is experimental. Explicit startup configuration
+- `postgres` is available. Explicit startup configuration
   (`--database-provider postgres --database-url postgres://...`) or the stored
   first-run bootstrap selects it. Remote connections require TLS unless the
   host is loopback. The URL is stored atomically in a `0600`

@@ -3,9 +3,10 @@
 ## Deployment shape
 
 The first supported topology is one Go process owning one configured database
-provider and serving an embedded Nift-built dashboard. SQLite is the complete
-default; PostgreSQL is an experimental peer whose product parity is earned
-checkpoint by checkpoint. External object storage and AWS Lambda are optional
+provider and serving an embedded Nift-built dashboard. SQLite is the
+recommended zero-configuration default; PostgreSQL is an available peer that
+shares one external API contract with provider-specific internals and
+operational differences. External object storage and AWS Lambda are optional
 adapters. This constraint is a feature: installation, backup, upgrades, and
 failure ownership must remain understandable.
 

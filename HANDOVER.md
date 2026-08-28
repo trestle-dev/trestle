@@ -141,6 +141,30 @@ The public website source is the sibling `trestle-dev.github.io` repository;
 its generated deployment output is a nested `public/` repository. Website
 claims must match implemented and verified milestones here.
 
+## Release handover and installer deployment invariant
+
+Every release is an evidence gate. If `install.sh` or `update.sh` changed since
+the previous release, its exact reviewed version must be incorporated into the
+website source and generated output, deployed publicly, downloaded again,
+byte-compared or checksum-compared with the canonical script, syntax-checked,
+and exercised before creating a release tag:
+
+```text
+script changed
+-> website source updated
+-> generated website rebuilt
+-> website deployed
+-> public bytes verified
+-> candidate installation smoke
+-> release authorization
+-> tag and publication
+-> post-release public installation smoke
+```
+
+If neither script changes during a release, no installer deployment is required
+for that release, but the invariant still governs any future release that does
+change them.
+
 ---
 
 # Nift project handover

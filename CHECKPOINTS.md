@@ -737,7 +737,13 @@ Public website:
 
 Gate: the complete CI/release matrix, clean-machine quickstart, dogfood restore,
 threat-model tests, docs/link/accessibility checks, and signed-off evidence ledger
-are green. Only then describe the corresponding version as stable.
+are green. The release gate also enforces the installer deployment invariant: if
+`install.sh` or `update.sh` changed since the previous release, its exact
+reviewed version must be incorporated into the website source and generated
+output, deployed publicly, downloaded again, byte-compared or checksum-compared
+with the canonical script, syntax-checked, and exercised before the release tag
+is created, followed by a post-release public installation smoke. Only then
+describe the corresponding version as stable.
 
 ## After the first stable release
 

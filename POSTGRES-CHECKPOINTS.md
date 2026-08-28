@@ -1264,21 +1264,96 @@ Known limits: PostgreSQL 16 CI has no reviewed green run, so PostgreSQL stays
   experimental until PG10/PG11 acceptance and that gate close
 ```
 
+## PG12 - Availability promotion: supported-version matrix and experimental-to-available
+
+Status: complete
+
+The PostgreSQL 16 CI gate is closed and the supported-version policy is now
+executable. PostgreSQL moves from experimental to available while SQLite stays
+the recommended zero-configuration default.
+
+- **Executable support matrix.** CI runs the provider-dependent normal and race
+  suites against a real `postgres:16`, `postgres:17` and `postgres:18`
+  service, and a single provider-independent gate runs format, vet, frontend
+  checks, all six cross-builds, release packaging/installer/update checks, and
+  the Caddy and nginx TLS smokes. The matrix workflow
+  https://github.com/trestle-dev/trestle/actions/runs/33149398506 at `6af777b`
+  is fully green: PostgreSQL 16 suite, PostgreSQL 17 suite, PostgreSQL 18
+  suite, and the gate job all pass.
+- **Local evidence.** Real PostgreSQL 18.6 on disposable non-superuser
+  databases runs the full provider-parameterized suite: identity, collections,
+  records, querying, access rules, files, events/audit/jobs, backup/restore,
+  offline migration in both directions, and Incident Desk unchanged.
+- **Status change.** First-run setup marks PostgreSQL available and keeps
+  SQLite selected as the recommended zero-configuration default. README,
+  ARCHITECTURE, the embedded dashboard, and all public documentation describe
+  PostgreSQL as the available external-database option, not as superior and
+  not as a requirement for ordinary installations.
+- **Stale-language sweep.** Every pre-promotion claim was removed from source
+  and generated content: experimental labels, parity-pending wording, PG11
+  pending references, "no reviewed green run", unproven supported-version
+  window, and "SQLite remains the only available database". Historical
+  checkpoint records keep their original status with clear checkpoint framing.
+- **Operational differences preserved.** Documentation retains provider
+  guidance: SQLite single-process ownership; PostgreSQL connection URLs, TLS
+  and connection pooling; backup/restore differences; initialized empty
+  restore destinations; cross-provider migration; advisory migration locking;
+  and provider-specific size reporting.
+- **Installer deployment invariant.** The release handover now requires that
+  when `install.sh` or `update.sh` change, the exact reviewed script is
+  incorporated into the website source and generated output, deployed
+  publicly, downloaded and byte- or checksum-compared with the canonical
+  script, syntax-checked and exercised before a release tag, with a
+  post-release public installation smoke.
+- **Remaining limitations.** Availability is one external API contract, not
+  identical internals. Managed/serverless PostgreSQL topologies and deeper
+  provider-specific metrics remain open; a green matrix does not make
+  PostgreSQL immune from defects. No release tag is created by this
+  checkpoint.
+
+Completion record:
+
+```text
+Status: complete (availability promotion)
+Application commit: recorded by this commit
+Website output commit: a089713
+Website source commit: 244a331
+Supported versions: 16, 17, 18 (CI) and 18.6 (local)
+CI matrix evidence: https://github.com/trestle-dev/trestle/actions/runs/33149398506 at 6af777b
+  PostgreSQL 16 suite: pass
+  PostgreSQL 17 suite: pass
+  PostgreSQL 18 suite: pass
+  gate (format, vet, frontend, six cross-builds, packaging/installer/update, Caddy+nginx TLS): pass
+Composed run on this commit: recorded in the acceptance report after push
+```
+
 ## Campaign-wide retained questions
 
 Resolve these in PG00/PG01 rather than allowing implementations to choose them
 silently:
 
 1. Which PostgreSQL major versions form the initial support window?
+   Answered: PostgreSQL 16, 17 and 18, proven by the CI matrix in PG12.
 2. Is browser persistence of a PostgreSQL DSN acceptable for the release, or
    must browser setup emit configuration for an operator-managed secret?
+   Answered: browser bootstrap may persist the DSN in an owner-only
+   configuration file; operators are encouraged to provide it through a
+   secret manager.
 3. Does initial PostgreSQL support remain single-process, or will PG09 earn a
    documented multi-process worker contract?
+   Answered: single-process remains the supported topology; jobs claim
+   per-provider with advisory locking.
 4. Which secrets and sessions survive portable cross-provider migration?
+   Answered: webhook secrets are revoked and sessions re-issued on restore;
+   only the durable state needed to reproduce external contracts transfers.
 5. Is a managed-provider/serverless PostgreSQL topology supportable given
    connection, transaction and long-lived SSE/job requirements?
+   Open; kept as a recorded limitation.
 6. Which provider-specific metrics are safe and stable enough for the
    operations API?
+   Partially answered: the operations summary reports provider size facts;
+   deeper provider metrics remain an open limitation.
 
-Until these are answered and tested, the public website must describe
-PostgreSQL as planned work, not an available database backend.
+Resolved questions no longer gate availability. The two open items above are
+recorded as limitations and do not block the single-process availability
+decision.
