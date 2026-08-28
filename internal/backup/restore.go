@@ -259,8 +259,9 @@ func restoreLogicalToPostgres(ctx context.Context, archivePath, url string) erro
 
 // validateEmptyPostgresDestination checks, without running migrations or
 // repairs, that the PostgreSQL destination is already initialized at the
-// current Trestle schema and logically empty (no collections and no
-// administrators). A failed restore therefore leaves it semantically unchanged.
+// current Trestle schema and logically empty: every portable-owned table must
+// be empty and system metadata may contain only the provider/initialization
+// marker. A failed restore therefore leaves it semantically unchanged.
 func validateEmptyPostgresDestination(ctx context.Context, url string) error {
 	db, err := sql.Open("postgres", url)
 	if err != nil {
