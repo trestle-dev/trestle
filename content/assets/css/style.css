@@ -13,3 +13,5 @@
 @input("content/assets/css/backups.css")
 /* Route changes focus this non-interactive region for screen-reader context. */
 .workspace:focus-visible{outline:0}
+/* JSON rendered inside dashboard cards stays left-aligned. */
+.json-block{text-align:left}
