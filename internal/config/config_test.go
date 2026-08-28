@@ -60,6 +60,21 @@ func TestDatabaseBootstrapIsAtomicOwnerOnlyAndRedacted(t *testing.T) {
 	}
 }
 
+func TestStoredDatabaseBootstrapMarksDatabaseConfigured(t *testing.T) {
+	dir := t.TempDir()
+	value := DatabaseBootstrap{Provider: "postgres", URL: "postgres://admin:mudblood@localhost/trestle?sslmode=disable", MaxOpen: 8, MaxIdle: 2, ConnectTimeout: 5 * time.Second, ConnMaxLifetime: time.Hour}
+	if err := PersistDatabaseBootstrap(dir, value); err != nil {
+		t.Fatal(err)
+	}
+	cfg, err := FromOS([]string{"--data-dir", dir}, func(string) string { return "" })
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !cfg.DatabaseConfigured || cfg.DatabaseExplicit || cfg.DatabaseProvider != "postgres" {
+		t.Fatalf("configured=%v explicit=%v provider=%q", cfg.DatabaseConfigured, cfg.DatabaseExplicit, cfg.DatabaseProvider)
+	}
+}
+
 func TestTrustedProxyConfiguration(t *testing.T) {
 	env := map[string]string{"TRESTLE_TRUSTED_PROXIES": "127.0.0.1/32,10.0.0.0/8"}
 	cfg, err := Load(nil, func(key string) string { return env[key] })

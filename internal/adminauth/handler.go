@@ -21,10 +21,11 @@ import (
 const cookieName = "trestle_admin_session"
 
 type Handler struct {
-	db       store.Executor
-	provider string
-	now      func() time.Time
-	limiter  *limiter
+	db         store.Executor
+	provider   string
+	now        func() time.Time
+	limiter    *limiter
+	setupGuard func(context.Context) error
 }
 type credentials struct {
 	Email    string `json:"email"`
@@ -50,6 +51,10 @@ func New(db any, provider ...string) *Handler {
 		name = provider[0]
 	}
 	return &Handler{db: store.Adapt(db), provider: name, now: time.Now, limiter: newLimiter(10, time.Minute)}
+}
+
+func (h *Handler) SetSetupGuard(guard func(context.Context) error) {
+	h.setupGuard = guard
 }
 
 func (h *Handler) ServeHTTP(w http.ResponseWriter, r *http.Request) {
@@ -88,6 +93,12 @@ func (h *Handler) SetupRequired(ctx context.Context) (bool, error) {
 }
 
 func (h *Handler) setup(w http.ResponseWriter, r *http.Request) {
+	if h.setupGuard != nil {
+		if err := h.setupGuard(r.Context()); err != nil {
+			writeError(w, 409, "database_restart_required", "Restart Trestle to activate the configured database before creating the administrator.")
+			return
+		}
+	}
 	if !sameOrigin(r) {
 		writeError(w, 403, "origin_denied", "The request origin is not allowed.")
 		return

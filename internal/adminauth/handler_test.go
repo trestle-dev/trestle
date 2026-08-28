@@ -2,7 +2,9 @@ package adminauth
 
 import (
 	"bytes"
+	"context"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"net/http"
 	"net/http/httptest"
@@ -12,6 +14,19 @@ import (
 	"github.com/trestle-dev/trestle/internal/requestmeta"
 	"github.com/trestle-dev/trestle/internal/storetest"
 )
+
+func TestSetupGuardBlocksAdministratorCreationUntilDatabaseRestart(t *testing.T) {
+	h := testHandler(t, "sqlite")
+	h.SetSetupGuard(func(context.Context) error { return errors.New("restart required") })
+	r := httptest.NewRequest(http.MethodPost, "/admin/v1/setup", strings.NewReader(`{"email":"admin@example.com","password":"mudblood"}`))
+	r.Host = "example.test"
+	r.Header.Set("Origin", "http://example.test")
+	w := httptest.NewRecorder()
+	h.ServeHTTP(w, r)
+	if w.Code != http.StatusConflict || !strings.Contains(w.Body.String(), "database_restart_required") {
+		t.Fatalf("status=%d body=%s", w.Code, w.Body.String())
+	}
+}
 
 func testHandler(t *testing.T, provider string) *Handler {
 	t.Helper()

@@ -41,6 +41,7 @@ type Config struct {
 	DatabaseConnectTimeout  time.Duration
 	DatabaseConnMaxLifetime time.Duration
 	DatabaseExplicit        bool
+	DatabaseConfigured      bool
 }
 
 func Defaults() Config {
@@ -289,6 +290,7 @@ func FromOS(args []string) (Config, error) {
 		cfg.DatabaseMaxIdle = stored.MaxIdle
 		cfg.DatabaseConnectTimeout = stored.ConnectTimeout
 		cfg.DatabaseConnMaxLifetime = stored.ConnMaxLifetime
+		cfg.DatabaseConfigured = true
 	}
 	return cfg, cfg.Validate()
 }

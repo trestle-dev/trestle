@@ -50,4 +50,15 @@ for (const file of scripts) {
     throw new Error(`duplicate route renderers in ${path.relative(root, file)}:\n${duplicates.map(([binding, count]) => `${count}x ${binding}`).join("\n")}`);
   }
 }
+
+const appCSS = await readFile(path.join(root, "assets/css/style.css"), "utf8");
+const appJS = await readFile(path.join(root, "assets/js/script.js"), "utf8");
+for (const contract of [
+  [appCSS, "#administrator-fields[hidden]", "administrator hidden-state CSS"],
+  [appCSS, "#postgres-configuration[hidden]", "PostgreSQL hidden-state CSS"],
+  [appJS, 'selectedDatabase()==="postgres"', "PostgreSQL setup selection"],
+  [appJS, "Test and save the PostgreSQL connection", "database selection submit guard"],
+]) {
+  if (!contract[0].includes(contract[1])) throw new Error(`missing ${contract[2]}`);
+}
 console.log(`checked ${html.length} HTML pages and ${files.length} files`);

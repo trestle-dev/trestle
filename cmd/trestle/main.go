@@ -127,6 +127,16 @@ func main() {
 		logger.Warn("using development static override", "directory", cfg.StaticDir)
 	}
 	admin := adminauth.New(database.DB(), string(database.Provider()))
+	admin.SetSetupGuard(func(context.Context) error {
+		stored, found, err := config.ReadDatabaseBootstrap(cfg.DataDir)
+		if err != nil {
+			return err
+		}
+		if found && stored.Provider != string(database.Provider()) {
+			return errors.New("configured database is pending restart")
+		}
+		return nil
+	})
 	collectionAdmin := collections.New(database.DB(), admin)
 	credentials := identities.New(database.DB(), admin)
 	recordAPI := records.New(database.DB(), admin, credentials)
@@ -167,7 +177,7 @@ func main() {
 	apiRoutes.Handle("/api/v1/openapi.json", apiDocs)
 	apiRoutes.Handle("/api/v1/capabilities", apiDocs)
 	adminRoutes := http.NewServeMux()
-	databaseSetup := databasesetup.New(admin, databasesetup.Options{DataDir: cfg.DataDir, Current: database.Provider(), Explicit: cfg.DatabaseExplicit, MaxOpen: cfg.DatabaseMaxOpen, MaxIdle: cfg.DatabaseMaxIdle, ConnectTimeout: cfg.DatabaseConnectTimeout, ConnMaxLifetime: cfg.DatabaseConnMaxLifetime})
+	databaseSetup := databasesetup.New(admin, databasesetup.Options{DataDir: cfg.DataDir, Current: database.Provider(), Explicit: cfg.DatabaseExplicit || cfg.DatabaseConfigured, MaxOpen: cfg.DatabaseMaxOpen, MaxIdle: cfg.DatabaseMaxIdle, ConnectTimeout: cfg.DatabaseConnectTimeout, ConnMaxLifetime: cfg.DatabaseConnMaxLifetime})
 	adminRoutes.Handle("/admin/v1/database/setup", databaseSetup)
 	adminRoutes.Handle("/admin/v1/collections", collectionAdmin)
 	adminRoutes.Handle("/admin/v1/collections/", collectionAdmin)
