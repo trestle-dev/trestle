@@ -51,8 +51,24 @@ jobs:
         shell: bash
         run: |
           set -eu
-          for target in linux/amd64 linux/arm64 darwin/amd64 darwin/arm64 windows/amd64 windows/arm64; do
-            GOOS=${target%/*} GOARCH=${target#*/} go build -o /tmp/trestle-${GOOS}-${GOARCH} ./cmd/trestle
+
+          for target in \
+            linux/amd64 linux/arm64 \
+            darwin/amd64 darwin/arm64 \
+            windows/amd64 windows/arm64
+          do
+            target_goos=${target%/*}
+            target_goarch=${target#*/}
+
+            suffix=
+            if [ "$target_goos" = "windows" ]; then
+              suffix=.exe
+            fi
+
+            GOOS="$target_goos" GOARCH="$target_goarch" \
+              go build \
+                -o "/tmp/trestle-${target_goos}-${target_goarch}${suffix}" \
+                ./cmd/trestle
           done
       - name: Release packaging and installer syntax
         run: |
