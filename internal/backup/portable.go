@@ -35,20 +35,23 @@ type PortableBundle struct {
 }
 
 type PortableCollection struct {
-	ID      string           `json:"id"`
-	Name    string           `json:"name"`
-	Kind    string           `json:"kind"`
-	Fields  []PortableField  `json:"fields"`
-	Records []PortableRecord `json:"records"`
+	ID        string           `json:"id"`
+	Name      string           `json:"name"`
+	Kind      string           `json:"kind"`
+	CreatedAt string           `json:"createdAt"`
+	UpdatedAt string           `json:"updatedAt"`
+	Fields    []PortableField  `json:"fields"`
+	Records   []PortableRecord `json:"records"`
 }
 
 type PortableField struct {
-	ID       string          `json:"id"`
-	Name     string          `json:"name"`
-	Type     string          `json:"type"`
-	Required bool            `json:"required"`
-	Unique   bool            `json:"unique"`
-	Default  json.RawMessage `json:"default,omitempty"`
+	ID        string          `json:"id"`
+	Name      string          `json:"name"`
+	Type      string          `json:"type"`
+	Required  bool            `json:"required"`
+	Unique    bool            `json:"unique"`
+	CreatedAt string          `json:"createdAt,omitempty"`
+	Default   json.RawMessage `json:"default,omitempty"`
 }
 
 type PortableRecord struct {
@@ -181,8 +184,8 @@ func Export(ctx context.Context, db store.Executor, dialect store.Dialect, w io.
 }
 
 func exportCollection(ctx context.Context, tx store.Transaction, dialect store.Dialect, id, name, kind, createdAt, updatedAt string) (PortableCollection, error) {
-	pc := PortableCollection{ID: id, Name: name, Kind: kind}
-	fieldRows, err := tx.QueryContext(ctx, "SELECT id,name,type,required,is_unique,default_json FROM _trestle_fields WHERE collection_id=? ORDER BY position", id)
+	pc := PortableCollection{ID: id, Name: name, Kind: kind, CreatedAt: createdAt, UpdatedAt: updatedAt}
+	fieldRows, err := tx.QueryContext(ctx, "SELECT id,name,type,required,is_unique,created_at,default_json FROM _trestle_fields WHERE collection_id=? ORDER BY position", id)
 	if err != nil {
 		return pc, err
 	}
@@ -191,13 +194,14 @@ func exportCollection(ctx context.Context, tx store.Transaction, dialect store.D
 		column           string
 		name, typ        string
 		required, unique bool
+		createdAt        string
 		def              sql.NullString
 	}
 	var fields []fieldMeta
 	for fieldRows.Next() {
 		var f fieldMeta
 		var reqRaw, uniqRaw any
-		if err := fieldRows.Scan(&f.fieldID, &f.name, &f.typ, &reqRaw, &uniqRaw, &f.def); err != nil {
+		if err := fieldRows.Scan(&f.fieldID, &f.name, &f.typ, &reqRaw, &uniqRaw, &f.createdAt, &f.def); err != nil {
 			fieldRows.Close()
 			return pc, err
 		}
@@ -210,7 +214,7 @@ func exportCollection(ctx context.Context, tx store.Transaction, dialect store.D
 		return pc, err
 	}
 	for _, f := range fields {
-		pf := PortableField{ID: f.fieldID, Name: f.name, Type: f.typ, Required: f.required, Unique: f.unique}
+		pf := PortableField{ID: f.fieldID, Name: f.name, Type: f.typ, Required: f.required, Unique: f.unique, CreatedAt: f.createdAt}
 		if f.def.Valid {
 			pf.Default = json.RawMessage(f.def.String)
 		}
@@ -398,7 +402,15 @@ func importCollection(ctx context.Context, tx store.Transaction, dialect store.D
 	if id == "" {
 		id = "col_import_" + token(12)
 	}
-	if _, err := tx.ExecContext(ctx, "INSERT INTO _trestle_collections(id,name,kind,created_at,updated_at) VALUES(?,?,?,?,?)", id, pc.Name, pc.Kind, now, now); err != nil {
+	createdAt := pc.CreatedAt
+	updatedAt := pc.UpdatedAt
+	if createdAt == "" {
+		createdAt = now
+	}
+	if updatedAt == "" {
+		updatedAt = now
+	}
+	if _, err := tx.ExecContext(ctx, "INSERT INTO _trestle_collections(id,name,kind,created_at,updated_at) VALUES(?,?,?,?,?)", id, pc.Name, pc.Kind, createdAt, updatedAt); err != nil {
 		return err
 	}
 	fieldIDs := make([]string, len(pc.Fields))
@@ -412,7 +424,11 @@ func importCollection(ctx context.Context, tx store.Transaction, dialect store.D
 		if len(pf.Default) > 0 {
 			def = string(pf.Default)
 		}
-		if _, err := tx.ExecContext(ctx, "INSERT INTO _trestle_fields(id,collection_id,position,name,type,required,is_unique,default_json,created_at) VALUES(?,?,?,?,?,?,?,?,?)", fid, id, i, pf.Name, pf.Type, dialect.Boolean(pf.Required), dialect.Boolean(pf.Unique), def, now); err != nil {
+		fieldCreatedAt := pf.CreatedAt
+		if fieldCreatedAt == "" {
+			fieldCreatedAt = now
+		}
+		if _, err := tx.ExecContext(ctx, "INSERT INTO _trestle_fields(id,collection_id,position,name,type,required,is_unique,default_json,created_at) VALUES(?,?,?,?,?,?,?,?,?)", fid, id, i, pf.Name, pf.Type, dialect.Boolean(pf.Required), dialect.Boolean(pf.Unique), def, fieldCreatedAt); err != nil {
 			return err
 		}
 	}

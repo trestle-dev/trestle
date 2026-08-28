@@ -547,3 +547,59 @@ func (s *Store) Dialect() Dialect               { return s.dialect }
 func (s *Store) Diagnostics() Diagnostics {
 	return Diagnostics{Provider: s.provider, SchemaVersion: s.schemaVersion, MaxOpen: s.db.Stats().MaxOpenConnections}
 }
+
+// ValidateMigrationHistory verifies the complete migration history of an open
+// database without running any migration, metadata repair or write, and returns
+// the applied version. It requires every version 1..CurrentVersion to exist
+// exactly once with an authoritative name, and rejects future, gapped or
+// malformed history. Offline tooling uses it so a source is never written.
+func ValidateMigrationHistory(ctx context.Context, db Executor) (int, error) {
+	dialect := db.Dialect()
+	var exists bool
+	if dialect.Provider() == Postgres {
+		if err := db.QueryRowContext(ctx, "SELECT to_regclass('_trestle_schema_migrations') IS NOT NULL").Scan(&exists); err != nil {
+			return 0, fmt.Errorf("inspect migration history: %w", err)
+		}
+	} else {
+		var count int
+		if err := db.QueryRowContext(ctx, "SELECT count(*) FROM sqlite_master WHERE type='table' AND name='_trestle_schema_migrations'").Scan(&count); err != nil {
+			return 0, fmt.Errorf("inspect migration history: %w", err)
+		}
+		exists = count > 0
+	}
+	if !exists {
+		return 0, errors.New("database has no migration history")
+	}
+	rows, err := db.QueryContext(ctx, "SELECT version,name FROM _trestle_schema_migrations ORDER BY version")
+	if err != nil {
+		return 0, fmt.Errorf("read migration history: %w", err)
+	}
+	defer rows.Close()
+	expected := 1
+	applied := 0
+	for rows.Next() {
+		var version int
+		var name string
+		if err := rows.Scan(&version, &name); err != nil {
+			return 0, fmt.Errorf("read migration history: %w", err)
+		}
+		if version > CurrentVersion {
+			return 0, fmt.Errorf("database schema version %d is newer than supported version %d", version, CurrentVersion)
+		}
+		if version != expected {
+			return 0, fmt.Errorf("database migration history is not contiguous (expected version %d, found %d)", expected, version)
+		}
+		if name != migrations[version-1].name {
+			return 0, fmt.Errorf("database migration %d has an unexpected name", version)
+		}
+		applied = version
+		expected++
+	}
+	if err := rows.Err(); err != nil {
+		return 0, fmt.Errorf("read migration history: %w", err)
+	}
+	if applied != CurrentVersion {
+		return 0, fmt.Errorf("database migration history is incomplete (applied %d of %d)", applied, CurrentVersion)
+	}
+	return applied, nil
+}

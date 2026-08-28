@@ -47,12 +47,12 @@ func main() {
 		provider := set.String("provider", "sqlite", "restore destination provider: sqlite or postgres")
 		databaseURL := set.String("database-url", "", "PostgreSQL destination URL")
 		if err := set.Parse(os.Args[2:]); err != nil || *archive == "" {
-			fmt.Fprintln(os.Stderr, "usage: trestle restore --backup ARCHIVE [--data-dir DIR] [--provider sqlite|postgres] [--database-url URL]")
+			fmt.Fprintln(os.Stderr, "usage: trestle restore --backup ARCHIVE [--data-dir DIR] [--provider sqlite|postgres] [--database-url URL]\n  PostgreSQL destinations must already be initialized at the current schema and empty")
 			os.Exit(2)
 		}
 		restoreProvider, err := store.ParseProvider(*provider)
 		if err != nil || (restoreProvider == store.SQLite && *dataDir == "") || (restoreProvider == store.Postgres && *databaseURL == "") {
-			fmt.Fprintln(os.Stderr, "usage: trestle restore --backup ARCHIVE [--data-dir DIR] [--provider sqlite|postgres] [--database-url URL]")
+			fmt.Fprintln(os.Stderr, "usage: trestle restore --backup ARCHIVE [--data-dir DIR] [--provider sqlite|postgres] [--database-url URL]\n  PostgreSQL destinations must already be initialized at the current schema and empty")
 			os.Exit(2)
 		}
 		if err := backup.Restore(context.Background(), *archive, *dataDir, backup.RestoreOptions{Provider: restoreProvider, URL: *databaseURL}); err != nil {

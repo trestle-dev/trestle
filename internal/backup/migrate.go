@@ -45,18 +45,17 @@ type MigrateReport struct {
 	WritesPerformed bool             `json:"writesPerformed"`
 }
 
-// readSourceVersion reads the validated migration history maximum without
-// running any migration or metadata repair, so the source is never written.
+// readSourceVersion validates the complete migration history through the
+// store's read-only validator (every version 1..CurrentVersion present exactly
+// once with an authoritative name, future/gapped/malformed history rejected)
+// without running any migration or metadata repair, so the source is never
+// written.
 func readSourceVersion(ctx context.Context, executor store.Executor) (int, error) {
-	var version sql.NullInt64
-	err := executor.QueryRowContext(ctx, "SELECT MAX(version) FROM _trestle_schema_migrations").Scan(&version)
+	version, err := store.ValidateMigrationHistory(ctx, executor)
 	if err != nil {
-		return 0, errors.New("source has no migration history; upgrade it first so the migration never writes to it")
+		return 0, err
 	}
-	if !version.Valid {
-		return 0, errors.New("source has no migration history; upgrade it first so the migration never writes to it")
-	}
-	return int(version.Int64), nil
+	return version, nil
 }
 
 // openSource opens the source through a genuinely non-mutating path: SQLite is
@@ -257,6 +256,7 @@ func canonicalSystem(s PortableSystem) map[string][]map[string]any {
 		"admins": s.Admins, "appUsers": s.AppUsers, "credentials": s.Credentials,
 		"collectionRules": s.CollectionRules, "events": s.Events, "audit": s.Audit,
 		"jobs": s.Jobs, "functions": s.Functions, "files": s.Files, "systemMeta": s.SystemMeta,
+		"webhooks": s.Webhooks, "adminSessions": s.AdminSessions, "appSessions": s.AppSessions,
 	} {
 		cleaned := make([]map[string]any, 0, len(rows))
 		for _, row := range rows {

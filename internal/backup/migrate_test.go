@@ -233,7 +233,7 @@ func TestStaleSourceRejectedWithoutWrites(t *testing.T) {
 		TargetProvider: "postgres", TargetURL: storetest.PostgresURL(t), TargetDir: t.TempDir(),
 		Confirm: true,
 	})
-	if err == nil || !strings.Contains(err.Error(), "source") {
+	if err == nil || (!strings.Contains(err.Error(), "source") && !strings.Contains(err.Error(), "history")) {
 		t.Fatalf("stale source error=%v", err)
 	}
 	after, _ := os.ReadFile(sourcePath)

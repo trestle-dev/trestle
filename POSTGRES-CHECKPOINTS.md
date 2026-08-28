@@ -1162,6 +1162,67 @@ Known limits: PostgreSQL 16 CI has no reviewed green run, so PostgreSQL stays
   experimental and PG09-PG11 remain pending final acceptance
 ```
 
+## PG11R2 - Repair: canonical digest coverage, timestamps, restore preflight/contract, history validation
+
+Status: complete
+
+Second narrow repair holding PG10/PG11. The PG08-PG11 and PG11R commits are
+unchanged.
+
+- **Canonical digest covers webhooks and sessions.** `canonicalSystem` now
+  iterates webhooks, administrator sessions and application sessions alongside
+  the other tables, excluding only the deliberately transformed fields
+  (webhook ciphertext/enabled, session revocation/replacement). Negative tests
+  prove mutating webhook URL/topics, administrator session identity/owner or
+  application session identity/owner changes the digest, while changing only
+  the normalized policy fields does not.
+- **Collection and field timestamps preserved.** `PortableCollection` carries
+  `createdAt`/`updatedAt` and `PortableField` carries `createdAt`, populated on
+  export and preserved on import (falling back to import time only when absent
+  in an older archive). Tests assert exact source/destination equality.
+- **Shared hostile-archive preflight.** One `preflightArchive` validates
+  manifest presence/format, future schema, safe names, symlink, duplicate,
+  unexpected entries and the expansion boundary before either restore provider
+  opens or modifies its destination. Provider-parameterized hostile tests pass
+  for the PostgreSQL restore path.
+- **PostgreSQL restore contract.** A PostgreSQL restore requires a destination
+  already initialized at the current Trestle schema and logically empty,
+  validated read-only before the transactional import. A failed restore leaves
+  that pre-existing initialized destination semantically unchanged; a raw or
+  non-empty destination is refused.
+- **Complete migration-history validation.** `store.ValidateMigrationHistory`
+  validates every version 1..CurrentVersion present exactly once with an
+  authoritative name, rejecting future, gapped or malformed history, and is
+  used by the read-only source path. Tests cover correct, gapped, future and
+  misnamed history on both providers with zero source writes.
+- **PostgreSQL source non-mutation.** `TestPostgresMigrationSourceNonMutation`
+  proves a PostgreSQL source's canonical content is byte-for-byte identical
+  after dry run and after a real migration.
+- **Documentation sweep.** database-architecture, postgresql and
+  database-support now state the honest position: the PG04-PG11 parity campaign
+  is implemented and exercised on PostgreSQL 18.6, PostgreSQL remains
+  experimental because the PostgreSQL 16 CI gate has no reviewed green run, and
+  the restore page/CLI document the pre-initialized-destination contract.
+
+Completion record:
+
+```text
+Status: complete (repair)
+Application commit: recorded by this commit
+Website output commit: de02d5d
+Website source commit: 3b686ac
+SQLite evidence: digest sensitivity, timestamps, hostile preflight, history
+  validation and restore tests pass
+PostgreSQL evidence: real postgres 18.6 runs the same tests plus the
+  read-only-role-free non-mutation and pre-initialized-destination restore
+Findings repaired: canonical digest omitted webhooks/sessions; collection and
+  field timestamps were regenerated; PostgreSQL restore skipped archive
+  validation and could initialize a raw target; source history checked only
+  MAX(version); PostgreSQL source non-mutation was untested; stale docs
+Known limits: PostgreSQL 16 CI has no reviewed green run, so PostgreSQL stays
+  experimental and PG10/PG11 await final acceptance
+```
+
 ## Campaign-wide retained questions
 
 Resolve these in PG00/PG01 rather than allowing implementations to choose them

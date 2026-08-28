@@ -8,6 +8,7 @@ import (
 	"net/http/httptest"
 	"os"
 	"path/filepath"
+	"strconv"
 	"strings"
 	"testing"
 	"time"
@@ -337,6 +338,10 @@ func TestRestorePortableArchiveToPostgres(t *testing.T) {
 	}
 	fixtureStore.Close()
 	storetest.ResetPostgres(t, url)
+	// Pre-initialize the empty destination at the current schema (start once),
+	// then leave it empty.
+	init := openStoreAt(t, t.TempDir(), "postgres", url)
+	init.Close()
 	t.Run("restore-to-postgres", func(t *testing.T) {
 		archive := filepath.Join(t.TempDir(), "pg-backup.zip")
 		var buffer bytes.Buffer
@@ -347,7 +352,6 @@ func TestRestorePortableArchiveToPostgres(t *testing.T) {
 		pw.Write(portable.Bytes())
 		zw.Close()
 		os.WriteFile(archive, buffer.Bytes(), 0o600)
-		storetest.ResetPostgres(t, url)
 		if err := Restore(context.Background(), archive, "", RestoreOptions{Provider: store.Postgres, URL: url}); err != nil {
 			t.Fatal(err)
 		}
@@ -362,4 +366,123 @@ func TestRestorePortableArchiveToPostgres(t *testing.T) {
 			t.Fatalf("webhook enabled after restore: %v err=%v", enabled, err)
 		}
 	})
+}
+
+func buildArchive(t *testing.T, entries map[string][]byte) string {
+	t.Helper()
+	archive := filepath.Join(t.TempDir(), "hostile.zip")
+	var buffer bytes.Buffer
+	zw := zip.NewWriter(&buffer)
+	for name, data := range entries {
+		w, _ := zw.Create(name)
+		w.Write(data)
+	}
+	zw.Close()
+	os.WriteFile(archive, buffer.Bytes(), 0o600)
+	return archive
+}
+
+func TestPostgresRestorePreflightsHostileArchives(t *testing.T) {
+	url := storetest.PostgresURL(t)
+	release := storetest.Lock(t, url)
+	defer release()
+	validManifest := []byte(`{"format":"trestle-backup-v1","schemaVersion":13}`)
+	futureManifest := []byte(`{"format":"trestle-backup-v1","schemaVersion":999}`)
+	cases := []struct {
+		name    string
+		entries map[string][]byte
+		want    string
+	}{
+		{"missing manifest", map[string][]byte{"portable.json": []byte("{}")}, "manifest"},
+		{"future schema", map[string][]byte{"manifest.json": futureManifest, "portable.json": []byte("{}")}, "newer"},
+		{"traversal", map[string][]byte{"manifest.json": validManifest, "../escape": []byte("x"), "portable.json": []byte("{}")}, "unsafe archive path"},
+		{"unexpected entry", map[string][]byte{"manifest.json": validManifest, "portable.json": []byte("{}"), "evil.txt": []byte("x")}, "unexpected"},
+	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			storetest.ResetPostgres(t, url)
+			init := openStoreAt(t, t.TempDir(), "postgres", url)
+			init.Close()
+			archive := buildArchive(t, tc.entries)
+			err := Restore(context.Background(), archive, "", RestoreOptions{Provider: store.Postgres, URL: url})
+			if err == nil || !strings.Contains(err.Error(), tc.want) {
+				t.Fatalf("error=%v, want %q", err, tc.want)
+			}
+		})
+	}
+	// Symlink and duplicate entries are rejected too.
+	t.Run("symlink", func(t *testing.T) {
+		storetest.ResetPostgres(t, url)
+		init := openStoreAt(t, t.TempDir(), "postgres", url)
+		init.Close()
+		archive := filepath.Join(t.TempDir(), "symlink.zip")
+		var buffer bytes.Buffer
+		zw := zip.NewWriter(&buffer)
+		mw, _ := zw.Create("manifest.json")
+		mw.Write(validManifest)
+		hdr := &zip.FileHeader{Name: "portable.json"}
+		hdr.SetMode(os.ModeSymlink | 0o777)
+		pw, _ := zw.CreateHeader(hdr)
+		pw.Write([]byte("{}"))
+		zw.Close()
+		os.WriteFile(archive, buffer.Bytes(), 0o600)
+		if err := Restore(context.Background(), archive, "", RestoreOptions{Provider: store.Postgres, URL: url}); err == nil || !strings.Contains(err.Error(), "symlink") {
+			t.Fatalf("error=%v, want symlink", err)
+		}
+	})
+	t.Run("duplicate", func(t *testing.T) {
+		storetest.ResetPostgres(t, url)
+		init := openStoreAt(t, t.TempDir(), "postgres", url)
+		init.Close()
+		archive := filepath.Join(t.TempDir(), "dup.zip")
+		var buffer bytes.Buffer
+		zw := zip.NewWriter(&buffer)
+		for i := 0; i < 2; i++ {
+			w, _ := zw.Create("portable.json")
+			w.Write([]byte("{}"))
+		}
+		zw.Close()
+		os.WriteFile(archive, buffer.Bytes(), 0o600)
+		if err := Restore(context.Background(), archive, "", RestoreOptions{Provider: store.Postgres, URL: url}); err == nil || !strings.Contains(err.Error(), "duplicate") {
+			t.Fatalf("error=%v, want duplicate", err)
+		}
+	})
+}
+
+func TestPostgresRestoreRequiresEmptyInitializedDestination(t *testing.T) {
+	url := storetest.PostgresURL(t)
+	release := storetest.Lock(t, url)
+	defer release()
+	portable := buildPortableFixture(t, "sqlite")
+	// Raw destination: not initialized -> refused.
+	storetest.ResetPostgres(t, url)
+	archive := filepath.Join(t.TempDir(), "pg.zip")
+	writeArchive(t, archive, Manifest{Format: "trestle-backup-v1", SchemaVersion: 13}, map[string][]byte{"portable.json": []byte(portable)})
+	if err := Restore(context.Background(), archive, "", RestoreOptions{Provider: store.Postgres, URL: url}); err == nil || !strings.Contains(err.Error(), "initialized") {
+		t.Fatalf("raw destination error=%v", err)
+	}
+	// Initialized but non-empty destination: refused, unchanged.
+	init := openStoreAt(t, t.TempDir(), "postgres", url)
+	init.DB().Exec("INSERT INTO _trestle_admins(id,email,password_hash,created_at) VALUES('adm_occ','occ@example.com','h','2026-01-01T00:00:00Z')")
+	init.Close()
+	before := digestPostgresTables(t, url)
+	if err := Restore(context.Background(), archive, "", RestoreOptions{Provider: store.Postgres, URL: url}); err == nil || !strings.Contains(err.Error(), "not empty") {
+		t.Fatalf("non-empty destination error=%v", err)
+	}
+	after := digestPostgresTables(t, url)
+	if before != after {
+		t.Fatal("failed restore changed the non-empty destination")
+	}
+}
+
+func digestPostgresTables(t *testing.T, url string) string {
+	t.Helper()
+	db, err := store.OpenWith(context.Background(), store.Options{DataDir: t.TempDir(), Provider: store.Postgres, URL: url, MaxOpen: 2, MaxIdle: 1})
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer db.Close()
+	var admins int
+	db.DB().QueryRow("SELECT count(*) FROM _trestle_admins").Scan(&admins)
+	return strconv.Itoa(admins)
 }
