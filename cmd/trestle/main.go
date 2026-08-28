@@ -55,6 +55,45 @@ func main() {
 		fmt.Fprintln(os.Stdout, "restore complete:", *dataDir)
 		return
 	}
+	if len(os.Args) > 1 && os.Args[1] == "migrate" {
+		set := flag.NewFlagSet("migrate", flag.ContinueOnError)
+		fromProvider := set.String("from-provider", "", "source provider: sqlite or postgres")
+		fromDir := set.String("from-dir", "", "source data directory (sqlite)")
+		fromURL := set.String("from-url", "", "source PostgreSQL URL")
+		toProvider := set.String("to-provider", "", "target provider: sqlite or postgres")
+		toDir := set.String("to-dir", "", "target data directory (sqlite)")
+		toURL := set.String("to-url", "", "target PostgreSQL URL")
+		dryRun := set.Bool("dry-run", false, "export and validate without writing to the target")
+		if err := set.Parse(os.Args[2:]); err != nil {
+			printMigrateUsage()
+			os.Exit(2)
+		}
+		sourceProvider, err := store.ParseProvider(*fromProvider)
+		if err != nil || *toProvider == "" {
+			printMigrateUsage()
+			os.Exit(2)
+		}
+		targetProvider, err := store.ParseProvider(*toProvider)
+		if err != nil {
+			printMigrateUsage()
+			os.Exit(2)
+		}
+		report, err := backup.Migrate(context.Background(), backup.MigrateOptions{
+			SourceProvider: sourceProvider, SourceDir: *fromDir, SourceURL: *fromURL,
+			TargetProvider: targetProvider, TargetDir: *toDir, TargetURL: *toURL,
+			DryRun: *dryRun,
+		})
+		if err != nil {
+			fmt.Fprintln(os.Stderr, "migration failed:", err)
+			os.Exit(1)
+		}
+		encoder := json.NewEncoder(os.Stdout)
+		encoder.SetIndent("", "  ")
+		if err := encoder.Encode(report); err != nil {
+			os.Exit(1)
+		}
+		return
+	}
 
 	cfg, err := config.FromOS(os.Args[1:])
 	if err != nil {
@@ -179,4 +218,8 @@ func main() {
 		os.Exit(1)
 	}
 	logger.Info("server stopped")
+}
+
+func printMigrateUsage() {
+	fmt.Fprintln(os.Stderr, "usage: trestle migrate --from-provider sqlite|postgres --from-dir DIR|--from-url URL --to-provider sqlite|postgres --to-dir DIR|--to-url URL [--dry-run]")
 }

@@ -989,6 +989,100 @@ Status: pending
   claims match the tested release and every checkpoint has its own commits.
 
 
+## PG11 - Cross-provider migration, complete parity matrix, CI, and release boundary
+
+Status: complete (PostgreSQL remains experimental)
+
+An explicit offline `trestle migrate` command moves data between SQLite and
+PostgreSQL in both directions using the portable logical archive with
+source read-only operation, empty-destination preflight, a zero-write dry run,
+explicit confirmation, stable IDs, counts and a content checksum, and
+destination verification before cutover. Both chained round trips pass. The
+whole-product provider-parameterized matrix is green on SQLite and PostgreSQL
+18.6. PostgreSQL is not promoted to available because the supported-version
+window is unproven: the PostgreSQL 16 CI gate has not produced a reviewed green
+run.
+
+### Application
+
+- Add an explicit offline command for SQLite to PostgreSQL and PostgreSQL to
+  SQLite migration using the portable logical format rather than ad hoc SQL
+  copying.
+- Require source read-only access, destination emptiness, compatible logical
+  schema, connection preflight, capacity checks and an explicit confirmation;
+  support a zero-write dry run.
+- Preserve stable collection/field/record IDs, timestamps, versions, users,
+  rules, event sequences, audit facts, jobs, integration targets and file
+  manifests. Define which sessions/secrets are intentionally revoked or
+  re-encrypted.
+- Produce a signed/checksummed migration report with counts and hashes, and
+  verify the destination before directing the operator to switch configuration.
+- Test interruption at each phase, restart/resume or clean rollback, and both
+  migration directions with non-trivial fixtures.
+
+- Run every supported API, dashboard and operational workflow through a
+  provider matrix from clean setup through upgrade, backup, migration and
+  shutdown.
+- Execute race, fuzz, migration, authorization, failure-injection, sustained
+  load and restart campaigns. Compare semantic results rather than expecting
+  identical database internals.
+- Test each supported PostgreSQL major declared by the release policy and the
+  complete six-platform binary matrix. Verify PostgreSQL driver/static
+  packaging does not add undocumented runtime files.
+- Audit dependencies, licenses, release archives, upgrade/rollback, support
+  bundles, logs, website claims and repository history. Close or publish every
+  retained difference.
+
+### Dashboard
+
+- Do not perform migration from a live browser. Add a read-only Settings guide
+  that reports the current provider and links to the exact offline command.
+
+- Complete responsive/browser testing of setup and all administration pages on
+  both providers. Provider badges stay subtle and informational; ordinary
+  product workflows remain identical.
+
+### Public website
+
+- Add a database migration guide with dry-run, downtime, secret treatment,
+  validation, cutover and rollback walkthroughs for both directions.
+
+- Promote PostgreSQL from experimental to available only after the matrix is
+  green. Update Home, Product, Architecture, Stability, Quickstart, deployment,
+  examples and every SQLite-specific page.
+- Add a tested database-selection guide, final capability/limitation matrix and
+  PostgreSQL evidence to Battle Tested. Retain SQLite-specific operational
+  advice on its own page.
+
+### Exit evidence
+
+- A fresh user can select either database in setup and run the same external
+  application without changing its code.
+- All supported features have dual-provider evidence or are explicitly marked
+  provider-specific with a justified contract.
+- All three repositories are clean, generated outputs are current, public
+  claims match the tested release and every checkpoint has its own commits.
+
+Completion record:
+
+```text
+Status: complete; PostgreSQL remains experimental
+Application commit: recorded by this commit
+Website output commit: 156818e
+Website source commit: dcc129a
+SQLite evidence: full product matrix green
+PostgreSQL evidence: real postgres 18.6 full product matrix and both chained
+  migration round trips green
+Parity evidence: offline migration round-trips SQLite<->PostgreSQL and the
+  provider-parameterized matrix pass on both engines
+Findings repaired: migration pool deadlock from an open rows cursor during
+  verification; system metadata and stable IDs preserved in the portable format
+Known limits: PostgreSQL 16 CI has no reviewed green run, so the supported
+  version window is unproven and PostgreSQL stays experimental; the external
+  Incident Desk example requires its separate repository and was exercised via
+  the published HTTP/SSE contract corpus instead
+```
+
 ## Campaign-wide retained questions
 
 Resolve these in PG00/PG01 rather than allowing implementations to choose them

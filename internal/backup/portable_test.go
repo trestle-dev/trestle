@@ -35,10 +35,10 @@ func adminCookieCSRF(t *testing.T, admin *adminauth.Handler) (*httptest.Response
 	return w, out.CSRF
 }
 
-func buildPortableFixture(t *testing.T, provider string) string {
+func populatePortableFixture(t *testing.T, s *store.Store) {
 	t.Helper()
-	s := storetest.Open(t, provider)
-	admin := adminauth.New(s.DB(), string(s.Provider()))
+	provider := string(s.Provider())
+	admin := adminauth.New(s.DB(), provider)
 	setup, csrf := adminCookieCSRF(t, admin)
 
 	schemas := collections.New(s.DB(), admin)
@@ -114,6 +114,12 @@ func buildPortableFixture(t *testing.T, provider string) string {
 		t.Fatal(err)
 	}
 
+}
+
+func buildPortableFixture(t *testing.T, provider string) string {
+	t.Helper()
+	s := storetest.Open(t, provider)
+	populatePortableFixture(t, s)
 	var buf bytes.Buffer
 	if err := Export(context.Background(), s.DB(), s.Dialect(), &buf); err != nil {
 		t.Fatal(err)
