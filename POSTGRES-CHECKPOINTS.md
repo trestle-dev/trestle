@@ -761,6 +761,64 @@ Status: pending
 - Contention tests show each claimed job is executed once per successful claim
   and expired leases recover without provider-specific API behavior.
 
+## PG09 - Events, audit, jobs, webhooks, and functions
+
+Status: complete
+
+Durable event sequencing, gap-tolerant replay, authorized visibility, audit
+facts with redaction, operational counts and the durable job engine now run the
+same provider-parameterized suites on SQLite and PostgreSQL. Job claiming is
+deliberate per provider: SQLite serializes, PostgreSQL uses FOR UPDATE SKIP
+LOCKED, and eight workers claim 64 jobs with exactly one execution each. No
+event, audit fact, webhook job or Lambda job becomes visible for a rolled-back
+mutation.
+
+### Application
+
+- Port durable event sequencing, replay/retention, audit filtering/export,
+  operational counts, jobs, webhook targets/deliveries and Lambda targets.
+- Implement PostgreSQL event sequence allocation without gaps being treated as
+  missing committed events.
+- Design provider-specific atomic job claiming. PostgreSQL uses row locking and
+  skip-locked behavior; SQLite retains its serialized claim.
+- Test record transaction coupling: no SSE event, audit fact or automation job
+  becomes visible for a rolled-back record mutation.
+
+### Dashboard
+
+- Exercise Realtime, Audit, Jobs and Integrations pages against both providers.
+
+### Public website
+
+- Expand Realtime, Audit, Jobs, Webhooks and Functions with provider-neutral
+  examples plus honest concurrency/ordering notes.
+
+### Exit evidence
+
+- Replay order, authorized visibility and job terminal states satisfy the same
+  contract on both providers.
+- Contention tests show each claimed job is executed once per successful claim
+  and expired leases recover without provider-specific API behavior.
+
+Completion record:
+
+```text
+Status: complete
+Application commit: recorded by this commit
+Website output commit: b221f8e
+Website source commit: 9aa0807
+SQLite evidence: events, audit, jobs and rollback-coupling suites pass
+PostgreSQL evidence: real postgres 18.6 runs the same suites; SKIP LOCKED
+  claiming gives exactly one execution per job across eight workers
+Parity evidence: numeric event gaps are not missing events; terminal job states
+  and rolled-back visibility are identical on both providers
+Findings repaired: job claiming was a blind SELECT+UPDATE on both providers;
+  PostgreSQL now claims with FOR UPDATE SKIP LOCKED
+Known limits: webhook delivery targets public HTTPS endpoints by design (SSRF
+  guard); backup/restore and migration remain PG10-PG11; PostgreSQL 16 CI not
+  yet reviewed green
+```
+
 ## PG10 - Backup, restore, operations, and provider recovery
 
 Status: pending

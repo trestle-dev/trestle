@@ -76,8 +76,15 @@ func (h *Handler) runOne(ctx context.Context) {
 		return
 	}
 	defer tx.Rollback()
+	claim := "SELECT id,kind,payload_json FROM _trestle_jobs WHERE status='pending' AND available_at<=? ORDER BY available_at,id LIMIT 1"
+	if h.db.Dialect().Provider() == store.Postgres {
+		// PostgreSQL MVCC needs deliberate claiming: lock exactly one pending
+		// row and skip rows already locked by other workers so each job is
+		// claimed by exactly one worker without wasted re-reads.
+		claim += " FOR UPDATE SKIP LOCKED"
+	}
 	var id, kind, payload string
-	err = tx.QueryRowContext(ctx, "SELECT id,kind,payload_json FROM _trestle_jobs WHERE status='pending' AND available_at<=? ORDER BY available_at,id LIMIT 1", now.Format(time.RFC3339Nano)).Scan(&id, &kind, &payload)
+	err = tx.QueryRowContext(ctx, claim, now.Format(time.RFC3339Nano)).Scan(&id, &kind, &payload)
 	if err != nil {
 		return
 	}
