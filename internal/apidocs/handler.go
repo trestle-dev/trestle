@@ -41,18 +41,36 @@ func (h *Handler) schema(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	defer rows.Close()
+	dialect := h.db.Dialect()
 	collections := map[string][]map[string]any{}
 	for rows.Next() {
 		var collection string
 		var name, kind sql.NullString
-		var required, unique sql.NullInt64
-		rows.Scan(&collection, &name, &kind, &required, &unique)
+		var requiredRaw, uniqueRaw any
+		if err := rows.Scan(&collection, &name, &kind, &requiredRaw, &uniqueRaw); err != nil {
+			http.Error(w, "schema unavailable", 500)
+			return
+		}
+		required, err := dialect.DecodeBoolean(requiredRaw)
+		if err != nil {
+			http.Error(w, "schema unavailable", 500)
+			return
+		}
+		unique, err := dialect.DecodeBoolean(uniqueRaw)
+		if err != nil {
+			http.Error(w, "schema unavailable", 500)
+			return
+		}
 		if _, ok := collections[collection]; !ok {
 			collections[collection] = []map[string]any{}
 		}
 		if name.Valid {
-			collections[collection] = append(collections[collection], map[string]any{"name": name.String, "type": kind.String, "required": required.Int64 == 1, "unique": unique.Int64 == 1})
+			collections[collection] = append(collections[collection], map[string]any{"name": name.String, "type": kind.String, "required": required, "unique": unique})
 		}
+	}
+	if err := rows.Err(); err != nil {
+		http.Error(w, "schema unavailable", 500)
+		return
 	}
 	write(w, map[string]any{"collections": collections, "capabilities": capabilities()})
 }
