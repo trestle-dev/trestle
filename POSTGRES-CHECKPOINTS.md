@@ -671,10 +671,14 @@ Known limits: PG08-PG11 remain; PostgreSQL 16 CI not yet reviewed green
 
 ## PG08 - Access rules, scoped identities, and file metadata
 
-The batch plan split records into PG06 and querying into PG07, deferring this
-scope. In the final-batch mapping it is PG08 and must not be lost.
+Status: complete
 
-Status: pending
+Collection rules, owner-row checks, non-leaking denial, administrator
+simulation, scoped identities and file metadata now run the same
+provider-parameterized suites on SQLite and PostgreSQL. The authorization
+abuse matrix and the file lifecycle suite pass unchanged on both providers,
+and database selection does not change scopes, quotas, object keys or
+authorization order.
 
 ### Application
 
@@ -703,6 +707,25 @@ Status: pending
 - The authorization matrix and file lifecycle suite pass unchanged on both
   providers.
 - Database selection does not change access decisions, quotas or object keys.
+
+
+Completion record:
+
+```text
+Status: complete
+Application commit: recorded by this commit
+Website output commit: 1e9ea32
+Website source commit: 48ec3dd
+SQLite evidence: authorization abuse matrix, rules storage/simulation and file
+  lifecycle suites pass
+PostgreSQL evidence: real postgres 18.6 runs the same matrix and file suites
+Parity evidence: row-filtered denial, scope enforcement, quotas, object keys and
+  rule decisions are identical on both providers
+Findings repaired: none beyond test parameterization; no provider SQL diverged
+Known limits: events, automation, backup/restore and migration remain
+  PG09-PG11; PostgreSQL 16 CI not yet reviewed green
+```
+
 
 ## PG09 - Events, audit, jobs, webhooks, and functions
 

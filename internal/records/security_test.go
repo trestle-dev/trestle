@@ -2,7 +2,6 @@ package records
 
 import (
 	"bytes"
-	"context"
 	"encoding/json"
 	"net/http"
 	"net/http/httptest"
@@ -14,7 +13,7 @@ import (
 	"github.com/trestle-dev/trestle/internal/collections"
 	"github.com/trestle-dev/trestle/internal/identities"
 	"github.com/trestle-dev/trestle/internal/rules"
-	"github.com/trestle-dev/trestle/internal/store"
+	"github.com/trestle-dev/trestle/internal/storetest"
 )
 
 type securityFixture struct {
@@ -24,14 +23,10 @@ type securityFixture struct {
 	admin       session
 }
 
-func setupSecurityFixture(t *testing.T) securityFixture {
+func setupSecurityFixture(t *testing.T, provider string) securityFixture {
 	t.Helper()
-	database, err := store.Open(context.Background(), t.TempDir())
-	if err != nil {
-		t.Fatal(err)
-	}
-	t.Cleanup(func() { database.Close() })
-	admin := adminauth.New(database.DB())
+	database := storetest.Open(t, provider)
+	admin := adminauth.New(database.DB(), string(database.Provider()))
 	setup := invoke(t, admin, session{}, http.MethodPost, "/admin/v1/setup", map[string]any{"email": "admin@example.test", "password": "mudblood"}, nil)
 	var setupBody struct {
 		CSRF string `json:"csrfToken"`
@@ -74,7 +69,15 @@ func bearer(token string) map[string]string {
 }
 
 func TestAuthorizationAbuseMatrix(t *testing.T) {
-	f := setupSecurityFixture(t)
+	for _, provider := range storetest.Providers(t) {
+		t.Run(provider, func(t *testing.T) {
+			f := setupSecurityFixture(t, provider)
+			runAuthorizationAbuseMatrix(t, f)
+		})
+	}
+}
+
+func runAuthorizationAbuseMatrix(t *testing.T, f securityFixture) {
 	userA, accessA, refreshA := appUser(t, f.users, "a@example.test")
 	userB, accessB, _ := appUser(t, f.users, "b@example.test")
 	for _, operation := range []string{"list", "view", "update", "delete"} {
