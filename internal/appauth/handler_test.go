@@ -166,31 +166,66 @@ func TestConcurrentLoginsCoexistAndRevokeIndependently(t *testing.T) {
 		t.Run(provider, func(t *testing.T) {
 			h := setup(t, provider)
 			registerAndLogin(t, h)
-			first := call(t, h, "/api/v1/auth/login", map[string]any{"email": "user@example.com", "password": "1234567"})
-			var firstOut struct {
-				AccessToken, RefreshToken string
+			type sessionTokens struct {
+				AccessToken  string `json:"accessToken"`
+				RefreshToken string `json:"refreshToken"`
 			}
-			json.Unmarshal(first.Body.Bytes(), &firstOut)
-			second := call(t, h, "/api/v1/auth/login", map[string]any{"email": "user@example.com", "password": "1234567"})
-			var secondOut struct {
-				AccessToken, RefreshToken string
+			type loginResult struct {
+				code int
+				out  sessionTokens
 			}
-			json.Unmarshal(second.Body.Bytes(), &secondOut)
+			const workers = 4
+			start := make(chan struct{})
+			results := make(chan loginResult, workers)
+			body := map[string]any{"email": "user@example.com", "password": "1234567"}
+			for i := 0; i < workers; i++ {
+				go func() {
+					<-start
+					var b bytes.Buffer
+					json.NewEncoder(&b).Encode(body)
+					r := httptest.NewRequest("POST", "/api/v1/auth/login", &b)
+					w := httptest.NewRecorder()
+					h.ServeHTTP(w, r)
+					var out sessionTokens
+					json.Unmarshal(w.Body.Bytes(), &out)
+					results <- loginResult{code: w.Code, out: out}
+				}()
+			}
+			close(start)
+			logins := make([]loginResult, 0, workers)
+			for i := 0; i < workers; i++ {
+				logins = append(logins, <-results)
+			}
+			seen := map[string]bool{}
+			for i, lg := range logins {
+				if lg.code != 200 || lg.out.AccessToken == "" || lg.out.RefreshToken == "" {
+					t.Fatalf("login %d code=%d tokens empty", i, lg.code)
+				}
+				if seen[lg.out.AccessToken] || seen[lg.out.RefreshToken] {
+					t.Fatal("concurrent logins produced a duplicate token")
+				}
+				seen[lg.out.AccessToken] = true
+				seen[lg.out.RefreshToken] = true
+			}
 			authenticate := func(token string) bool {
 				r := httptest.NewRequest("GET", "/", nil)
 				r.Header.Set("Authorization", "Bearer "+token)
 				_, ok := h.Authenticate(r)
 				return ok
 			}
-			if !authenticate(firstOut.AccessToken) || !authenticate(secondOut.AccessToken) {
-				t.Fatal("concurrent logins did not both authenticate")
+			for i, lg := range logins {
+				if !authenticate(lg.out.AccessToken) {
+					t.Fatalf("concurrent login %d did not authenticate", i)
+				}
 			}
-			call(t, h, "/api/v1/auth/logout", map[string]any{"refreshToken": firstOut.RefreshToken})
-			if authenticate(firstOut.AccessToken) {
+			call(t, h, "/api/v1/auth/logout", map[string]any{"refreshToken": logins[0].out.RefreshToken})
+			if authenticate(logins[0].out.AccessToken) {
 				t.Fatal("first session survived revocation")
 			}
-			if !authenticate(secondOut.AccessToken) {
-				t.Fatal("second session was revoked by the first logout")
+			for i := 1; i < workers; i++ {
+				if !authenticate(logins[i].out.AccessToken) {
+					t.Fatalf("session %d was revoked by the first logout", i)
+				}
 			}
 		})
 	}

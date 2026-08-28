@@ -635,8 +635,11 @@ reconciliation problem; this is a distinct inter-batch repair, not a rewrite.
 - **PG04 scope reconciliation.** TOTP/security state and administrator
   password-change workflows do not exist in the accepted SQLite product, so
   they are marked outside PostgreSQL parity work rather than silently invented.
-  Concurrent logins (multiple coexisting sessions) do exist and are now
-  provider-parameterized, including per-session revocation independence.
+  Concurrent logins are tested genuinely concurrently: barrier-synchronized
+  worker goroutines issue simultaneous logins, all responses are 200 with
+  distinct tokens, both access tokens authenticate, and revoking one refresh
+  session invalidates only its access token while the others remain valid on
+  both providers.
 - **Site-wide documentation reconciliation.** Stale SQLite-only and pre-PG05
   statements were corrected across records, collections, field-types,
   schema-changes, database-architecture, postgresql, database-support and
