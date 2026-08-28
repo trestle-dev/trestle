@@ -338,13 +338,8 @@ func Import(ctx context.Context, db store.Executor, dialect store.Dialect, r io.
 	if bundle.SchemaVersion > store.CurrentVersion {
 		return errors.New("archive requires a newer schema")
 	}
-	var collectionCount int
-	if err := db.QueryRowContext(ctx, "SELECT count(*) FROM _trestle_collections").Scan(&collectionCount); err != nil || collectionCount != 0 {
-		return errors.New("import destination is not empty")
-	}
-	var adminCount int
-	if err := db.QueryRowContext(ctx, "SELECT count(*) FROM _trestle_admins").Scan(&adminCount); err != nil || adminCount != 0 {
-		return errors.New("import destination is not empty")
+	if err := ValidateEmptyDestination(ctx, db); err != nil {
+		return err
 	}
 
 	tx, err := db.BeginTx(ctx, nil)
@@ -559,4 +554,47 @@ func applyRestorePolicy(ctx context.Context, tx store.Transaction, dialect store
 		return err
 	}
 	return nil
+}
+
+// portableTables are the tables the portable format owns. A restore or
+// migration destination must have every one empty before import begins, and
+// system metadata must contain only the provider/initialization marker, so an
+// archive can never silently merge with existing durable state or collide.
+var portableTables = []string{
+	"_trestle_collections", "_trestle_fields", "_trestle_record_idempotency",
+	"_trestle_admins", "_trestle_admin_sessions", "_trestle_app_users",
+	"_trestle_app_sessions", "_trestle_app_access", "_trestle_credentials",
+	"_trestle_collection_rules", "_trestle_events", "_trestle_audit",
+	"_trestle_jobs", "_trestle_webhooks", "_trestle_functions", "_trestle_files",
+}
+
+// ValidateEmptyDestination requires every portable-owned table to be empty and
+// system metadata to contain only the provider/initialization marker, without
+// running any migration or repair. The migration history is exempt and is
+// validated separately as current and authoritative.
+func ValidateEmptyDestination(ctx context.Context, db store.Executor) error {
+	for _, table := range portableTables {
+		var count int
+		if err := db.QueryRowContext(ctx, "SELECT count(*) FROM "+quote(table)).Scan(&count); err != nil {
+			return fmt.Errorf("import destination is not an initialized empty database: %s: %w", table, err)
+		}
+		if count != 0 {
+			return fmt.Errorf("import destination is not empty: %s has %d rows", table, count)
+		}
+	}
+	rows, err := db.QueryContext(ctx, "SELECT key FROM _trestle_system_meta ORDER BY key")
+	if err != nil {
+		return fmt.Errorf("inspect destination system metadata: %w", err)
+	}
+	defer rows.Close()
+	for rows.Next() {
+		var key string
+		if err := rows.Scan(&key); err != nil {
+			return err
+		}
+		if key != "database_provider" {
+			return fmt.Errorf("import destination has unexpected system metadata %q", key)
+		}
+	}
+	return rows.Err()
 }

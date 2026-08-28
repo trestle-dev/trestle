@@ -4,6 +4,7 @@ import (
 	"context"
 	"encoding/json"
 	"path/filepath"
+	"strconv"
 	"strings"
 	"testing"
 
@@ -265,4 +266,91 @@ func sourceDigestOf(t *testing.T, dir, url string) string {
 		t.Fatal(err)
 	}
 	return digest
+}
+
+func destinationState(t *testing.T, s *store.Store) string {
+	t.Helper()
+	var b strings.Builder
+	for _, table := range portableTables {
+		var count int
+		s.DB().QueryRow("SELECT count(*) FROM " + quote(table)).Scan(&count)
+		b.WriteString(table + "=" + strconv.Itoa(count) + " ")
+	}
+	rows, err := s.DB().Query("SELECT key FROM _trestle_system_meta ORDER BY key")
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer rows.Close()
+	for rows.Next() {
+		var key string
+		rows.Scan(&key)
+		b.WriteString("meta:" + key + " ")
+	}
+	return b.String()
+}
+
+// TestEmptyDestinationRejectsIndependentState seeds each independent durable
+// root category into an otherwise initialized destination and proves restore /
+// migration refuses it before importing anything, leaving the destination
+// unchanged, on both providers.
+func TestEmptyDestinationRejectsIndependentState(t *testing.T) {
+	minimal := []byte(`{"format":"trestle-portable-v1","schemaVersion":13,"collections":[],"system":{}}`)
+	seeds := []struct {
+		name string
+		stmt string
+		args []any
+	}{
+		{"app user", "INSERT INTO _trestle_app_users(id,email,password_hash,created_at) VALUES(?,?,?,?)", []any{"usr_1", "u@example.com", "h", "2026-01-01T00:00:00Z"}},
+		{"credential", "INSERT INTO _trestle_credentials(id,kind,name,secret_hash,scopes,created_at) VALUES(?,?,?,?,?,?)", []any{"cred_1", "service", "s", []byte("YWJj"), "records:read", "2026-01-01T00:00:00Z"}},
+		{"event", "INSERT INTO _trestle_events(occurred_at,topic,collection_name,record_id,payload_json) VALUES(?,?,?,?,?)", []any{"2026-01-01T00:00:00Z", "t", "c", "r", "{}"}},
+		{"audit", "INSERT INTO _trestle_audit(occurred_at,actor_kind,actor_id,action,target,outcome,request_id,details_json) VALUES(?,?,?,?,?,?,?,?)", []any{"2026-01-01T00:00:00Z", "admin", "a", "x", "t", "ok", "r", "{}"}},
+		{"job", "INSERT INTO _trestle_jobs(id,kind,payload_json,status,available_at,created_at,updated_at) VALUES(?,?,?,?,?,?,?)", []any{"job_1", "noop", "{}", "pending", "2026-01-01T00:00:00Z", "2026-01-01T00:00:00Z", "2026-01-01T00:00:00Z"}},
+		{"webhook", "INSERT INTO _trestle_webhooks(id,name,url,topics,secret_cipher,created_at,updated_at) VALUES(?,?,?,?,?,?,?)", []any{"wh_1", "h", "https://x.invalid", "t", []byte("YWJj"), "2026-01-01T00:00:00Z", "2026-01-01T00:00:00Z"}},
+		{"function", "INSERT INTO _trestle_functions(id,name,provider,target,region,topics,created_at,updated_at) VALUES(?,?,?,?,?,?,?,?)", []any{"fn_1", "f", "aws-lambda", "arn:x", "us-east-1", "t", "2026-01-01T00:00:00Z", "2026-01-01T00:00:00Z"}},
+		{"file metadata", "INSERT INTO _trestle_files(id,storage_key,original_name,content_type,size,sha256,created_at) VALUES(?,?,?,?,?,?,?)", []any{"file_1", "k", "n", "t", 1, "abc", "2026-01-01T00:00:00Z"}},
+		{"custom system metadata", "INSERT INTO _trestle_system_meta(key,value,updated_at) VALUES(?,?,?)", []any{"custom", "x", "2026-01-01T00:00:00Z"}},
+	}
+	for _, provider := range storetest.Providers(t) {
+		provider := provider
+		t.Run(provider, func(t *testing.T) {
+			url := ""
+			release := func() {}
+			if provider == "postgres" {
+				url = storetest.PostgresURL(t)
+				release = storetest.Lock(t, url)
+			}
+			defer release()
+			for _, seed := range seeds {
+				t.Run(seed.name, func(t *testing.T) {
+					if provider == "postgres" {
+						storetest.ResetPostgres(t, url)
+					}
+					s := openStoreAt(t, t.TempDir(), provider, url)
+					if _, err := s.DB().Exec(seed.stmt, seed.args...); err != nil {
+						t.Fatalf("seed: %v", err)
+					}
+					before := destinationState(t, s)
+					err := Import(context.Background(), s.DB(), s.Dialect(), strings.NewReader(string(minimal)))
+					after := destinationState(t, s)
+					s.Close()
+					if err == nil || (!strings.Contains(err.Error(), "not empty") && !strings.Contains(err.Error(), "unexpected system metadata")) {
+						t.Fatalf("seed %s error=%v", seed.name, err)
+					}
+					if before != after {
+						t.Fatalf("seed %s changed the destination", seed.name)
+					}
+				})
+			}
+			// A valid empty initialized destination still imports.
+			if provider == "postgres" {
+				storetest.ResetPostgres(t, url)
+			}
+			s := openStoreAt(t, t.TempDir(), provider, url)
+			err := Import(context.Background(), s.DB(), s.Dialect(), strings.NewReader(string(minimal)))
+			s.Close()
+			if err != nil {
+				t.Fatalf("empty destination import: %v", err)
+			}
+		})
+	}
 }

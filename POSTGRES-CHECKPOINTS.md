@@ -1223,6 +1223,47 @@ Known limits: PostgreSQL 16 CI has no reviewed green run, so PostgreSQL stays
   experimental and PG10/PG11 await final acceptance
 ```
 
+## PG11R3 - Repair: complete logical-emptiness validation and final wording
+
+Status: complete
+
+Final narrow repair closing the PG10/PG11 empty-destination blocker.
+
+- **Complete destination validation.** A shared `ValidateEmptyDestination`
+  requires every portable-owned table to be empty before any import begins
+  (collections, fields, record idempotency, admins, admin sessions, app users,
+  app sessions, app access, credentials, collection rules, events, audit,
+  jobs, webhooks, functions, files) and allows system metadata only for the
+  provider/initialization marker. It is used by `Import`, the PostgreSQL
+  restore preflight and therefore the migration target preflight. A destination
+  can no longer pass while carrying independent durable state.
+- **Regression tests.** `TestEmptyDestinationRejectsIndependentState` seeds
+  each independent root category (app user, credential, event/audit, job,
+  webhook/function, file metadata, custom system metadata) into an otherwise
+  initialized destination on SQLite and real PostgreSQL and proves restore /
+  migration refuses it before importing anything with the destination state
+  unchanged. The valid empty-destination import and both migration directions
+  are retained.
+- **Final wording.** roadmap and restore pages now state the honest position:
+  the parity campaign is implemented locally, PostgreSQL remains experimental
+  because the PostgreSQL 16 support-window gate has no reviewed green run, and
+  the restore page splits SQLite and PostgreSQL operational instructions.
+
+Completion record:
+
+```text
+Status: complete (repair)
+Application commit: recorded by this commit
+Website output commit: 05c4cfb
+Website source commit: ca23303
+SQLite evidence: empty-destination per-category refusal with unchanged state
+PostgreSQL evidence: real postgres 18.6 runs the same per-category refusal
+Findings repaired: incomplete two-table empty-destination check; stale roadmap
+  and restore wording
+Known limits: PostgreSQL 16 CI has no reviewed green run, so PostgreSQL stays
+  experimental until PG10/PG11 acceptance and that gate close
+```
+
 ## Campaign-wide retained questions
 
 Resolve these in PG00/PG01 rather than allowing implementations to choose them

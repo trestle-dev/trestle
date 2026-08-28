@@ -275,15 +275,8 @@ func validateEmptyPostgresDestination(ctx context.Context, url string) error {
 	if version != store.CurrentVersion {
 		return fmt.Errorf("restore destination schema version %d is not current %d", version, store.CurrentVersion)
 	}
-	var collections, admins int
-	if err := executor.QueryRowContext(ctx, "SELECT count(*) FROM _trestle_collections").Scan(&collections); err != nil {
+	if err := ValidateEmptyDestination(ctx, executor); err != nil {
 		return err
-	}
-	if err := executor.QueryRowContext(ctx, "SELECT count(*) FROM _trestle_admins").Scan(&admins); err != nil {
-		return err
-	}
-	if collections != 0 || admins != 0 {
-		return errors.New("restore destination is not empty")
 	}
 	return nil
 }
