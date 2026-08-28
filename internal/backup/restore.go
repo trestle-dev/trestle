@@ -2,6 +2,7 @@ package backup
 
 import (
 	"archive/zip"
+	"bytes"
 	"context"
 	"encoding/json"
 	"errors"
@@ -11,17 +12,36 @@ import (
 	"path"
 	"path/filepath"
 	"strings"
+	"time"
 
 	"github.com/trestle-dev/trestle/internal/store"
 )
 
 const maxRestoreBytes int64 = 16 << 30
 
+// RestoreOptions selects the offline recovery destination provider. The
+// default restores a SQLite snapshot or portable archive into a new SQLite data
+// directory. Provider Postgres restores a portable archive into an initialized
+// empty PostgreSQL database.
+type RestoreOptions struct {
+	Provider store.Provider
+	URL      string
+}
+
 // Restore extracts a Trestle archive into a new data directory. The caller must
 // stop the server first; an existing target is always refused.
-func Restore(ctx context.Context, archivePath, targetDir string) error {
-	if archivePath == "" || targetDir == "" {
-		return errors.New("backup and data directory are required")
+func Restore(ctx context.Context, archivePath, targetDir string, options ...RestoreOptions) error {
+	if archivePath == "" {
+		return errors.New("backup archive is required")
+	}
+	if len(options) > 0 && options[0].Provider == store.Postgres {
+		if options[0].URL == "" {
+			return errors.New("postgres database URL is required")
+		}
+		return restoreLogicalToPostgres(ctx, archivePath, options[0].URL)
+	}
+	if targetDir == "" {
+		return errors.New("data directory is required")
 	}
 	if _, err := os.Lstat(targetDir); err == nil {
 		return errors.New("restore target already exists")
@@ -147,6 +167,49 @@ func Restore(ctx context.Context, archivePath, targetDir string) error {
 	}
 	if err := os.Rename(staging, targetDir); err != nil {
 		return fmt.Errorf("publish restored data: %w", err)
+	}
+	return nil
+}
+
+// restoreLogicalToPostgres restores a portable logical archive into an
+// initialized empty PostgreSQL database. The destination must be empty; Import
+// validates that and runs atomically, so a failure leaves it unchanged.
+func restoreLogicalToPostgres(ctx context.Context, archivePath, url string) error {
+	reader, err := zip.OpenReader(archivePath)
+	if err != nil {
+		return fmt.Errorf("open backup: %w", err)
+	}
+	defer reader.Close()
+	var portableBytes []byte
+	for _, item := range reader.File {
+		if item.Name != "portable.json" {
+			continue
+		}
+		stream, err := item.Open()
+		if err != nil {
+			return err
+		}
+		portableBytes, err = io.ReadAll(io.LimitReader(stream, 1<<30))
+		stream.Close()
+		if err != nil {
+			return err
+		}
+	}
+	if len(portableBytes) == 0 {
+		return errors.New("portable archive missing from backup")
+	}
+	dir, err := os.MkdirTemp("", "trestle-restore-*")
+	if err != nil {
+		return err
+	}
+	defer os.RemoveAll(dir)
+	db, err := store.OpenWith(ctx, store.Options{DataDir: dir, Provider: store.Postgres, URL: url, MaxOpen: 4, MaxIdle: 1, ConnectTimeout: 10 * time.Second})
+	if err != nil {
+		return fmt.Errorf("open restore destination: %w", err)
+	}
+	defer db.Close()
+	if err := Import(ctx, db.DB(), db.Dialect(), bytes.NewReader(portableBytes)); err != nil {
+		return fmt.Errorf("restore portable archive: %w", err)
 	}
 	return nil
 }

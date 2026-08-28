@@ -64,7 +64,7 @@ func New(db any, admin *adminauth.Handler, queue *jobs.Handler, dataDir string) 
 	return h, nil
 }
 func (h *Handler) Dispatch(ctx context.Context, tx store.Transaction, topic, collection, recordID string, payload any) error {
-	rows, err := tx.QueryContext(ctx, "SELECT id,topics FROM _trestle_webhooks WHERE enabled=1")
+	rows, err := tx.QueryContext(ctx, "SELECT id,topics FROM _trestle_webhooks WHERE enabled=?", h.db.Dialect().Boolean(true))
 	if err != nil {
 		return err
 	}
@@ -89,8 +89,12 @@ func (h *Handler) execute(ctx context.Context, raw json.RawMessage) error {
 	}
 	var endpoint string
 	var cipherText []byte
-	var enabled int
-	if err := h.db.QueryRowContext(ctx, "SELECT url,secret_cipher,enabled FROM _trestle_webhooks WHERE id=?", d.TargetID).Scan(&endpoint, &cipherText, &enabled); err != nil || enabled != 1 {
+	var enabledRaw any
+	if err := h.db.QueryRowContext(ctx, "SELECT url,secret_cipher,enabled FROM _trestle_webhooks WHERE id=?", d.TargetID).Scan(&endpoint, &cipherText, &enabledRaw); err != nil {
+		return errors.New("webhook unavailable")
+	}
+	enabled, decodeErr := h.db.Dialect().DecodeBoolean(enabledRaw)
+	if decodeErr != nil || !enabled {
 		return errors.New("webhook unavailable")
 	}
 	if err := safeDestination(endpoint); err != nil {
@@ -163,14 +167,15 @@ func (h *Handler) create(w http.ResponseWriter, r *http.Request) {
 func (h *Handler) list(w http.ResponseWriter, r *http.Request) {
 	rows, _ := h.db.QueryContext(r.Context(), "SELECT id,name,url,topics,enabled,created_at,updated_at FROM _trestle_webhooks ORDER BY created_at DESC")
 	defer rows.Close()
+	dialect := h.db.Dialect()
 	items := []target{}
 	for rows.Next() {
 		var item target
 		var topics string
-		var enabled int
-		rows.Scan(&item.ID, &item.Name, &item.URL, &topics, &enabled, &item.CreatedAt, &item.UpdatedAt)
+		var enabledRaw any
+		rows.Scan(&item.ID, &item.Name, &item.URL, &topics, &enabledRaw, &item.CreatedAt, &item.UpdatedAt)
 		item.Topics = strings.Split(topics, ",")
-		item.Enabled = enabled == 1
+		item.Enabled, _ = dialect.DecodeBoolean(enabledRaw)
 		items = append(items, item)
 	}
 	writeJSON(w, 200, map[string]any{"items": items})
@@ -178,14 +183,11 @@ func (h *Handler) list(w http.ResponseWriter, r *http.Request) {
 func (h *Handler) action(w http.ResponseWriter, r *http.Request, id string) {
 	var in struct{ Action string }
 	json.NewDecoder(r.Body).Decode(&in)
-	enabled := 0
-	if in.Action == "enable" {
-		enabled = 1
-	} else if in.Action != "disable" {
+	if in.Action != "enable" && in.Action != "disable" {
 		http.Error(w, "invalid action", 400)
 		return
 	}
-	h.db.ExecContext(r.Context(), "UPDATE _trestle_webhooks SET enabled=?,updated_at=? WHERE id=?", enabled, h.now().UTC().Format(time.RFC3339Nano), id)
+	h.db.ExecContext(r.Context(), "UPDATE _trestle_webhooks SET enabled=?,updated_at=? WHERE id=?", h.db.Dialect().Boolean(in.Action == "enable"), h.now().UTC().Format(time.RFC3339Nano), id)
 	w.WriteHeader(204)
 }
 func (h *Handler) encrypt(value []byte) ([]byte, error) {

@@ -253,3 +253,113 @@ func TestRestoreLogicalArchive(t *testing.T) {
 		})
 	}
 }
+
+func TestExportSnapshotConsistency(t *testing.T) {
+	for _, provider := range storetest.Providers(t) {
+		t.Run(provider, func(t *testing.T) {
+			s := storetest.Open(t, provider)
+			populatePortableFixture(t, s)
+			tx, err := beginSnapshot(context.Background(), s.DB())
+			if err != nil {
+				t.Fatal(err)
+			}
+			defer tx.Rollback()
+			var before int
+			if err := tx.QueryRow("SELECT count(*) FROM _trestle_admins").Scan(&before); err != nil {
+				t.Fatal(err)
+			}
+			done := make(chan struct{})
+			go func() {
+				defer close(done)
+				s.DB().Exec("INSERT INTO _trestle_admins(id,email,password_hash,created_at) VALUES('adm_extra','extra@example.com','h','2026-01-01T00:00:00Z')")
+			}()
+			time.Sleep(100 * time.Millisecond)
+			var after int
+			if err := tx.QueryRow("SELECT count(*) FROM _trestle_admins").Scan(&after); err != nil {
+				t.Fatal(err)
+			}
+			if before != after {
+				t.Fatalf("snapshot inconsistent: before=%d after=%d", before, after)
+			}
+			tx.Rollback()
+			<-done
+		})
+	}
+}
+
+func TestRestorePolicyRevokesSessionsAndIntegrationSecrets(t *testing.T) {
+	for _, provider := range storetest.Providers(t) {
+		provider := provider
+		var portable string
+		t.Run("export-"+provider, func(t *testing.T) {
+			portable = buildPortableFixture(t, provider)
+		})
+		t.Run(provider, func(t *testing.T) {
+			s := storetest.Open(t, provider)
+			if err := Import(context.Background(), s.DB(), s.Dialect(), strings.NewReader(portable)); err != nil {
+				t.Fatal(err)
+			}
+			var enabled bool
+			var cipher []byte
+			if err := s.DB().QueryRow("SELECT enabled, secret_cipher FROM _trestle_webhooks WHERE id='wh_1'").Scan(&enabled, &cipher); err != nil {
+				t.Fatal(err)
+			}
+			if enabled || len(cipher) != 0 {
+				t.Fatalf("webhook not disabled/cleared: enabled=%v cipherLen=%d", enabled, len(cipher))
+			}
+			var revoked int
+			if err := s.DB().QueryRow("SELECT count(*) FROM _trestle_admin_sessions WHERE revoked_at IS NULL").Scan(&revoked); err != nil || revoked != 0 {
+				t.Fatalf("admin sessions not revoked: %d err=%v", revoked, err)
+			}
+			var appAccess int
+			if err := s.DB().QueryRow("SELECT count(*) FROM _trestle_app_access").Scan(&appAccess); err != nil || appAccess != 0 {
+				t.Fatalf("app access not cleared: %d err=%v", appAccess, err)
+			}
+			var credentialHashes int
+			if err := s.DB().QueryRow("SELECT count(*) FROM _trestle_credentials WHERE secret_hash IS NOT NULL").Scan(&credentialHashes); err != nil || credentialHashes != 1 {
+				t.Fatalf("credential hashes lost: %d err=%v", credentialHashes, err)
+			}
+		})
+	}
+}
+
+func TestRestorePortableArchiveToPostgres(t *testing.T) {
+	url := storetest.PostgresURL(t)
+	release := storetest.Lock(t, url)
+	defer release()
+	storetest.ResetPostgres(t, url)
+	fixtureDir := t.TempDir()
+	fixtureStore := openStoreAt(t, fixtureDir, "postgres", url)
+	populatePortableFixture(t, fixtureStore)
+	var portable bytes.Buffer
+	if err := Export(context.Background(), fixtureStore.DB(), fixtureStore.Dialect(), &portable); err != nil {
+		t.Fatal(err)
+	}
+	fixtureStore.Close()
+	storetest.ResetPostgres(t, url)
+	t.Run("restore-to-postgres", func(t *testing.T) {
+		archive := filepath.Join(t.TempDir(), "pg-backup.zip")
+		var buffer bytes.Buffer
+		zw := zip.NewWriter(&buffer)
+		mw, _ := zw.Create("manifest.json")
+		json.NewEncoder(mw).Encode(Manifest{Format: "trestle-backup-v1", SchemaVersion: 13, IncludesDatabase: false})
+		pw, _ := zw.Create("portable.json")
+		pw.Write(portable.Bytes())
+		zw.Close()
+		os.WriteFile(archive, buffer.Bytes(), 0o600)
+		storetest.ResetPostgres(t, url)
+		if err := Restore(context.Background(), archive, "", RestoreOptions{Provider: store.Postgres, URL: url}); err != nil {
+			t.Fatal(err)
+		}
+		s := openStoreAt(t, t.TempDir(), "postgres", url)
+		defer s.Close()
+		var admins int
+		if err := s.DB().QueryRow("SELECT count(*) FROM _trestle_admins").Scan(&admins); err != nil || admins != 1 {
+			t.Fatalf("admins=%d err=%v", admins, err)
+		}
+		var enabled bool
+		if err := s.DB().QueryRow("SELECT enabled FROM _trestle_webhooks WHERE id='wh_1'").Scan(&enabled); err != nil || enabled {
+			t.Fatalf("webhook enabled after restore: %v err=%v", enabled, err)
+		}
+	})
+}

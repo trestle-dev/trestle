@@ -43,12 +43,19 @@ func main() {
 	if len(os.Args) > 1 && os.Args[1] == "restore" {
 		set := flag.NewFlagSet("restore", flag.ContinueOnError)
 		archive := set.String("backup", "", "backup archive path")
-		dataDir := set.String("data-dir", "", "new restore data directory")
-		if err := set.Parse(os.Args[2:]); err != nil || *archive == "" || *dataDir == "" {
-			fmt.Fprintln(os.Stderr, "usage: trestle restore --backup ARCHIVE --data-dir NEW_DIRECTORY")
+		dataDir := set.String("data-dir", "", "new restore data directory (SQLite)")
+		provider := set.String("provider", "sqlite", "restore destination provider: sqlite or postgres")
+		databaseURL := set.String("database-url", "", "PostgreSQL destination URL")
+		if err := set.Parse(os.Args[2:]); err != nil || *archive == "" {
+			fmt.Fprintln(os.Stderr, "usage: trestle restore --backup ARCHIVE [--data-dir DIR] [--provider sqlite|postgres] [--database-url URL]")
 			os.Exit(2)
 		}
-		if err := backup.Restore(context.Background(), *archive, *dataDir); err != nil {
+		restoreProvider, err := store.ParseProvider(*provider)
+		if err != nil || (restoreProvider == store.SQLite && *dataDir == "") || (restoreProvider == store.Postgres && *databaseURL == "") {
+			fmt.Fprintln(os.Stderr, "usage: trestle restore --backup ARCHIVE [--data-dir DIR] [--provider sqlite|postgres] [--database-url URL]")
+			os.Exit(2)
+		}
+		if err := backup.Restore(context.Background(), *archive, *dataDir, backup.RestoreOptions{Provider: restoreProvider, URL: *databaseURL}); err != nil {
 			fmt.Fprintln(os.Stderr, "restore failed:", err)
 			os.Exit(1)
 		}
@@ -64,6 +71,7 @@ func main() {
 		toDir := set.String("to-dir", "", "target data directory (sqlite)")
 		toURL := set.String("to-url", "", "target PostgreSQL URL")
 		dryRun := set.Bool("dry-run", false, "export and validate without writing to the target")
+		confirm := set.Bool("confirm-migration", false, "explicit confirmation for a real (non-dry-run) migration")
 		if err := set.Parse(os.Args[2:]); err != nil {
 			printMigrateUsage()
 			os.Exit(2)
@@ -81,7 +89,7 @@ func main() {
 		report, err := backup.Migrate(context.Background(), backup.MigrateOptions{
 			SourceProvider: sourceProvider, SourceDir: *fromDir, SourceURL: *fromURL,
 			TargetProvider: targetProvider, TargetDir: *toDir, TargetURL: *toURL,
-			DryRun: *dryRun,
+			DryRun: *dryRun, Confirm: *confirm,
 		})
 		if err != nil {
 			fmt.Fprintln(os.Stderr, "migration failed:", err)
@@ -221,5 +229,5 @@ func main() {
 }
 
 func printMigrateUsage() {
-	fmt.Fprintln(os.Stderr, "usage: trestle migrate --from-provider sqlite|postgres --from-dir DIR|--from-url URL --to-provider sqlite|postgres --to-dir DIR|--to-url URL [--dry-run]")
+	fmt.Fprintln(os.Stderr, "usage: trestle migrate --from-provider sqlite|postgres --from-dir DIR|--from-url URL --to-provider sqlite|postgres --to-dir DIR|--to-url URL [--dry-run] [--confirm-migration]")
 }

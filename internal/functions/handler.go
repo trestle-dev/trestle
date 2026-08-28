@@ -44,7 +44,7 @@ func New(db any, admin *adminauth.Handler, queue *jobs.Handler, options Options)
 	return h
 }
 func (h *Handler) Dispatch(ctx context.Context, tx store.Transaction, topic, collection, recordID string, payload any) error {
-	rows, err := tx.QueryContext(ctx, "SELECT id,topics FROM _trestle_functions WHERE enabled=1")
+	rows, err := tx.QueryContext(ctx, "SELECT id,topics FROM _trestle_functions WHERE enabled=?", h.db.Dialect().Boolean(true))
 	if err != nil {
 		return err
 	}
@@ -71,8 +71,12 @@ func (h *Handler) execute(ctx context.Context, raw json.RawMessage) error {
 		return errors.New("invalid invocation")
 	}
 	var target, region, scopes string
-	var enabled int
-	if h.db.QueryRowContext(ctx, "SELECT target,region,callback_scopes,enabled FROM _trestle_functions WHERE id=?", in.TargetID).Scan(&target, &region, &scopes, &enabled) != nil || enabled != 1 {
+	var enabledRaw any
+	if h.db.QueryRowContext(ctx, "SELECT target,region,callback_scopes,enabled FROM _trestle_functions WHERE id=?", in.TargetID).Scan(&target, &region, &scopes, &enabledRaw) != nil {
+		return errors.New("function unavailable")
+	}
+	enabled, decodeErr := h.db.Dialect().DecodeBoolean(enabledRaw)
+	if decodeErr != nil || !enabled {
 		return errors.New("function unavailable")
 	}
 	if validateTarget(target, region) != nil {
@@ -135,25 +139,24 @@ func (h *Handler) list(w http.ResponseWriter, r *http.Request) {
 	rows, _ := h.db.QueryContext(r.Context(), "SELECT id,name,provider,target,region,topics,callback_scopes,enabled,created_at,updated_at FROM _trestle_functions ORDER BY created_at DESC")
 	defer rows.Close()
 	items := []map[string]any{}
+	dialect := h.db.Dialect()
 	for rows.Next() {
 		var id, name, provider, target, region, topics, scopes, created, updated string
-		var enabled int
-		rows.Scan(&id, &name, &provider, &target, &region, &topics, &scopes, &enabled, &created, &updated)
-		items = append(items, map[string]any{"id": id, "name": name, "provider": provider, "target": target, "region": region, "topics": split(topics), "callbackScopes": split(scopes), "enabled": enabled == 1, "createdAt": created, "updatedAt": updated})
+		var enabledRaw any
+		rows.Scan(&id, &name, &provider, &target, &region, &topics, &scopes, &enabledRaw, &created, &updated)
+		enabled, _ := dialect.DecodeBoolean(enabledRaw)
+		items = append(items, map[string]any{"id": id, "name": name, "provider": provider, "target": target, "region": region, "topics": split(topics), "callbackScopes": split(scopes), "enabled": enabled, "createdAt": created, "updatedAt": updated})
 	}
 	writeJSON(w, 200, map[string]any{"items": items, "credentialsConfigured": h.options.AccessKey != "" && h.options.SecretKey != ""})
 }
 func (h *Handler) action(w http.ResponseWriter, r *http.Request, id string) {
 	var in struct{ Action string }
 	json.NewDecoder(r.Body).Decode(&in)
-	enabled := 0
-	if in.Action == "enable" {
-		enabled = 1
-	} else if in.Action != "disable" {
+	if in.Action != "enable" && in.Action != "disable" {
 		http.Error(w, "invalid action", 400)
 		return
 	}
-	h.db.ExecContext(r.Context(), "UPDATE _trestle_functions SET enabled=?,updated_at=? WHERE id=?", enabled, h.now().UTC().Format(time.RFC3339Nano), id)
+	h.db.ExecContext(r.Context(), "UPDATE _trestle_functions SET enabled=?,updated_at=? WHERE id=?", h.db.Dialect().Boolean(in.Action == "enable"), h.now().UTC().Format(time.RFC3339Nano), id)
 	w.WriteHeader(204)
 }
 func validateTarget(target, region string) error {

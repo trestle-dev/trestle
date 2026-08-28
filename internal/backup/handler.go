@@ -221,10 +221,12 @@ func (h *Handler) export(w http.ResponseWriter, r *http.Request) {
 		fieldRows, _ := h.db.QueryContext(r.Context(), "SELECT name,type,required,is_unique,default_json FROM _trestle_fields WHERE collection_id=? ORDER BY position", id)
 		for fieldRows.Next() {
 			var field, typ string
-			var required, unique int
+			var requiredRaw, uniqueRaw any
 			var def sql.NullString
-			fieldRows.Scan(&field, &typ, &required, &unique, &def)
-			fields = append(fields, map[string]any{"name": field, "type": typ, "required": required == 1, "unique": unique == 1, "default": def.String})
+			fieldRows.Scan(&field, &typ, &requiredRaw, &uniqueRaw, &def)
+			required, _ := h.db.Dialect().DecodeBoolean(requiredRaw)
+			unique, _ := h.db.Dialect().DecodeBoolean(uniqueRaw)
+			fields = append(fields, map[string]any{"name": field, "type": typ, "required": required, "unique": unique, "default": def.String})
 		}
 		fieldRows.Close()
 		collections = append(collections, map[string]any{"name": name, "kind": kind, "fields": fields, "createdAt": created, "updatedAt": updated})

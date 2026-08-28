@@ -1083,6 +1083,85 @@ Known limits: PostgreSQL 16 CI has no reviewed green run, so the supported
   the published HTTP/SSE contract corpus instead
 ```
 
+## PG11R - Repair: snapshot isolation, read-only migration, confirmation, restore, secrets and verification
+
+Status: complete
+
+Independent review of PG09-PG11 found contract-level gaps that the green suite
+did not cover. This is a distinct repair checkpoint; the PG08-PG11 commits are
+unchanged.
+
+- **Repeatable-read export.** `backup.Export` now opens a read-only repeatable
+  snapshot (PostgreSQL REPEATABLE READ READ ONLY; SQLite holds a shared lock)
+  so the archive is one coherent state even if a writer commits mid-export. A
+  concurrency test mutates data between reads and proves the snapshot is stable
+  on both providers.
+- **Truly read-only migration source.** `trestle migrate` opens SQLite in
+  read-only mode and PostgreSQL through a read-only snapshot, validates the
+  schema version without running any migration or metadata repair, and refuses
+  a stale source with zero source writes. Tests hash the source before and
+  after successful migration, dry-run, stale-schema rejection and injected
+  failure.
+- **Explicit confirmation.** A real migration now requires
+  `--confirm-migration`; a non-dry-run invocation without it fails before
+  opening or modifying the destination. Dry run does not require it.
+- **Provider-aware offline restore.** `trestle restore` accepts
+  `--provider postgres --database-url URL` to restore a portable archive into
+  an initialized empty PostgreSQL database with all-or-nothing import; SQLite
+  retains its snapshot/portable restore. Commands and website instructions
+  match the implemented interface.
+- **Secret and session treatment.** Portable imports now invalidate encrypted
+  integration secrets (webhooks are disabled with empty ciphertext and must be
+  reconfigured) and revoke live sessions and bearer access tokens, while
+  credential secret hashes survive because lookup is hash-based. Tests prove
+  the revoked/disabled state and that hashes are preserved.
+- **Semantic destination verification.** `Migrate` re-exports the destination
+  and compares a canonical content hash (collections, fields, record IDs and
+  values, identities, rules, events, audit, jobs, integration targets, file
+  manifest and system metadata) against the source, instead of relying on
+  record counts alone. The temporary-target scratch directory is removed only
+  after the store closes.
+- **Composed PG09 rollback test.** One provider-parameterized test wires
+  events, audit, webhooks and Lambda dispatchers into the record handler,
+  forces the record transaction to fail after writes are attempted, and
+  asserts no committed record, SSE event, audit fact, webhook job or Lambda job
+  is visible on either provider.
+- **Incident Desk unchanged on both providers.** The external example runs its
+  smoke gate (auth, records, files and realtime) unchanged against SQLite and
+  PostgreSQL 18.6. This exposed a genuine parity defect: webhook and function
+  handlers queried `enabled=1` and scanned the BOOLEAN column as an integer,
+  which PostgreSQL rejected; both handlers now bind and decode booleans through
+  the dialect. The example is unchanged and does not branch on provider.
+- **Site-wide documentation reconciliation.** Stale CP/PG language, SQLite-only
+  assumptions and future-work statements were corrected across operations,
+  backups, restore, database-architecture and migrations, and Battle Tested
+  now records the Incident Desk gate and the PostgreSQL 16 CI limitation.
+- **Release boundary.** PostgreSQL remains experimental. The supported-version
+  window is unproven because the PostgreSQL 16 CI workflow has no reviewed
+  green run; PG09-PG11 are described as accepted only after this repair and the
+  remaining gates are reviewed.
+
+Completion record:
+
+```text
+Status: complete (repair)
+Application commit: recorded by this commit
+Website output commit: 8f93f29
+Website source commit: 7957eac
+SQLite evidence: snapshot consistency, read-only source, confirmation, restore,
+  policy and composed-rollback tests pass
+PostgreSQL evidence: real postgres 18.6 runs the same tests plus the
+  provider-aware restore and the Incident Desk smoke gate
+Parity evidence: enabled-boolean binding/decode in webhooks and functions now
+  matches on both providers; semantic destination hashes verify cutover content
+Findings repaired: non-repeatable export; migration wrote to its source; no
+  confirmation flag; SQLite-only restore; unusable webhook ciphertext and live
+  sessions after restore; count-only verification; unproven composed rollback;
+  Incident Desk enabled-boolean parity defect; stale site-wide content
+Known limits: PostgreSQL 16 CI has no reviewed green run, so PostgreSQL stays
+  experimental and PG09-PG11 remain pending final acceptance
+```
+
 ## Campaign-wide retained questions
 
 Resolve these in PG00/PG01 rather than allowing implementations to choose them

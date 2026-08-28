@@ -78,12 +78,27 @@ type PortableSystem struct {
 
 func quote(identifier string) string { return `"` + strings.ReplaceAll(identifier, `"`, `""`) + `"` }
 
+// beginSnapshot opens a read-only repeatable snapshot for the exporter.
+// PostgreSQL uses REPEATABLE READ READ ONLY so every query observes the same
+// committed state even if another writer commits mid-export; SQLite holds a
+// shared lock for the transaction, which also yields one coherent snapshot.
+func beginSnapshot(ctx context.Context, db store.Executor) (store.Transaction, error) {
+	if db.Dialect().Provider() == store.Postgres {
+		return db.BeginTx(ctx, &sql.TxOptions{Isolation: sql.LevelRepeatableRead, ReadOnly: true})
+	}
+	tx, err := db.BeginTx(ctx, &sql.TxOptions{ReadOnly: true})
+	if err != nil {
+		return db.BeginTx(ctx, nil)
+	}
+	return tx, nil
+}
+
 // Export writes a portable logical snapshot of every table to w in bounded
-// deterministic order. Reads happen inside one read-only transaction so the
-// snapshot is consistent. Blobs are base64-encoded JSON byte arrays; booleans
-// are decoded through the dialect before encoding.
+// deterministic order. Reads happen inside one read-only repeatable snapshot
+// transaction so the archive represents a single coherent state. Blobs are
+// base64-encoded JSON byte arrays; booleans are decoded through the dialect.
 func Export(ctx context.Context, db store.Executor, dialect store.Dialect, w io.Writer) error {
-	tx, err := db.BeginTx(ctx, nil)
+	tx, err := beginSnapshot(ctx, db)
 	if err != nil {
 		return err
 	}
@@ -371,6 +386,9 @@ func Import(ctx context.Context, db store.Executor, dialect store.Dialect, r io.
 			return err
 		}
 	}
+	if err := applyRestorePolicy(ctx, tx, dialect); err != nil {
+		return err
+	}
 	return tx.Commit()
 }
 
@@ -503,4 +521,26 @@ func token(n int) string {
 	b := make([]byte, n)
 	rand.Read(b)
 	return base64.RawURLEncoding.EncodeToString(b)
+}
+
+// applyRestorePolicy enforces the secret/session treatment for restored or
+// migrated data: encrypted integration secrets are invalidated (webhooks are
+// disabled with empty ciphertext so they must be reconfigured) and live
+// sessions plus bearer access tokens are revoked. Credential secret hashes
+// survive because lookup is hash-based.
+func applyRestorePolicy(ctx context.Context, tx store.Transaction, dialect store.Dialect) error {
+	if _, err := tx.ExecContext(ctx, "UPDATE _trestle_webhooks SET secret_cipher=?, enabled=?", []byte{}, dialect.Boolean(false)); err != nil {
+		return err
+	}
+	now := time.Now().UTC().Format(time.RFC3339Nano)
+	if _, err := tx.ExecContext(ctx, "UPDATE _trestle_admin_sessions SET revoked_at=? WHERE revoked_at IS NULL", now); err != nil {
+		return err
+	}
+	if _, err := tx.ExecContext(ctx, "UPDATE _trestle_app_sessions SET revoked_at=? WHERE revoked_at IS NULL", now); err != nil {
+		return err
+	}
+	if _, err := tx.ExecContext(ctx, "DELETE FROM _trestle_app_access"); err != nil {
+		return err
+	}
+	return nil
 }
