@@ -2448,6 +2448,66 @@ Verified: release-contract regression (attestation permission set);
 Remaining: tag and publication require a separate explicit review
 ```
 
+## CP21 rehearsal - v0.1.0-rc.1 clean-machine release rehearsal
+
+The real tag-triggered release path was exercised with `v0.1.0-rc.1`, without
+promoting, announcing or marking anything stable.
+
+- Prerelease semantics: `release.yml` now explicitly publishes a semver
+  prerelease tag (`vX.Y.Z-*`) as a GitHub prerelease (computed from
+  `GITHUB_REF_NAME`; the release action does not infer it), and the
+  release-contract regression covers stable/prerelease detection. Pushed as
+  commit `b616ebc`; CI passed; this is the tag target.
+- Tag: annotated `v0.1.0-rc.1` created at `b616ebc`, `git rev-list -n 1`
+  verified before push; no prior tag existed anywhere.
+- Release workflow `33339028658` completed success; GitHub release created at
+  `https://github.com/trestle-dev/trestle/releases/tag/v0.1.0-rc.1` with
+  `prerelease: true`, `draft: false`; `/releases/latest` returns 404 (correctly
+  excludes the prerelease). Seven assets uploaded (six archives + `SHA256SUMS`);
+  all checksums verify; attestation job succeeded (pinned
+  `attest-build-provenance` v4.2.2); all actions ran at their pinned SHAs.
+- Integrity: all six archives contain exactly the versioned directory with
+  `trestle`/`trestle.exe`, `README.md`, `LICENSE`, numeric ownership, no
+  absolute/traversal paths, no source-tree debris or secrets; every binary
+  embeds `0.1.0-rc.1` and `b616ebc...`; linux/amd64 natively reports
+  `{"version":"0.1.0-rc.1","commit":"b616ebc...","os":"linux","arch":"amd64"}`.
+- Clean-environment scripts against the public release: `download.sh`
+  (pinned rc; cwd-only; checksum-verified; safe rerun; `--force`; unpinned
+  `latest` correctly fails), `install.sh` (to `~/.local/bin`, mode 0755, PATH
+  note; binary runs; unsupported OS/arch produce useful errors), `update.sh`
+  (old install -> rc; data/config survive; rollback restores).
+- SQLite first-run journey (public binary): health/ready, setupRequired,
+  short-password 422, admin setup, sign-out/in, collection, records, realtime
+  `record.created` events, audit events, restart persistence (3 records),
+  backup -> destroy -> restore -> verify (3 records), wrong credentials 401.
+- PostgreSQL first-run journey (PG 18.6): database/setup probe returns
+  `restartRequired: true`; after restart provider is postgres, setup screen is
+  administrator creation (not a login screen); admin setup, collection,
+  records, audit events, restart persistence; wrong credentials 401; with the
+  database stopped `/system/ready` returns `database_unavailable` while
+  `/system/health` stays 200, and readiness recovers after restart.
+- No secrets in either server log (password and URL scans: 0 occurrences).
+- Website `https://trestle.cv`: HTTPS 200; `www` and `http` 301 to the apex;
+  served `install.sh`/`download.sh`/`update.sh` byte-identical to canonical;
+  install/quickstart/releases/updating/rollback/security/stability/first-run
+  pages carry the required documentation (both install choices, `--system`,
+  `--version v0.1.0`, SHA256SUMS/provenance, PostgreSQL restart guidance,
+  backup/upgrade/rollback, known limitations, TLS responsibilities,
+  mobile nav). Discrepancy recorded: no prerelease pinning example
+  (e.g. `--version v0.1.0-rc.1`) appears in the docs; smallest repair is to add
+  a prerelease pinning line to the install/releases pages.
+- Provenance bundle retrieval via the unauthenticated attestations API returned
+  404; the workflow attestation step itself succeeded (this is recorded as an
+  evidence limitation, not a product failure).
+
+```text
+Status: rehearsal complete; release/tag preserved for independent review
+Tag: v0.1.0-rc.1 at b616ebc (prerelease, excluded from latest)
+Release: https://github.com/trestle-dev/trestle/releases/tag/v0.1.0-rc.1
+Workflow: https://github.com/trestle-dev/trestle/actions/runs/33339028658
+Recommendation: see the CP21 evidence report; no promotion or announcement
+```
+
 ## Checkpoint roadmap (authoritative status)
 
 This table reconciles the public-preview campaign's actual accepted scope with
