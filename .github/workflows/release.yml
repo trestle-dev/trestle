@@ -74,8 +74,18 @@ jobs:
         with:
           name: release-assets
           path: .
+      - id: prerelease
+        run: |
+          # A semver prerelease suffix (the part after the first '-') publishes
+          # a GitHub prerelease, so /releases/latest never selects it. Build
+          # metadata ('+...') is not a prerelease.
+          case "${GITHUB_REF_NAME#v}" in
+            *-*) echo "is-prerelease=true" >> "$GITHUB_OUTPUT" ;;
+            *) echo "is-prerelease=false" >> "$GITHUB_OUTPUT" ;;
+          esac
       - uses: softprops/action-gh-release@efb35369e0ad2afab669f228072c1b0d510eae64 # v3.0.3
         with:
           files: dist/*
           body_path: release-body.md
           generate_release_notes: true
+          prerelease: ${{ steps.prerelease.outputs.is-prerelease }}

@@ -114,8 +114,37 @@ for script in install download update; do
   grep -q 'verify_archive' "$f" || fail "$script.sh does not verify before extraction"
 done
 
+# 5. Prerelease tag semantics (CP21): a tag with a semver prerelease suffix
+#    must publish a GitHub prerelease so /releases/latest never selects it.
+#    The workflow must compute this explicitly (the release action does not
+#    infer it), and the offline test evaluates the same detection rule.
+detect_prerelease() {
+  case "${1#v}" in *-*) echo true ;; *) echo false ;; esac
+}
+[ "$(detect_prerelease v0.1.0)" = false ] || fail "stable tag v0.1.0 misdetected as prerelease"
+[ "$(detect_prerelease v0.1.0-rc.1)" = true ] || fail "prerelease tag v0.1.0-rc.1 misdetected as stable"
+[ "$(detect_prerelease v1.2.3-beta.2)" = true ] || fail "beta tag misdetected as stable"
+[ "$(detect_prerelease v1.2.3+build.5)" = false ] || fail "build-metadata tag misdetected as prerelease"
+python3 - "$root" <<'PY'
+import sys, yaml
+root = sys.argv[1]
+d = yaml.safe_load(open(root + "/.github/workflows/release.yml"))
+pub = d["jobs"]["publish"]["steps"]
+has_detection = any("is-prerelease" in (s.get("run") or "") and "GITHUB_REF_NAME" in (s.get("run") or "") for s in pub)
+rel = next((s for s in pub if isinstance(s, dict) and "uses" in s and "action-gh-release" in s["uses"]), {})
+prerelease_input = (rel.get("with") or {}).get("prerelease")
+if not has_detection:
+    print("workflow issue: publish job lacks explicit prerelease detection")
+    sys.exit(1)
+if prerelease_input != "${{ steps.prerelease.outputs.is-prerelease }}":
+    print(f"workflow issue: release action prerelease input is {prerelease_input!r}")
+    sys.exit(1)
+print("prerelease detection present and wired to the release action")
+PY
+[ "$?" -eq 0 ] || fail "prerelease tag semantics"
+
 if [ "$failures" -gt 0 ]; then
   echo "release-contract regression: $failures failure(s)" >&2
   exit 1
 fi
-echo "release-contract regression passed: workflow wiring, release-notes body, asset contract, script agreement"
+echo "release-contract regression passed: workflow wiring, release-notes body, asset contract, script agreement, prerelease tag semantics"
