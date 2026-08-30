@@ -535,6 +535,53 @@ Known limits: deletion state is retained as audit rows; a dedicated periodic
   path recover pending deletion)
 ```
 
+
+## CP3R2 - Append-only migration lineage updater
+
+Status: complete
+
+CP3R's generator regenerated every historical digest from the current compiled
+migrations, so someone could modify an old migration and run the generator to
+silently bless the rewrite. This repair makes manifest updates genuinely
+append-only.
+
+### Application
+
+- The updater (`TestUpdateMigrationLineageManifest`, gated by
+  `TRESTLE_LINEAGE_WRITE=1`) now reads the committed manifest, validates every
+  retained entry against the compiled migrations (version, name, SQLite digest,
+  PostgreSQL digest), refuses to write when any retained entry differs, and
+  appends entries only for versions after the existing `finalVersion`. It is a
+  no-op when no new migration exists and refuses truncation, gaps, reordering,
+  replacement or a manifest ahead of the compiled version.
+- `appendOnlyUpdate` is the testable pure function behind the updater.
+- `TestAppendOnlyUpdateRefusesHistoricalChanges` proves changed historical
+  SQLite DDL, changed historical PostgreSQL DDL, renamed migrations, removal,
+  reordering and truncation all fail, while adding migration 15 appends exactly
+  one entry with entries 1-14 preserved field-for-field, and running with no new
+  migration is a no-op.
+- The normal development command is documented in HANDOVER.md: append the
+  migration first, then run the append-only updater.
+
+### Exit evidence
+
+- Frozen gate and append-only updater tests pass; the updater run against the
+  current manifest is a no-op.
+
+Completion record:
+
+```text
+Status: complete (repair)
+Application commit: recorded by this commit
+Website output commit: n/a (no public documentation change)
+Website source commit: n/a (no public documentation change)
+Verified: TestMigrationLineageFrozen, TestAppendOnlyUpdateRefusesHistoricalChanges
+  and the no-op updater run pass
+Findings repaired: the manifest generator could bless a rewritten historical
+  migration; it is now strictly append-only
+Known limits: none retained
+```
+
 ## Checkpoint roadmap
 
 - CP1 - PostgreSQL contract and baseline (this checkpoint)

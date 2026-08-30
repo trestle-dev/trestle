@@ -150,6 +150,26 @@ node --check <changed JavaScript files>
 Release builds should cover Linux, macOS, and Windows on amd64 and arm64 unless
 a target is deliberately unsupported and documented.
 
+## Migration lineage workflow
+
+The pre-preview migration lineage is frozen in
+`internal/store/migrations_manifest.json` and enforced by
+`TestMigrationLineageFrozen`: retained versions, names and normalized SQLite
+and PostgreSQL DDL digests must never change. To add a new migration:
+
+1. Append migration `N+1` to the SQLite and PostgreSQL migration tables and bump
+   `CurrentVersion`.
+2. Run the append-only manifest updater:
+   `TRESTLE_LINEAGE_WRITE=1 go test ./internal/store -run TestUpdateMigrationLineageManifest -count=1`
+   It validates every retained entry against the compiled migrations, appends
+   exactly the new version's entry, and refuses to write anything if a retained
+   version, name or digest changed.
+3. Commit the new migration, the regenerated manifest and the tests together.
+   Running the updater with no new migration is a no-op.
+
+Never hand-edit the manifest or use it to bless a rewritten historical
+migration.
+
 ## Repository neighbours
 
 The public website source is the sibling `trestle-dev.github.io` repository;
