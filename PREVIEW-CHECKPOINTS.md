@@ -1885,6 +1885,100 @@ Known limits: database-unavailable and backup-progress states are not
   those need a faulting backend); browser acceptance is partial
 ```
 
+## CP12R4 - Stable realtime resource ownership, observable heartbeat health and correct Chromium process-group cleanup
+
+Status: complete (browser acceptance partial)
+
+Review found two realtime lifecycle bugs, one incomplete browser assertion and
+an inaccurate process-group cleanup claim. All are fixed with regressions, and
+the browser harness now covers the realtime healthy/stale/recovered
+transitions.
+
+### Application
+
+- Realtime resource ownership is now a single module-level controller
+  (`content/assets/js/realtime-controller.js`, wired into the built bundle
+  through the `@input` manifest): the EventSource, the staleness interval and
+  the last-activity timestamp are controller-owned, one stable module-level
+  `cleanup()` clears the *current* pair, and the `trestle:viewchange` listener
+  is registered exactly once against that stable function. The previous code
+  closed over the timer of whichever `renderRealtime()` registered it, so a
+  second visit's interval leaked after navigation.
+- The SSE heartbeat is now an observable event (`event: heartbeat` +
+  `data: {}`) instead of a comment frame, so browsers can see it. The client
+  registers a `heartbeat` listener that calls `mark()` without adding an
+  inspector item; staleness now means "missing transport heartbeat", not merely
+  "no business events recently" (documented on `staleState` and in the view
+  copy). A `setActivity`/`mark`/`paused` controller hook
+  (`window.__trestleRealtime`) lets the browser harness drive the stale and
+  recovered transitions deterministically without server fault injection.
+- Browser harness: the Jobs assertion now requires all three states
+  (retrying, dead, succeeded); Chromium is spawned `detached` into its own
+  process group so cleanup SIGTERMs only that owned group, waits for exit and
+  escalates to SIGKILL for the same group only on timeout; an unrelated
+  sentinel process is verified to survive the cleanup. No executable-name
+  cleanup is used.
+
+### Regressions
+
+- `scripts/test-realtime-controller.mjs` loads the real controller, realtime
+  and state files into a VM sandbox with a counting EventSource and a real
+  interval registry and proves: enter / reconnect repeatedly / leave / re-enter
+  / leave leaves zero live sources and zero intervals after each visit and
+  exactly one of each during a visit; the cleanup listener is registered once;
+  heartbeats keep an idle stream healthy without polluting the inspector;
+  business events also refresh activity; a missing heartbeat beyond the 30s
+  window produces stale; a heartbeat after stale restores connected; pause
+  never reports a healthy connection as failed; onerror/onopen stay distinct
+  from stale.
+- `internal/events`: `TestHeartbeatIsObservableEvent` proves the heartbeat is
+  a named SSE event with a JSON payload (not a hidden comment frame).
+
+### Browser evidence
+
+- New captures `realtime-healthy-heartbeat-desktop.png`,
+  `realtime-stale-heartbeat-loss-desktop.png` and
+  `realtime-recovered-desktop.png` (1280x800) alongside the jobs and
+  session-expired captures; `docs/visual/README.md` records the scenario and
+  expected state per capture, including that stale/recovered are driven in the
+  real SPA with the heartbeat gap simulated through the controller hook.
+  Pending file deletion, database-unavailable and backup-progress states remain
+  exercised by drills/assertions, not browser-screenshotted (browser acceptance
+  partial).
+
+### Exit evidence
+
+- Browser harness passes (jobs all three states, realtime healthy/stale/
+  recovered, session-expired, no uncaught JS errors, sentinel survives group
+  cleanup); realtime lifecycle/heartbeat regression passes; state-machine,
+  dashboard-quality and Nift build/status checks pass; full normal and race
+  suites green on SQLite and real PostgreSQL 18.6; parity gate 66/66 and
+  subsystem gate 26/26 pass; PostgreSQL gate (full + race) passes; connection-
+  recovery and restore drills pass; release-candidate matrix passes.
+
+Completion record:
+
+```text
+Status: complete (repair); browser acceptance partial
+Application commit: recorded by this commit
+Website output commit: n/a
+Website source commit: n/a
+Verified: browser harness (jobs three states + realtime healthy/stale/recovered
+  + session-expired, no uncaught JS errors, sentinel survives process-group
+  cleanup); realtime lifecycle/heartbeat regression; observable heartbeat frame
+  test; full suite both providers; parity/subsystem/postgres gates; drills;
+  release-candidate matrix
+Findings repaired: realtime cleanup closed over the first visit's timer (second
+  visit leaked its interval); comment-frame heartbeat invisible to EventSource
+  (idle streams falsely stale); browser gate did not require the retrying state;
+  Chromium not spawned in its own process group (negative-PID kill could not
+  target the tree)
+Known limits: pending file deletion, database-unavailable and backup-progress
+  states are not browser-screenshotted (need a faulting backend); realtime
+  stale/recovered screenshots simulate the heartbeat gap via the controller
+  hook rather than server fault injection; browser acceptance is partial
+```
+
 ## Checkpoint roadmap
 
 - CP1 - PostgreSQL contract and baseline (this checkpoint)

@@ -115,10 +115,14 @@ globalThis.TrestleDatabaseSetup = (() => {
 // loading, empty, error (permission-denied / partial-failure / unavailable),
 // retrying, dead, deletionPending, stale. It never includes credentials or
 // internal secrets.
-// staleState is the documented realtime staleness rule: a stream is stale
-// when no event or heartbeat has arrived within the 30-second window and the
-// stream is not paused. It is pure so a clock-controlled regression can prove
-// the inactivity/recovery transitions without a browser.
+// staleState is the documented realtime staleness rule: stale means a missing
+// transport heartbeat, not merely "no business events recently". The server
+// emits an observable `heartbeat` SSE event every 15 seconds and the client
+// refreshes its activity time on every heartbeat, so an otherwise idle stream
+// never goes stale. A stream is stale when no heartbeat (or business event)
+// has arrived within the 30-second window and the stream is not paused. It is
+// pure so a clock-controlled regression can prove the inactivity/recovery
+// transitions without a browser.
 function staleState(lastActivity, now, paused) {
   if (paused) return false;
   return now - lastActivity > 30000;
@@ -241,9 +245,139 @@ async function loadFiles(host){try{const response=await jsonRequest("/admin/v1/f
 }
 function formatBytes(value){if(value<1024)return `${value} B`;if(value<1048576)return `${(value/1024).toFixed(1)} KiB`;return `${(value/1048576).toFixed(1)} MiB`}
 document.querySelector('[data-route="files"]').addEventListener("click",renderFiles);
-let realtimeSource=null;function renderRealtime(){document.getElementById("overview-content").hidden=true;document.getElementById("retry").hidden=true;const host=document.getElementById("view-content");host.hidden=false;host.className="record-view";host.innerHTML='<div class="record-toolbar"><div><p class="eyebrow">Durable event journal</p><h2>Realtime</h2></div><button type="button" data-pause>Pause</button></div><form class="query-bar realtime-filter"><label>Topic filter<input name="topic" placeholder="record.created"></label><button>Reconnect</button></form><p class="connection-state">Connecting…</p><div class="event-inspector" aria-live="polite"></div>';const inspector=host.querySelector(".event-inspector");let paused=false;let lastActivity=Date.now();let staleTimer=null;const mark=()=>{lastActivity=Date.now();const state=host.querySelector(".connection-state");if(state.textContent.indexOf("Stale")===0){state.textContent="Connected · live"}};const cleanupRealtime=()=>{if(realtimeSource){realtimeSource.onopen=null;realtimeSource.onerror=null;realtimeSource.close();realtimeSource=null}if(staleTimer){clearInterval(staleTimer);staleTimer=null}};const connect=()=>{cleanupRealtime();const topic=host.querySelector('[name="topic"]').value.trim();realtimeSource=new EventSource("/api/v1/realtime"+(topic?"?topic="+encodeURIComponent(topic):""));lastActivity=Date.now();realtimeSource.onopen=()=>{lastActivity=Date.now();host.querySelector(".connection-state").textContent="Connected · replay resumes from the last delivered sequence"};realtimeSource.onerror=()=>host.querySelector(".connection-state").textContent="Reconnecting…";["record.created","record.updated","record.deleted"].forEach(name=>realtimeSource.addEventListener(name,event=>{mark();if(paused)return;const item=JSON.parse(event.data);const article=document.createElement("article");article.innerHTML=`<div><strong>${escapeHTML(item.topic)}</strong><span>#${item.sequence} · ${new Date(item.occurredAt).toLocaleString()}</span></div><pre class="json-block">${highlightJSON(JSON.stringify(item,null,2))}</pre>`;inspector.prepend(article);while(inspector.children.length>200)inspector.lastElementChild.remove()}));staleTimer=setInterval(()=>{if(!paused&&Date.now()-lastActivity>30000){host.querySelector(".connection-state").textContent="Stale · no events for a while; check the connection and re-open the stream"}},10000);if(!window.__trestleRealtimeCleanup){window.addEventListener("trestle:viewchange",()=>{cleanupRealtime()});window.__trestleRealtimeCleanup=true}};
-host.querySelector("form").addEventListener("submit",event=>{event.preventDefault();inspector.replaceChildren();connect()});host.querySelector("[data-pause]").addEventListener("click",event=>{paused=!paused;event.currentTarget.textContent=paused?"Resume":"Pause"});connect()}
-document.querySelector('[data-route="realtime"]').addEventListener("click",renderRealtime);
+// Realtime transport resource controller (DOM-free, clock/registry-injectable).
+//
+// A Realtime visit can own at most three resources: the EventSource, the
+// staleness interval, and a last-activity timestamp. This controller is a
+// module-level singleton in realtime.js, so cleanup() always clears the
+// *current* pair of resources. A route-change listener registered once against
+// the stable cleanup() can therefore never leak a later visit's resources
+// (CP12R4: after any enter/leave cycle there are zero sources and zero
+// intervals, and during a visit there is exactly one of each).
+//
+// env is injectable (globalThis by default) so a regression can count real
+// setInterval/clearInterval traffic and EventSource instances instead of
+// trusting the controller's own counters.
+globalThis.TrestleRealtimeController = (() => {
+  function createController(env) {
+    env = env || globalThis;
+    let source = null;
+    let timer = null;
+    let lastActivity = 0;
+    let paused = false;
+    return {
+      setSource(s) { source = s; },
+      source() { return source; },
+      setTimer(t) { timer = t; },
+      timer() { return timer; },
+      setActivity(t) { lastActivity = t; },
+      activity() { return lastActivity; },
+      setPaused(v) { paused = v; },
+      paused() { return paused; },
+      // cleanup returns the closed source so a caller can null its handlers
+      // before/after close if it wants; the resource itself is always released.
+      cleanup() {
+        const s = source;
+        source = null;
+        if (s && typeof s.close === "function") { s.close(); }
+        if (timer) { env.clearInterval(timer); timer = null; }
+        return s;
+      },
+      active() { return source !== null || timer !== null; }
+    };
+  }
+  return { createController };
+})();
+// Realtime transport view (CP12R3/CP12R4).
+//
+// Resource ownership is delegated to one module-level TrestleRealtimeController
+// singleton so a single route-change listener registered once always cleans up
+// the *current* visit's EventSource and staleness interval (CP12R4 blocker 1).
+//
+// Staleness means "missing transport heartbeat", not merely "no business events
+// recently" (CP12R4 blocker 2): the server emits an observable `heartbeat` SSE
+// event every 15 seconds; the client's heartbeat listener calls mark() without
+// adding an item to the event inspector, so a healthy idle stream stays live.
+const rt = TrestleRealtimeController.createController();
+
+function realtimeCleanup() {
+  const s = rt.cleanup();
+  if (s) { s.onopen = null; s.onerror = null; }
+}
+window.addEventListener("trestle:viewchange", realtimeCleanup);
+
+function renderRealtime() {
+  document.getElementById("overview-content").hidden = true;
+  document.getElementById("retry").hidden = true;
+  const host = document.getElementById("view-content");
+  host.hidden = false;
+  host.className = "record-view";
+  host.innerHTML = '<div class="record-toolbar"><div><p class="eyebrow">Durable event journal</p><h2>Realtime</h2></div><button type="button" data-pause>Pause</button></div><form class="query-bar realtime-filter"><label>Topic filter<input name="topic" placeholder="record.created"></label><button>Reconnect</button></form><p class="connection-state">Connecting…</p><div class="event-inspector" aria-live="polite"></div>';
+  const inspector = host.querySelector(".event-inspector");
+
+  const mark = () => {
+    rt.setActivity(Date.now());
+    const state = host.querySelector(".connection-state");
+    if (state.textContent.indexOf("Stale") === 0) {
+      state.textContent = "Connected · live";
+    }
+  };
+
+  const connect = () => {
+    realtimeCleanup();
+    const topic = host.querySelector('[name="topic"]').value.trim();
+    const source = new EventSource("/api/v1/realtime" + (topic ? "?topic=" + encodeURIComponent(topic) : ""));
+    rt.setSource(source);
+    rt.setActivity(Date.now());
+    source.onopen = () => {
+      rt.setActivity(Date.now());
+      host.querySelector(".connection-state").textContent = "Connected · replay resumes from the last delivered sequence";
+    };
+    source.onerror = () => host.querySelector(".connection-state").textContent = "Reconnecting…";
+    // Transport health: an observable heartbeat keeps the stream live without
+    // polluting the event inspector. Business events refresh activity too.
+    source.addEventListener("heartbeat", mark);
+    ["record.created", "record.updated", "record.deleted"].forEach((name) =>
+      source.addEventListener(name, (event) => {
+        mark();
+        if (rt.paused()) return;
+        const item = JSON.parse(event.data);
+        const article = document.createElement("article");
+        article.innerHTML = `<div><strong>${escapeHTML(item.topic)}</strong><span>#${item.sequence} · ${new Date(item.occurredAt).toLocaleString()}</span></div><pre class="json-block">${highlightJSON(JSON.stringify(item, null, 2))}</pre>`;
+        inspector.prepend(article);
+        while (inspector.children.length > 200) inspector.lastElementChild.remove();
+      })
+    );
+    rt.setTimer(setInterval(() => {
+      if (TrestleDatabaseSetup.staleState(rt.activity(), Date.now(), rt.paused())) {
+        host.querySelector(".connection-state").textContent = "Stale · no heartbeat for a while; the connection may have dropped — check it and re-open the stream";
+      }
+    }, 10000));
+  };
+
+  host.querySelector("form").addEventListener("submit", (event) => {
+    event.preventDefault();
+    inspector.replaceChildren();
+    connect();
+  });
+  host.querySelector("[data-pause]").addEventListener("click", (event) => {
+    rt.setPaused(!rt.paused());
+    event.currentTarget.textContent = rt.paused() ? "Resume" : "Pause";
+  });
+  connect();
+
+  // Test/browser-harness hook: lets an external driver force the stale and
+  // recovered transitions deterministically without fault-injecting the server.
+  window.__trestleRealtime = {
+    mark,
+    setActivity: (t) => rt.setActivity(t),
+    activity: () => rt.activity(),
+    paused: () => rt.paused(),
+    sourceActive: () => rt.source() !== null
+  };
+}
+
+document.querySelector('[data-route="realtime"]').addEventListener("click", renderRealtime);
 async function renderAudit(){document.getElementById("overview-content").hidden=true;document.getElementById("retry").hidden=true;const host=document.getElementById("view-content");host.hidden=false;host.className="record-view";host.innerHTML='<div class="record-toolbar"><div><p class="eyebrow">Append-oriented facts</p><h2>Audit</h2></div><button type="button" data-export-audit>Export JSON</button></div><form class="query-bar"><label>Action filter<input name="action" placeholder="record.update"></label><button>Apply</button></form><div class="operations-summary"></div><p class="view-error" role="alert"></p><div class="audit-list"></div>';const load=async()=>{try{const action=host.querySelector('[name="action"]').value.trim();const [facts,ops]=await Promise.all([jsonRequest("/admin/v1/audit"+(action?"?action="+encodeURIComponent(action):"")),jsonRequest("/admin/v1/operations")]);host.querySelector(".operations-summary").innerHTML=`<article><span>Provider</span><strong>${escapeHTML(ops.provider)}</strong></article><article><span>Database</span><strong>${ops.databaseBytes===null||ops.databaseBytes===undefined?"Not reported":formatBytes(ops.databaseBytes)}</strong></article>${Object.entries(ops.counts).map(([name,value])=>`<article><span>${escapeHTML(name)}</span><strong>${value}</strong></article>`).join("")}`;host.querySelector(".audit-list").innerHTML=facts.items.length?facts.items.map(item=>`<article class="audit-item"><div><strong>${escapeHTML(item.action)}</strong><span>${escapeHTML(item.outcome)} · ${new Date(item.occurredAt).toLocaleString()}</span></div><div><code>${escapeHTML(item.target||"system")}</code><small>${escapeHTML(item.requestId||"")}</small></div><pre class="json-block">${highlightJSON(JSON.stringify(item.details,null,2))}</pre></article>`).join(""):'<section class="empty"><h2>No audit facts</h2><p>Security and administrative activity appears here.</p></section>'}catch(error){host.querySelector(".view-error").textContent=error.message}};host.querySelector("form").addEventListener("submit",event=>{event.preventDefault();load()});host.querySelector("[data-export-audit]").addEventListener("click",async()=>{const data=await jsonRequest("/admin/v1/audit");const blob=new Blob([JSON.stringify(data,null,2)],{type:"application/json"});const link=document.createElement("a");link.href=URL.createObjectURL(blob);link.download="trestle-audit.json";link.click();URL.revokeObjectURL(link.href)});await load()}
 document.querySelector('[data-route="audit"]').addEventListener("click",renderAudit);
 async function renderJobs(){document.getElementById("overview-content").hidden=true;document.getElementById("retry").hidden=true;const host=document.getElementById("view-content");host.hidden=false;host.className="record-view";host.innerHTML='<div class="record-toolbar"><div><p class="eyebrow">Durable delivery</p><h2>Jobs</h2></div><button type="button" data-refresh-jobs>Refresh</button></div><form class="query-bar jobs-filter"><label>Status<select name="status"><option value="">All states</option><option>pending</option><option>running</option><option>succeeded</option><option>dead</option><option>cancelled</option></select></label><button>Apply filter</button></form><p class="view-error"></p><div class="job-list"></div>';const statusLabel=(job)=>job.status==="dead"?TrestleDatabaseSetup.viewState("dead").title:job.status==="pending"&&job.attempts>0?TrestleDatabaseSetup.viewState("retrying").title:job.status;

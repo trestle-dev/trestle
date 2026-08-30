@@ -1,12 +1,14 @@
-// Browser-visual and SPA regression harness (CP12R3).
+// Browser-visual and SPA regression harness (CP12R3/CP12R4).
 //
 // Launches a disposable Trestle instance, seeds deterministic job states,
 // drives the real SPA in headless Chromium over the DevTools Protocol, checks
 // for uncaught JavaScript errors and rejected promises, verifies the Jobs view
-// renders retrying/dead/succeeded states and the session-expired flow, and
-// captures desktop and mobile screenshots. Only the Chromium process tree it
-// launches (a dedicated temporary profile, PID recorded) is terminated; no
-// name-wide or user-owned cleanup is performed.
+// renders retrying/dead/succeeded states, the Realtime view stays healthy on
+// heartbeat and shows stale/recovered transitions, the session-expired flow,
+// and captures desktop and mobile screenshots. Chromium is spawned detached in
+// its own process group so cleanup can SIGTERM then SIGKILL only that owned
+// group (PID/process-group ID recorded; no name-wide or user-owned cleanup), and
+// an unrelated sentinel process is verified to survive the cleanup.
 //
 // Usage: node scripts/browser-check.mjs [--out DIR]
 import {spawn, execSync} from "node:child_process";
@@ -40,6 +42,8 @@ const base = `http://127.0.0.1:${appPort}`;
 
 const trestle = [];
 let chromePid = null;
+let chromeProc = null;
+let sentinel = null;
 
 const trestleBin = join(work, "trestle");
 function startTrestle() {
@@ -71,12 +75,13 @@ try {
   startTrestle();
   await waitFor(`${base}/system/health`);
 
-  // Launch Chromium with a dedicated profile and CDP; record the PID.
-  const chromeProc = spawn(chrome, [
+  // Launch Chromium with a dedicated profile and CDP, detached into its own
+  // process group (PGID == chromePid) so cleanup can target only that group.
+  chromeProc = spawn(chrome, [
     "--headless", "--no-sandbox", "--disable-gpu", "--no-first-run", "--no-default-browser-check",
     `--user-data-dir=${profile}`, `--remote-debugging-port=${cdpPort}`,
     "about:blank",
-  ], {stdio: "ignore"});
+  ], {stdio: "ignore", detached: true});
   chromePid = chromeProc.pid;
   await waitFor(`http://127.0.0.1:${cdpPort}/json/version`);
 
@@ -144,7 +149,7 @@ try {
       hasSucceeded: host.textContent.includes("succeeded"),
     };
   })()`);
-  if (!jobsState.hasDead || !jobsState.hasSucceeded) {
+  if (!jobsState.hasDead || !jobsState.hasRetry || !jobsState.hasSucceeded) {
     failures.push(`Jobs view did not render expected states: ${JSON.stringify(jobsState)}`);
   } else {
     await resize(1280, 800);
@@ -153,7 +158,51 @@ try {
     await screenshot(join(outDir, "jobs-degraded-mobile.png"));
   }
 
-  // 3. Session-expired flow: revoke the admin session, then force an admin
+  // 3. Realtime: healthy via heartbeat, stale after heartbeat loss, recovered.
+  // The state transitions run in the real SPA; the heartbeat gap is simulated
+  // through the exposed controller hook (server fault injection is out of
+  // scope for CP12), while the healthy capture rides the genuine server
+  // heartbeat stream.
+  const pollFor = async (expr, timeoutMs, stepMs = 250) => {
+    const start = Date.now();
+    while (Date.now() - start < timeoutMs) {
+      if (await evaluate(expr)) return true;
+      await new Promise((r) => setTimeout(r, stepMs));
+    }
+    return false;
+  };
+  await evaluate(`(() => { const l=[...document.querySelectorAll("[data-route]")].find(x=>x.getAttribute("data-route")==="realtime"); if(l) l.click(); return true; })()`);
+  const realtimeConnected = await pollFor(`(() => { const e=document.querySelector("#view-content .connection-state"); return e ? e.textContent.startsWith("Connected") : false; })()`, 12000);
+  if (!realtimeConnected) {
+    failures.push("Realtime view did not reach Connected on heartbeat");
+  } else {
+    await resize(1280, 800);
+    await screenshot(join(outDir, "realtime-healthy-heartbeat-desktop.png"));
+    // Force a heartbeat gap: keep activity pinned to 0 past the 30s window so
+    // the real staleness interval transitions the view to Stale.
+    const stale = await pollFor(`(() => {
+      window.__trestleRealtime.setActivity(0);
+      const e=document.querySelector("#view-content .connection-state");
+      return e ? e.textContent.startsWith("Stale") : false;
+    })()`, 15000, 250);
+    if (!stale) {
+      failures.push("Realtime view did not enter Stale after heartbeat loss");
+    } else {
+      await screenshot(join(outDir, "realtime-stale-heartbeat-loss-desktop.png"));
+      // A delivered heartbeat (via the real recovery path) restores Connected.
+      await evaluate(`window.__trestleRealtime.mark(); true`);
+      const recovered = await pollFor(`(() => { const e=document.querySelector("#view-content .connection-state"); return e ? e.textContent.startsWith("Connected") : false; })()`, 5000);
+      if (!recovered) {
+        failures.push("Realtime view did not recover after a heartbeat");
+      } else {
+        await screenshot(join(outDir, "realtime-recovered-desktop.png"));
+      }
+    }
+  }
+  await evaluate(`document.querySelector("[data-route=overview]")?.click(); true`);
+  await new Promise((r) => setTimeout(r, 600));
+
+  // 4. Session-expired flow: revoke the admin session, then force an admin
   // request so the SPA returns to the auth gate with "Session expired".
   await evaluate(`fetch("/admin/v1/session").then(r=>r.json()).then(s=>fetch("/admin/v1/session", {method:"DELETE", headers:{"X-Trestle-CSRF": s.csrfToken}})).catch(()=>{}); true`);
   await new Promise((r) => setTimeout(r, 500));
@@ -184,17 +233,42 @@ try {
     failures.push(`uncaught JavaScript errors/rejected promises: ${jsErrors.slice(0, 5).join(" | ")}`);
   }
 
+  // An unrelated sentinel process (spawned in the harness's own group, not
+  // Chromium's) must survive the Chromium group cleanup.
+  try {
+    sentinel = spawn(process.execPath, ["-e", "setInterval(()=>{}, 1<<30)"], {stdio: "ignore"});
+  } catch {}
+
   ws.close();
 } catch (err) {
   failures.push(`harness error: ${err.message}`);
 } finally {
   stopTrestle();
-  // Terminate only the Chromium process tree we launched (dedicated profile,
-  // PID recorded; no name-wide or user-owned cleanup).
+  // Terminate only the Chromium process group we own (detached spawn made the
+  // PID the process-group ID). Close the CDP socket first, SIGTERM the owned
+  // group, wait for exit, and escalate to SIGKILL for the same group only
+  // after a timeout. Never any executable-name or user-owned cleanup.
   if (chromePid) {
+    const exited = new Promise((res) => chromeProc.once("exit", res));
     try { process.kill(-chromePid, "SIGTERM"); } catch {}
-    try { process.kill(chromePid, "SIGTERM"); } catch {}
-    await new Promise((r) => setTimeout(r, 800));
+    const done = await Promise.race([
+      exited.then(() => true),
+      new Promise((r) => setTimeout(() => r(false), 5000)),
+    ]);
+    if (!done) {
+      try { process.kill(-chromePid, "SIGKILL"); } catch {}
+      await exited;
+    }
+    await new Promise((r) => setTimeout(r, 400));
+  }
+  // Verify the sentinel survived the Chromium group cleanup, then release it.
+  if (sentinel && sentinel.pid) {
+    let survived = false;
+    try { process.kill(sentinel.pid, 0); survived = true; } catch {}
+    if (!survived) {
+      failures.push("sentinel process died during Chromium process-group cleanup");
+    }
+    try { process.kill(sentinel.pid, "SIGKILL"); } catch {}
   }
   for (let attempt = 0; attempt < 5; attempt++) {
     try { await rm(work, {recursive: true, force: true}); break; } catch { await new Promise((r) => setTimeout(r, 500)); }

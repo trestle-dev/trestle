@@ -64,6 +64,24 @@ func TestEventSequencingAndGapTolerantReplay(t *testing.T) {
 	}
 }
 
+func TestHeartbeatIsObservableEvent(t *testing.T) {
+	var buf strings.Builder
+	writeHeartbeat(&buf)
+	got := buf.String()
+	if !strings.Contains(got, "event: heartbeat") {
+		t.Fatalf("heartbeat must be a named SSE event so browser EventSource can observe it, got %q", got)
+	}
+	if !strings.Contains(got, "data: {}") {
+		t.Fatalf("heartbeat must carry a JSON data payload, got %q", got)
+	}
+	if strings.HasPrefix(got, ": ") {
+		t.Fatalf("heartbeat must not be an SSE comment frame (EventSource hides comments), got %q", got)
+	}
+	if !strings.HasSuffix(got, "\n\n") {
+		t.Fatalf("heartbeat must terminate with a blank line, got %q", got)
+	}
+}
+
 func TestAuthorizedEventVisibility(t *testing.T) {
 	for _, provider := range storetest.Providers(t) {
 		t.Run(provider, func(t *testing.T) {

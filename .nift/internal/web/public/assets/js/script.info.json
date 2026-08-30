@@ -24,6 +24,7 @@
     "content/assets/js/jobs.js",
     "content/assets/js/lambda.js",
     "content/assets/js/logout.js",
+    "content/assets/js/realtime-controller.js",
     "content/assets/js/realtime.js",
     "content/assets/js/records.js",
     "content/assets/js/routing.js",

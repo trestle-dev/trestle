@@ -4,6 +4,7 @@ import (
 	"context"
 	"encoding/json"
 	"fmt"
+	"io"
 	"net/http"
 	"strconv"
 	"strings"
@@ -107,7 +108,7 @@ func (h *Handler) stream(w http.ResponseWriter, r *http.Request) {
 		case <-poll.C:
 			send()
 		case <-heartbeat.C:
-			fmt.Fprint(w, ": heartbeat\n\n")
+			writeHeartbeat(w)
 			flusher.Flush()
 		}
 	}
@@ -147,4 +148,12 @@ func null(value string) any {
 func writeJSON(w http.ResponseWriter, value any) {
 	w.Header().Set("Content-Type", "application/json")
 	json.NewEncoder(w).Encode(value)
+}
+
+// writeHeartbeat emits an observable SSE heartbeat event so clients can
+// distinguish a healthy idle transport from a genuinely stale one. Browser
+// EventSource exposes named events to JavaScript (unlike comment frames), so a
+// client can refresh its activity time without adding an item to the UI.
+func writeHeartbeat(w io.Writer) {
+	fmt.Fprint(w, "event: heartbeat\ndata: {}\n\n")
 }

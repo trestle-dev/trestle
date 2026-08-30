@@ -115,10 +115,14 @@ globalThis.TrestleDatabaseSetup = (() => {
 // loading, empty, error (permission-denied / partial-failure / unavailable),
 // retrying, dead, deletionPending, stale. It never includes credentials or
 // internal secrets.
-// staleState is the documented realtime staleness rule: a stream is stale
-// when no event or heartbeat has arrived within the 30-second window and the
-// stream is not paused. It is pure so a clock-controlled regression can prove
-// the inactivity/recovery transitions without a browser.
+// staleState is the documented realtime staleness rule: stale means a missing
+// transport heartbeat, not merely "no business events recently". The server
+// emits an observable `heartbeat` SSE event every 15 seconds and the client
+// refreshes its activity time on every heartbeat, so an otherwise idle stream
+// never goes stale. A stream is stale when no heartbeat (or business event)
+// has arrived within the 30-second window and the stream is not paused. It is
+// pure so a clock-controlled regression can prove the inactivity/recovery
+// transitions without a browser.
 function staleState(lastActivity, now, paused) {
   if (paused) return false;
   return now - lastActivity > 30000;
