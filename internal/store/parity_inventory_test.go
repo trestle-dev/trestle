@@ -153,6 +153,9 @@ func TestParityMatrixEvidenceCrossCheck(t *testing.T) {
 				t.Errorf("%q: evidence entry missing package/test/behavior: %#v", operation, e)
 				continue
 			}
+			if e.Behavior == e.Test {
+				t.Errorf("%q: evidence behavior %q merely repeats the test name; describe the asserted behavior", operation, e.Behavior)
+			}
 			covSQLite, covPostgres, file, aerr := analyzeTest(t, root, e.Package, e.Test)
 			if aerr != nil {
 				t.Errorf("%q: evidence test %s.%s does not exist or could not be parsed: %v", operation, e.Package, e.Test, aerr)

@@ -1478,6 +1478,53 @@ Known limits: browser screenshots are not producible in this environment;
   browser harness
 ```
 
+
+## CP9R2 - Provider-isolated parity execution and truthful evidence
+
+Status: complete
+
+The CP9R gate inherited `TRESTLE_TEST_POSTGRES_URL` into its so-called SQLite
+leg (both legs ran the same provider configuration) and reported skipped tests
+as passing. This repair isolates the legs, records real outcomes and makes
+behavior fields meaningful.
+
+### Application
+
+- `scripts/test-parity-gate.sh` now explicitly removes `TRESTLE_TEST_POSTGRES_URL`
+  from the SQLite environment and requires it for the PostgreSQL environment;
+  records PASS/SKIP/FAIL per exact test per provider; fails any matrix row that
+  claims a provider is verified when no cited test passes on that provider; and
+  reports per-test provider executions rather than two launcher invocations.
+- Evidence `behavior` fields now describe the asserted behavior (validated to
+  differ from the test name by the cross-check), rather than repeating the
+  function name.
+- The AST exact-function check remains as a structural guard only; token
+  discovery is never described as proof of runtime behaviour (the executed gate
+  is the runtime evidence).
+- Verified from an invocation whose environment initially contained the
+  PostgreSQL URL: the SQLite legs still PASS, and PostgreSQL-only tests SKIP on
+  the SQLite leg, proving the URL was removed.
+
+### Exit evidence
+
+- Corrected gate: 66 evidence tests, each executed per provider with isolated
+  environments; every row marked verified is backed by a passing test on the
+  claimed provider; full suite green.
+
+Completion record:
+
+```text
+Status: complete (repair)
+Application commit: recorded by this commit
+Website output commit: n/a (no public documentation change)
+Website source commit: n/a (no public documentation change)
+Verified: corrected parity gate from an environment pre-seeded with the
+  PostgreSQL URL; AST cross-check with behavior validation; full suite
+Findings repaired: gate inherited the PG URL into the SQLite leg and accepted
+  skipped tests as passing; behavior fields repeated test names
+Known limits: none retained
+```
+
 ## Checkpoint roadmap
 
 - CP1 - PostgreSQL contract and baseline (this checkpoint)

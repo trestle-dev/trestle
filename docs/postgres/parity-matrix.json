@@ -24,17 +24,17 @@
             {
               "package": "collections",
               "test": "TestCollectionMetadataLifecycle",
-              "behavior": "TestCollectionMetadataLifecycle"
+              "behavior": "collection create/list/get/update/delete lifecycle"
             },
             {
               "package": "collections",
               "test": "TestCollectionValidationAndAuthorization",
-              "behavior": "TestCollectionValidationAndAuthorization"
+              "behavior": "collection validation and authorization"
             },
             {
               "package": "collections",
               "test": "TestDuplicateCollectionRollsBack",
-              "behavior": "TestDuplicateCollectionRollsBack"
+              "behavior": "duplicate collection name rolls back"
             }
           ],
           "intentionalDifferences": null
@@ -48,17 +48,17 @@
             {
               "package": "collections",
               "test": "TestAllFieldTypesRoundTrip",
-              "behavior": "TestAllFieldTypesRoundTrip"
+              "behavior": "all field types round-trip"
             },
             {
               "package": "collections",
               "test": "TestDefaultMustMatchFieldType",
-              "behavior": "TestDefaultMustMatchFieldType"
+              "behavior": "defaults must match field type"
             },
             {
               "package": "collections",
               "test": "TestJSONPhysicalConstraint",
-              "behavior": "TestJSONPhysicalConstraint"
+              "behavior": "JSON column constraint"
             }
           ],
           "intentionalDifferences": "native PostgreSQL types and CHECK constraints vs SQLite STRICT tables and typed checks"
@@ -72,12 +72,12 @@
             {
               "package": "collections",
               "test": "TestIncompatibleSchemaChangePreservesMetadataAndRows",
-              "behavior": "TestIncompatibleSchemaChangePreservesMetadataAndRows"
+              "behavior": "incompatible schema change preserves prior metadata and rows"
             },
             {
               "package": "collections",
               "test": "TestPhysicalSchemaPreservesStableFieldData",
-              "behavior": "TestPhysicalSchemaPreservesStableFieldData"
+              "behavior": "physical table preserves stable field data across change"
             }
           ],
           "intentionalDifferences": null
@@ -91,7 +91,7 @@
             {
               "package": "collections",
               "test": "TestDestructiveSchemaRequiresAcknowledgement",
-              "behavior": "TestDestructiveSchemaRequiresAcknowledgement"
+              "behavior": "destructive schema change requires acknowledgement"
             }
           ],
           "intentionalDifferences": null
@@ -105,12 +105,12 @@
             {
               "package": "collections",
               "test": "TestCollectionMetadataLifecycle",
-              "behavior": "TestCollectionMetadataLifecycle"
+              "behavior": "collection create/list/get/update/delete lifecycle"
             },
             {
               "package": "store",
               "test": "TestBootstrapSchemaIntegrity",
-              "behavior": "TestBootstrapSchemaIntegrity"
+              "behavior": "bootstrap schema tables/indexes/fks/uniques"
             }
           ],
           "intentionalDifferences": null
@@ -124,7 +124,7 @@
             {
               "package": "collections",
               "test": "TestConcurrentCollectionNameRace",
-              "behavior": "TestConcurrentCollectionNameRace"
+              "behavior": "concurrent duplicate collection name resolves to one winner"
             }
           ],
           "intentionalDifferences": "SQLite serializes; PostgreSQL MVCC with unique constraint"
@@ -138,7 +138,7 @@
             {
               "package": "records",
               "test": "TestSchemaChangeDuringRecordAccess",
-              "behavior": "TestSchemaChangeDuringRecordAccess"
+              "behavior": "schema change racing record writes leaves no lost committed record"
             }
           ],
           "intentionalDifferences": "change may reject cleanly while records are accessed (deterministic retryable outcome)"
@@ -158,7 +158,7 @@
             {
               "package": "records",
               "test": "TestRecordCRUDAndVersions",
-              "behavior": "TestRecordCRUDAndVersions"
+              "behavior": "record create/get/update/delete with versions"
             }
           ],
           "intentionalDifferences": null
@@ -172,17 +172,17 @@
             {
               "package": "records",
               "test": "TestConcurrentUpdateOneWinner",
-              "behavior": "TestConcurrentUpdateOneWinner"
+              "behavior": "concurrent optimistic update has one winner"
             },
             {
               "package": "records",
               "test": "TestConcurrentEditOptimisticVersionOneWinner",
-              "behavior": "TestConcurrentEditOptimisticVersionOneWinner"
+              "behavior": "concurrent edit of one version has one winner"
             },
             {
               "package": "records",
               "test": "TestDeleteUpdateRaceResolvesConsistently",
-              "behavior": "TestDeleteUpdateRaceResolvesConsistently"
+              "behavior": "delete/update race commits deterministically"
             }
           ],
           "intentionalDifferences": null
@@ -196,7 +196,7 @@
             {
               "package": "records",
               "test": "TestConcurrentCreateUniqueFieldOneWinner",
-              "behavior": "TestConcurrentCreateUniqueFieldOneWinner"
+              "behavior": "concurrent unique-field create has one winner"
             }
           ],
           "intentionalDifferences": "case-insensitive uniqueness via normalized storage on both"
@@ -210,22 +210,22 @@
             {
               "package": "records",
               "test": "TestValidationAndAtomicBatch",
-              "behavior": "TestValidationAndAtomicBatch"
+              "behavior": "record validation and atomic batch"
             },
             {
               "package": "records",
               "test": "TestBatchOneThousandRecords",
-              "behavior": "TestBatchOneThousandRecords"
+              "behavior": "1000-record atomic batch"
             },
             {
               "package": "records",
               "test": "TestIdempotentCreateProjectionAndBounds",
-              "behavior": "TestIdempotentCreateProjectionAndBounds"
+              "behavior": "idempotent create, projection and bounds"
             },
             {
               "package": "records",
               "test": "TestIdempotencyRaceOneWinner",
-              "behavior": "TestIdempotencyRaceOneWinner"
+              "behavior": "idempotency race has one winner"
             }
           ],
           "intentionalDifferences": null
@@ -239,7 +239,7 @@
             {
               "package": "records",
               "test": "TestComposedRecordRollbackLeavesNoExternalState",
-              "behavior": "TestComposedRecordRollbackLeavesNoExternalState"
+              "behavior": "record/event/audit/outbox rollback leaves no external state"
             }
           ],
           "intentionalDifferences": null
@@ -259,7 +259,7 @@
             {
               "package": "records",
               "test": "TestTypedFilterSortAndCursor",
-              "behavior": "TestTypedFilterSortAndCursor"
+              "behavior": "typed filter, sort and cursor pagination"
             }
           ],
           "intentionalDifferences": null
@@ -273,7 +273,7 @@
             {
               "package": "records",
               "test": "TestQueryNullSemantics",
-              "behavior": "TestQueryNullSemantics"
+              "behavior": "IS NULL semantics"
             }
           ],
           "intentionalDifferences": null
@@ -287,7 +287,7 @@
             {
               "package": "records",
               "test": "TestQueryNumberDatetimeAndCase",
-              "behavior": "TestQueryNumberDatetimeAndCase"
+              "behavior": "number, datetime and case comparisons"
             }
           ],
           "intentionalDifferences": "ILIKE vs LIKE for case-insensitive contains"
@@ -301,7 +301,7 @@
             {
               "package": "records",
               "test": "TestQueryFilterCursorCombined",
-              "behavior": "TestQueryFilterCursorCombined"
+              "behavior": "filter+cursor pagination stability"
             }
           ],
           "intentionalDifferences": null
@@ -315,7 +315,7 @@
             {
               "package": "records",
               "test": "TestQueryErrorMapping",
-              "behavior": "TestQueryErrorMapping"
+              "behavior": "typed filter error mapping"
             }
           ],
           "intentionalDifferences": null
@@ -329,7 +329,7 @@
             {
               "package": "records",
               "test": "TestBooleanFilterBothProviders",
-              "behavior": "TestBooleanFilterBothProviders"
+              "behavior": "boolean filter on both providers"
             }
           ],
           "intentionalDifferences": null
@@ -349,12 +349,12 @@
             {
               "package": "adminauth",
               "test": "TestSetupLoginLogoutLifecycle",
-              "behavior": "TestSetupLoginLogoutLifecycle"
+              "behavior": "admin setup/login/logout lifecycle"
             },
             {
               "package": "adminauth",
               "test": "TestCompetingSetupCreatesOneAdministrator",
-              "behavior": "TestCompetingSetupCreatesOneAdministrator"
+              "behavior": "competing first-admin setup creates one administrator"
             }
           ],
           "intentionalDifferences": "PostgreSQL advisory lock serializes competing setup"
@@ -368,17 +368,17 @@
             {
               "package": "appauth",
               "test": "TestRegistrationLoginRotationRevocation",
-              "behavior": "TestRegistrationLoginRotationRevocation"
+              "behavior": "app registration/login/rotation/revocation"
             },
             {
               "package": "appauth",
               "test": "TestConcurrentRefreshOnlyOneWins",
-              "behavior": "TestConcurrentRefreshOnlyOneWins"
+              "behavior": "concurrent refresh has one winner"
             },
             {
               "package": "appauth",
               "test": "TestLoginAndRefreshAreAtomicUnderInjectedFailure",
-              "behavior": "TestLoginAndRefreshAreAtomicUnderInjectedFailure"
+              "behavior": "login/refresh session+access atomic under injected failure"
             }
           ],
           "intentionalDifferences": null
@@ -392,7 +392,7 @@
             {
               "package": "appauth",
               "test": "TestEmailUniquenessIsCaseInsensitive",
-              "behavior": "TestEmailUniquenessIsCaseInsensitive"
+              "behavior": "case-insensitive email uniqueness"
             }
           ],
           "intentionalDifferences": "emails stored normalized on both"
@@ -406,12 +406,12 @@
             {
               "package": "appauth",
               "test": "TestConcurrentLoginsCoexistAndRevokeIndependently",
-              "behavior": "TestConcurrentLoginsCoexistAndRevokeIndependently"
+              "behavior": "concurrent logins coexist and revoke independently"
             },
             {
               "package": "appauth",
               "test": "TestRevocationDuringInFlightRequests",
-              "behavior": "TestRevocationDuringInFlightRequests"
+              "behavior": "revocation visible to requests started after logout"
             }
           ],
           "intentionalDifferences": null
@@ -425,12 +425,12 @@
             {
               "package": "identities",
               "test": "TestCreateOnceScopeExpiryRevocation",
-              "behavior": "TestCreateOnceScopeExpiryRevocation"
+              "behavior": "create-once scoped credential with expiry and revocation"
             },
             {
               "package": "identities",
               "test": "TestRejectsUnknownScopesAndExpiredCreation",
-              "behavior": "TestRejectsUnknownScopesAndExpiredCreation"
+              "behavior": "unknown scopes and expired creation rejected"
             }
           ],
           "intentionalDifferences": null
@@ -444,7 +444,7 @@
             {
               "package": "rules",
               "test": "TestRulesStorageAndSimulation",
-              "behavior": "rules storage and simulation on both providers"
+              "behavior": "rules storage and simulation"
             }
           ],
           "intentionalDifferences": null
@@ -464,12 +464,12 @@
             {
               "package": "files",
               "test": "TestUploadGeneratedPathRangeAndDelete",
-              "behavior": "TestUploadGeneratedPathRangeAndDelete"
+              "behavior": "file upload, generated path, range and delete"
             },
             {
               "package": "files",
               "test": "TestDownloadRejectsSymlinkAndUnknownCaller",
-              "behavior": "TestDownloadRejectsSymlinkAndUnknownCaller"
+              "behavior": "download rejects symlink and unknown caller"
             }
           ],
           "intentionalDifferences": null
@@ -483,7 +483,7 @@
             {
               "package": "files",
               "test": "TestQuotaSymlinkAndCleanup",
-              "behavior": "TestQuotaSymlinkAndCleanup"
+              "behavior": "file quota, symlink and orphan cleanup"
             }
           ],
           "intentionalDifferences": null
@@ -497,22 +497,22 @@
             {
               "package": "files",
               "test": "TestFileDeletionDurableStateMachine",
-              "behavior": "TestFileDeletionDurableStateMachine"
+              "behavior": "durable file deletion state machine"
             },
             {
               "package": "files",
               "test": "TestFileDeletionBoundaryFailures",
-              "behavior": "TestFileDeletionBoundaryFailures"
+              "behavior": "file deletion begin/intent/commit boundary failures"
             },
             {
               "package": "files",
               "test": "TestFileDeletionSweepNeverDeletesLiveMetadata",
-              "behavior": "TestFileDeletionSweepNeverDeletesLiveMetadata"
+              "behavior": "deletion sweep never deletes live-referenced objects"
             },
             {
               "package": "files",
               "test": "TestFileDeletionConflictRemainsRecoverable",
-              "behavior": "TestFileDeletionConflictRemainsRecoverable"
+              "behavior": "conflicted deletion intent recovers after resolution"
             }
           ],
           "intentionalDifferences": null
@@ -532,7 +532,7 @@
             {
               "package": "events",
               "test": "TestEventSequencingAndGapTolerantReplay",
-              "behavior": "TestEventSequencingAndGapTolerantReplay"
+              "behavior": "event sequencing and gap-tolerant replay"
             }
           ],
           "intentionalDifferences": "PostgreSQL sequences may have numeric gaps; gaps are not missing events"
@@ -546,7 +546,7 @@
             {
               "package": "events",
               "test": "TestAuthorizedEventVisibility",
-              "behavior": "TestAuthorizedEventVisibility"
+              "behavior": "realtime delivery rechecks authorization"
             }
           ],
           "intentionalDifferences": null
@@ -560,17 +560,17 @@
             {
               "package": "jobs",
               "test": "TestConcurrentClaimsExecuteEachJobOnce",
-              "behavior": "TestConcurrentClaimsExecuteEachJobOnce"
+              "behavior": "concurrent job claims execute each job once"
             },
             {
               "package": "jobs",
               "test": "TestExpiredLeaseRecoversAfterRestart",
-              "behavior": "TestExpiredLeaseRecoversAfterRestart"
+              "behavior": "expired job lease recovers after restart"
             },
             {
               "package": "jobs",
               "test": "TestRolledBackTransactionDoesNotPublishJob",
-              "behavior": "TestRolledBackTransactionDoesNotPublishJob"
+              "behavior": "rolled-back transaction does not publish a job"
             }
           ],
           "intentionalDifferences": "PostgreSQL FOR UPDATE SKIP LOCKED; SQLite serialized claim"
@@ -584,7 +584,7 @@
             {
               "package": "authaudit",
               "test": "TestWebhookFunctionTargetLifecycle",
-              "behavior": "TestWebhookFunctionTargetLifecycle"
+              "behavior": "webhook and function target create/list/enable/disable lifecycle"
             }
           ],
           "intentionalDifferences": "enabled booleans bound/decoded through the dialect on both"
@@ -604,7 +604,7 @@
             {
               "package": "backup",
               "test": "TestPortableRoundTripAcrossProviders",
-              "behavior": "TestPortableRoundTripAcrossProviders"
+              "behavior": "portable archive round-trips across providers"
             }
           ],
           "intentionalDifferences": null
@@ -618,7 +618,7 @@
             {
               "package": "backup",
               "test": "TestExportSnapshotConsistency",
-              "behavior": "TestExportSnapshotConsistency"
+              "behavior": "export snapshot is consistent under concurrent writes"
             }
           ],
           "intentionalDifferences": "PostgreSQL REPEATABLE READ READ ONLY; SQLite shared lock"
@@ -632,7 +632,7 @@
             {
               "package": "backup",
               "test": "TestRestorePolicyRevokesSessionsAndIntegrationSecrets",
-              "behavior": "TestRestorePolicyRevokesSessionsAndIntegrationSecrets"
+              "behavior": "restore revokes sessions and disables integration secrets"
             }
           ],
           "intentionalDifferences": null
@@ -646,7 +646,7 @@
             {
               "package": "backup",
               "test": "TestPostgresRestorePreflightsHostileArchives",
-              "behavior": "hostile-archive preflight (postgres)"
+              "behavior": "hostile archive preflight (postgres)"
             },
             {
               "package": "backup",
@@ -665,7 +665,7 @@
             {
               "package": "backup",
               "test": "TestConcurrentImportSingleWinner",
-              "behavior": "TestConcurrentImportSingleWinner"
+              "behavior": "concurrent import produces one winner and no partial merge"
             }
           ],
           "intentionalDifferences": null
@@ -679,12 +679,12 @@
             {
               "package": "backup",
               "test": "TestRestoreLogicalArchive",
-              "behavior": "TestRestoreLogicalArchive"
+              "behavior": "logical archive restore"
             },
             {
               "package": "backup",
               "test": "TestCrossProviderMigrationRoundTrip",
-              "behavior": "TestCrossProviderMigrationRoundTrip"
+              "behavior": "offline cross-provider migration round trip"
             }
           ],
           "intentionalDifferences": null
@@ -704,7 +704,7 @@
             {
               "package": "audit",
               "test": "TestAuditFactsFilterRedactionAndCounts",
-              "behavior": "TestAuditFactsFilterRedactionAndCounts"
+              "behavior": "audit facts, filter, redaction and counts"
             }
           ],
           "intentionalDifferences": null
@@ -718,7 +718,7 @@
             {
               "package": "store",
               "test": "TestProviderDiagnosticsDoNotExposeConnectionMaterial",
-              "behavior": "TestProviderDiagnosticsDoNotExposeConnectionMaterial"
+              "behavior": "provider diagnostics never expose connection material"
             }
           ],
           "intentionalDifferences": "provider, schema version, pool bound; never the DSN"
@@ -732,7 +732,7 @@
             {
               "package": "apidocs",
               "test": "TestSchemaReportsFieldFlagsOnBothProviders",
-              "behavior": "TestSchemaReportsFieldFlagsOnBothProviders"
+              "behavior": "API schema reports field flags on both providers"
             }
           ],
           "intentionalDifferences": null
@@ -752,7 +752,7 @@
             {
               "package": "store",
               "test": "TestUpgradeFromEveryRetainedSchemaVersionProvider",
-              "behavior": "TestUpgradeFromEveryRetainedSchemaVersionProvider"
+              "behavior": "upgrade from every retained schema version"
             }
           ],
           "intentionalDifferences": "provider-specific DDL, one logical version order"
@@ -766,7 +766,7 @@
             {
               "package": "store",
               "test": "TestBootstrapSchemaIntegrity",
-              "behavior": "TestBootstrapSchemaIntegrity"
+              "behavior": "bootstrap schema tables/indexes/fks/uniques"
             }
           ],
           "intentionalDifferences": "native types/constraints vs STRICT tables"
@@ -780,7 +780,7 @@
             {
               "package": "store",
               "test": "TestMigrationFailuresCarryRecoveryInstructions",
-              "behavior": "TestMigrationFailuresCarryRecoveryInstructions"
+              "behavior": "fail-closed migration errors carry recovery instructions"
             }
           ],
           "intentionalDifferences": null
@@ -800,12 +800,12 @@
             {
               "package": "records",
               "test": "TestQueryErrorMapping",
-              "behavior": "TestQueryErrorMapping"
+              "behavior": "typed filter error mapping"
             },
             {
               "package": "jobs",
               "test": "TestJobsEndpointQueryFailureIsStructured",
-              "behavior": "TestJobsEndpointQueryFailureIsStructured"
+              "behavior": "jobs endpoint query failure returns a structured envelope"
             }
           ],
           "intentionalDifferences": null
@@ -819,12 +819,12 @@
             {
               "package": "records",
               "test": "TestQueryErrorMapping",
-              "behavior": "TestQueryErrorMapping"
+              "behavior": "typed filter error mapping"
             },
             {
               "package": "collections",
               "test": "TestIncompatibleSchemaChangePreservesMetadataAndRows",
-              "behavior": "TestIncompatibleSchemaChangePreservesMetadataAndRows"
+              "behavior": "incompatible schema change preserves prior metadata and rows"
             }
           ],
           "intentionalDifferences": "SQLSTATE (23505/23503/23514) vs SQLite constraint messages"
