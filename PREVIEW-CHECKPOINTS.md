@@ -2315,27 +2315,103 @@ Gaps repaired: release-notes body; human-controlled release runbook
 Remaining: tag + publication require a separate explicit review
 ```
 
-## Checkpoint roadmap
+## Release-readiness repair (R1-R4)
 
-- CP1 - PostgreSQL contract and baseline (this checkpoint)
-- CP2 - Repair first-run PostgreSQL setup (ordinary-user workflow)
-- CP3 - Schema and migration integrity
-- CP4 - Transactional mutation and audit atomicity
-- CP5 - Concurrency, locking and conflict behaviour
-- CP6 - Connection loss, restart and pool recovery
-- CP7 - Backup, restore and disaster recovery
-- CP8 - Longevity and resource bounds
-- CP9 - SQLite/PostgreSQL parity matrix
-- CP10 - Authentication, authorization and session hardening
-- CP11 - Files, realtime, webhooks, jobs and functions
-- CP12 - Import, export, deletion and upgrade compatibility
-- CP13 - Degraded-state and accessibility UX
-- CP14 - Independent example-application dogfood
-- CP15 - Reproducible release artifacts
-- CP16 - Public install.sh, update and uninstall paths
-- CP17 - Container and service deployment
-- CP18 - Domain, HTTPS and reverse-proxy deployment
-- CP19 - Public-preview documentation and positioning
-- CP20 - Launch assets and publication draft
-- CP21 - Clean-machine release rehearsal
-- CP22 - Publish/no-publish review
+Review of the v0.1.0 release-readiness work found four required repairs. All
+are committed locally (not pushed; no tag, release, deploy or announcement).
+
+### R1 - CP15 reproducible release artifacts
+
+The old packaging embedded the wall-clock build date and used filesystem
+timestamps and archive defaults, so two runs from the same commit produced
+different binaries, archives and checksums. `scripts/package-release.sh` is now
+deterministic:
+
+- the embedded build date comes from `TRESTLE_BUILD_DATE`, else
+  `SOURCE_DATE_EPOCH`, else the commit's committer timestamp (never the wall
+  clock);
+- Go VCS stamping is disabled (`-buildvcs=false`); the commit is injected via
+  ldflags;
+- tar archives use `SOURCE_DATE_EPOCH`, sorted entries, numeric ownership and a
+  fixed mtime; zip archives use `-X` with mtimes pinned to
+  `SOURCE_DATE_EPOCH` (Info-ZIP does not honor the variable itself).
+
+`scripts/test-release-reproducible.sh` runs packaging twice from the same
+commit into separate directories and requires byte-identical archives and an
+identical `SHA256SUMS`. Verified locally: all seven files (six archives +
+`SHA256SUMS`) are byte-identical across two independent runs. The regression is
+wired into CI and the release-candidate gate.
+
+### R2 - Reconciled checkpoint roadmap
+
+The roadmap was rewritten as an authoritative status table (above) with
+`checkpoint | canonical scope | status | accepted/local head | remaining
+evidence`. The CP12/CP13 double count and the incorrect CP12/CP16 titles are
+corrected; import/export/deletion/upgrade compatibility is attributed to CP4
+(deletion), CP3 (upgrades) and the original programme (export/import); the
+release-readiness work is mapped to CP15 and CP21.
+
+### R3 - First-release rollback semantics
+
+`docs/release-runbook.md` no longer claims that deleting a defective first
+release restores `latest`. It now documents: an earlier normal release falls
+back; with no earlier normal release, `latest` is unavailable and unpinned
+public commands fail until another normal release exists; deleting a release
+also removes pinned asset URLs; existing installations keep local binary
+rollback, with schema compatibility and backups as separate concerns.
+
+### R4 - Tag binding and release-notes validation
+
+The runbook now requires binding the tag to the reviewed remote head
+(`git rev-parse HEAD` == `origin/main`, clean `git status`, record `%H %s`,
+then verify `git rev-list -n 1 v0.1.0` equals that commit before pushing). The
+release workflow gains a "Validate release notes" step (non-empty body, no
+unresolved `{{VERSION}}`, expected version, required headings) and
+`scripts/test-release-contract.sh` automates the same invariants plus workflow
+wiring and asset/script contract checks, wired into CI and the gate.
+
+### Normal-release decision (recorded)
+
+v0.1.0 is a preview product (release candidate, not stable). Its GitHub release
+is deliberately created as a normal, non-prerelease release solely because it
+is the first publicly installable preview and `/releases/latest` selects normal
+releases. It is never described as a GitHub prerelease anywhere.
+
+```text
+Status: repaired locally; not pushed, tagged, published or announced
+Verified: two-build byte-identical packaging; release-contract regression;
+  public-script parity gate; staged script paths unchanged
+Remaining: tag and publication require a separate explicit review
+```
+
+## Checkpoint roadmap (authoritative status)
+
+This table reconciles the public-preview campaign's actual accepted scope with
+the earlier roadmap. Scopes that were previously double-counted or mislabelled
+are corrected here; the original programme numbering (CHECKPOINTS.md CP00-CP23)
+is a separate completed series and is not re-counted.
+
+| Checkpoint | Canonical scope | Status | Accepted / local head | Remaining evidence |
+| --- | --- | --- | --- | --- |
+| CP1 | PostgreSQL contract and baseline | Complete, accepted | CP1 section | none |
+| CP2 | First-run PostgreSQL setup (ordinary-user) | Complete, accepted | 04b6647 | none |
+| CP3 | Schema and migration integrity, lineage, upgrades | Complete, accepted | CP3/CP3R/CP3R2/CP3R3 sections | none |
+| CP4 | Transactional mutation and audit atomicity (incl. fail-closed deletion) | Complete, accepted | CP4/CP4R/CP4R2 sections | none |
+| CP5 | Concurrency, locking and conflict behaviour | Complete, accepted | CP5/CP5R/CP5R2 sections | none |
+| CP6 | Connection loss, restart and pool recovery | Complete, accepted | CP6 section | none |
+| CP7 | Backup, restore and disaster recovery | Complete, accepted | CP7 section | none |
+| CP8 | Longevity and resource bounds (soak) | Complete, accepted | CP8/CP8R sections | none |
+| CP9 | SQLite/PostgreSQL parity matrix, provider-isolated evidence | Complete, accepted | CP9/CP9R/CP9R2 sections | none |
+| CP10 | Authentication, authorization and session hardening | Complete, accepted | CP10/CP10R/CP10R2/CP10R3 sections | none |
+| CP11 | Files, realtime, webhooks, jobs and functions hardening | Complete, accepted | CP11/CP11R/CP11R2/CP11R3 sections | none |
+| CP12 | Degraded-state and operator UX (canonical scope corrected; the old roadmap title "import/export/deletion/upgrade compatibility" was not what CP12 delivered) | Complete, accepted | through CP12R5 (3e81aeb) | none |
+| CP13 | Degraded-state and accessibility UX (old roadmap overlap with CP12) | Delivered within CP12; no separate preview checkpoint (reconciled, not double-counted) | n/a | none |
+| CP14 | Independent example-application dogfood | Covered by the original programme (CHECKPOINTS.md CP21, DOGFOOD.md); not re-run in the preview ledger | n/a | none for preview scope |
+| CP15 | Reproducible release artifacts | Complete (deterministic packaging + two-build regression) | 5f51043 (local, unpushed) | run the reproducible regression in CI |
+| CP16 | Verified download/install/update and checksum public scripts (canonical scope corrected; uninstall not implemented) | Complete, accepted | e7a4972 accepted; 509be7b remote (CI repair) | uninstall path deliberately out of scope |
+| CP17 | Container and service deployment | Deployment guidance from the original programme (CHECKPOINTS.md CP22, service/system docs); no official container image (documented) | n/a | container image remains a documented limitation |
+| CP18 | Domain, HTTPS and reverse-proxy deployment | CNAME and live config recorded; live DNS/HTTPS not executed (explicitly deferred) | n/a | live deployment and verification pending |
+| CP19 | Public-preview documentation and positioning | Website documentation complete; preview-status honesty maintained | website 0dda441 / 4af2e41 | final positioning review |
+| CP20 | Launch assets and publication draft | LAUNCH.md draft exists; not published | n/a | publication draft review |
+| CP21 | Clean-machine release rehearsal | Release-readiness prep complete (staged asset simulation + human runbook) | 5f51043 (local, unpushed) | actual clean-machine rehearsal requires tag authorization |
+| CP22 | Publish/no-publish review | Not done | n/a | requires explicit human review |

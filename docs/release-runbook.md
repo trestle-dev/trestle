@@ -14,14 +14,36 @@ runbook starts (public-script parity gate: `scripts/test-public-scripts.sh`).
 - Application CI is green on `main` (PostgreSQL 16/17/18 suites and the gate).
 - `./scripts/test-public-scripts.sh` passes (canonical public scripts match the
   website source and generated copies byte-for-byte).
-- `./scripts/test-release.sh` passes (six archives, checksums, layout,
-  version/date injection).
+- `./scripts/test-release.sh`, `./scripts/test-release-reproducible.sh` and
+  `./scripts/test-release-contract.sh` pass (six archives, checksums, layout,
+  reproducibility, workflow/notes contract).
 - `./scripts/test-download.sh`, `./scripts/test-installer.sh`,
   `./scripts/test-update.sh` pass against local fake release assets.
 - The release notes template (`docs/release-notes-template.md`) states preview
   status, supported PostgreSQL versions, SQLite/PostgreSQL boundaries, TLS and
   operator responsibilities, backup-before-upgrade, and known limitations.
 - The website does not claim a stable release already exists.
+
+### Bind the tag to the reviewed commit (human)
+
+The tag must be created from the exact remote head that was reviewed. Before
+tagging:
+
+```sh
+git fetch origin
+test "$(git rev-parse HEAD)" = "$(git rev-parse origin/main)"
+git status --porcelain
+git show -s --format='%H %s' HEAD
+```
+
+Record that exact commit in the release evidence. After creating the annotated
+tag and before pushing it:
+
+```sh
+git rev-list -n 1 v0.1.0
+```
+
+must equal the recorded reviewed commit.
 
 ## Sequence
 
@@ -36,6 +58,15 @@ git push origin v0.1.0
 
 Pushing a `v*` tag triggers `.github/workflows/release.yml` only. No other
 action happens automatically.
+
+### 1b. Normal-release decision (recorded)
+
+Trestle v0.1.0 is a **preview** product: it is a release candidate, not a
+stable release, and compatibility freezes only when a stable version is
+published. The GitHub release is deliberately created as a **normal,
+non-prerelease** release - solely because it is the first publicly installable
+preview and `/releases/latest` selects normal releases. It is never described
+as a GitHub prerelease anywhere.
 
 ### 2. Actions completion (observe, do not cut short)
 
@@ -97,8 +128,25 @@ If the release is defective:
 2. For operators who already updated: `update.sh --rollback` restores the
    previous executable (binary-only; data schema upgrades are one-way and
    must be recovered with a pre-upgrade backup/restore).
-3. The website scripts are untouched and remain the previous, verified state;
-   `latest` resolution returns the previous stable release.
+
+**`latest` after deleting a release depends on whether an earlier normal
+release exists:**
+
+- If an earlier normal release exists, `/releases/latest` falls back to it and
+  the unpinned public commands keep working.
+- If no earlier normal release exists (the common case for a first release),
+  `/releases/latest` has no eligible release: the default unpinned
+  `download.sh`, `install.sh` and `update.sh` commands are **unavailable**
+  until another normal release exists. Do not imply that deleting a first
+  release restores a usable public download channel.
+- Deleting a published release also makes its **pinned** asset URLs
+  (`/releases/download/v0.1.0/...`) unavailable, so `--version v0.1.0` fails
+  too.
+- Existing installations can still use their retained local binary rollback
+  (`update.sh --rollback`), but that is a local binary-only operation: schema
+  compatibility with older data and pre-upgrade backups remain separate
+  concerns. The website scripts are untouched and remain the previous, verified
+  state.
 
 ### Stop conditions
 
