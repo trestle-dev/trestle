@@ -12,6 +12,8 @@ import (
 	"net/http"
 	"net/http/httptest"
 	"net/netip"
+	"os"
+	"path/filepath"
 	"strings"
 	"testing"
 
@@ -91,58 +93,104 @@ func buildApp(t *testing.T, provider string) (http.Handler, *store.Store, adminS
 	return mux, s, sess
 }
 
-// TestUnauthenticatedRoutesAreRejected proves every protected admin and API
-// route rejects an unauthenticated request with the exact permitted status
-// (401 for read access on admin-auth handlers, 403 elsewhere), with valid
-// request bodies and content types, and verifies no durable mutation occurred.
+// loadProtectedRoutes loads the machine-readable protected-route inventory.
+func loadProtectedRoutes(t *testing.T) []struct {
+	Method, Path, Family string
+	Status               int
+} {
+	t.Helper()
+	root := "."
+	for i := 0; i < 6; i++ {
+		if _, err := os.Stat(filepath.Join(root, "go.mod")); err == nil {
+			break
+		}
+		root = filepath.Join("..", root)
+	}
+	raw, err := os.ReadFile(filepath.Join(root, "docs", "hardening", "protected-routes.json"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	var inv struct {
+		Routes []struct {
+			Method, Path, Family string
+			Status               int
+		} `json:"routes"`
+	}
+	if err := json.Unmarshal(raw, &inv); err != nil {
+		t.Fatal(err)
+	}
+	if len(inv.Routes) == 0 {
+		t.Fatal("protected-route inventory is empty")
+	}
+	return inv.Routes
+}
+
+// bodies maps mutation routes to valid request bodies so a denied request is
+// rejected for authentication, not for malformed input.
+func bodyFor(path, method string) string {
+	switch {
+	case method == "PATCH" && strings.Contains(path, "/collections"):
+		return `{"name":"x","fields":[{"name":"t","type":"text"}]}`
+	case method == "POST" && strings.Contains(path, "/collections") && !strings.Contains(path, "/records"):
+		return `{"name":"x","fields":[{"name":"t","type":"text"}]}`
+	case strings.Contains(path, "/credentials"):
+		return `{"kind":"service","name":"x","scopes":["records:read"]}`
+	case strings.Contains(path, "/collection-rules") && method == "PUT":
+		return `{"rules":{"view":"actor.id == record.owner"}}`
+	case strings.Contains(path, "/explain"):
+		return `{"expression":"actor.id == record.owner"}`
+	case strings.Contains(path, "/jobs") && !strings.Contains(path, "/jobs/"):
+		return `{"kind":"noop","payload":{}}`
+	case strings.Contains(path, "/jobs/") && method == "POST":
+		return `{"action":"cancel"}`
+	case strings.Contains(path, "/webhooks") && !strings.Contains(path, "/webhooks/"):
+		return `{"name":"x","url":"https://receiver.invalid/x","topics":["record.created"]}`
+	case strings.Contains(path, "/webhooks/") && method == "POST":
+		return `{"action":"disable"}`
+	case strings.Contains(path, "/functions") && !strings.Contains(path, "/functions/"):
+		return `{"name":"x","target":"arn:aws:lambda:us-east-1:1:function:x","region":"us-east-1","topics":["record.created"]}`
+	case strings.Contains(path, "/functions/") && method == "POST":
+		return `{"action":"disable"}`
+	case strings.Contains(path, "/records") && method == "POST":
+		return `{"values":{"t":"v"}}`
+	case strings.Contains(path, "/records") && method == "PATCH":
+		return `{"values":{"t":"v"}}`
+	}
+	return ""
+}
+
+// TestUnauthenticatedRoutesAreRejected iterates the complete protected-route
+// inventory: every route and its relevant methods must reject an
+// unauthenticated request with the exact expected status, with valid request
+// bodies, and no durable mutation may occur in any security-sensitive family.
 func TestUnauthenticatedRoutesAreRejected(t *testing.T) {
-	postJSON := `{"name":"x","fields":[{"name":"t","type":"text","required":true}]}`
+	routes := loadProtectedRoutes(t)
 	for _, provider := range storetest.Providers(t) {
 		t.Run(provider, func(t *testing.T) {
 			app, s, _ := buildApp(t, provider)
-			// A denied collection POST must not create a collection.
-			cases := []struct {
-				method, path, body, ctype string
-				want                      int
-			}{
-				{"GET", "/admin/v1/collections", "", "", 401},
-				{"POST", "/admin/v1/collections", postJSON, "application/json", 403},
-				{"GET", "/admin/v1/credentials", "", "", 403},
-				{"POST", "/admin/v1/credentials", `{"kind":"service","name":"x","scopes":["records:read"]}`, "application/json", 403},
-				{"GET", "/admin/v1/collection-rules/anything", "", "", 403},
-				{"GET", "/admin/v1/files", "", "", 403},
-				{"GET", "/admin/v1/events", "", "", 403},
-				{"GET", "/admin/v1/audit", "", "", 403},
-				{"GET", "/admin/v1/jobs", "", "", 403},
-				{"GET", "/admin/v1/webhooks", "", "", 403},
-				{"GET", "/admin/v1/functions", "", "", 403},
-				{"GET", "/admin/v1/api/schema", "", "", 403},
-				{"GET", "/api/v1/collections/x/records", "", "", 401},
-				{"POST", "/api/v1/collections/x/records", `{"values":{"t":"v"}}`, "application/json", 403},
-			}
-			for _, c := range cases {
-				var body *bytes.Buffer
-				body = bytes.NewBufferString(c.body)
-				r := httptest.NewRequest(c.method, "http://example.test"+c.path, body)
+			for _, route := range routes {
+				body := bodyFor(route.Path, route.Method)
+				r := httptest.NewRequest(route.Method, "http://example.test"+route.Path, bytes.NewBufferString(body))
 				r.Host = "example.test"
-				if c.ctype != "" {
-					r.Header.Set("Content-Type", c.ctype)
+				if body != "" {
+					r.Header.Set("Content-Type", "application/json")
 				}
 				w := httptest.NewRecorder()
 				app.ServeHTTP(w, r)
-				if w.Code != c.want {
-					t.Errorf("%s %s unauthenticated returned %d, want %d", c.method, c.path, w.Code, c.want)
+				if w.Code != route.Status {
+					t.Errorf("%s %s unauthenticated returned %d, want %d", route.Method, route.Path, w.Code, route.Status)
 				}
 				if strings.Contains(strings.ToLower(w.Body.String()), "password") {
-					t.Errorf("%s %s leaked a password: %s", c.method, c.path, w.Body.String())
+					t.Errorf("%s %s leaked a password: %s", route.Method, route.Path, w.Body.String())
 				}
 			}
-			// No durable mutation from any denied request.
-			var collections, credentials int
-			s.DB().QueryRow("SELECT count(*) FROM _trestle_collections").Scan(&collections)
-			s.DB().QueryRow("SELECT count(*) FROM _trestle_credentials").Scan(&credentials)
-			if collections != 0 || credentials != 0 {
-				t.Fatalf("denied mutations created durable state: collections=%d credentials=%d", collections, credentials)
+			// No durable mutation in any security-sensitive family.
+			for _, family := range []string{"_trestle_collections", "_trestle_credentials", "_trestle_collection_rules", "_trestle_files", "_trestle_events", "_trestle_audit", "_trestle_jobs", "_trestle_webhooks", "_trestle_functions"} {
+				var n int
+				s.DB().QueryRow("SELECT count(*) FROM " + family).Scan(&n)
+				if n != 0 {
+					t.Errorf("denied requests created durable rows in %s: %d", family, n)
+				}
 			}
 		})
 	}
