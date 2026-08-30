@@ -75,6 +75,15 @@ Migrations are versioned, backed up, restart-safe, and refuse unknown future
 versions. Backups use a SQLite-consistent mechanism and include an explicit file
 storage strategy. A backup is not trusted until restore tests pass.
 
+Security-sensitive mutations must never report success when their durable write
+failed. Session revocation, credential revocation, integration enable/disable,
+job cancellation and rule updates check the result of their durable write and
+return an error (500) when it fails, leaving the prior state intact; application
+user disable is transactional. The audit of ignored database errors and the
+provider-parameterized failure-injection evidence are recorded in
+`docs/hardening/atomicity-inventory.json` and
+`internal/authaudit/mutation_failure_test.go`.
+
 Audit records are append-oriented and capture actor, action, target, outcome,
 time, and correlation ID without copying secrets. Tamper evidence and remote
 audit export are later hardening options, not implied by an append-only UI.

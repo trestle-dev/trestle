@@ -195,13 +195,18 @@ func (h *Handler) action(w http.ResponseWriter, r *http.Request, id string) {
 	}
 	json.NewDecoder(r.Body).Decode(&in)
 	now := h.now().UTC().Format(time.RFC3339Nano)
+	var err error
 	switch in.Action {
 	case "cancel":
-		h.db.ExecContext(r.Context(), "UPDATE _trestle_jobs SET status='cancelled',lease_until=NULL,updated_at=? WHERE id=? AND status IN ('pending','running')", now, id)
+		_, err = h.db.ExecContext(r.Context(), "UPDATE _trestle_jobs SET status='cancelled',lease_until=NULL,updated_at=? WHERE id=? AND status IN ('pending','running')", now, id)
 	case "retry":
-		h.db.ExecContext(r.Context(), "UPDATE _trestle_jobs SET status='pending',attempts=0,available_at=?,lease_until=NULL,last_error=NULL,updated_at=? WHERE id=? AND status IN ('dead','cancelled')", now, now, id)
+		_, err = h.db.ExecContext(r.Context(), "UPDATE _trestle_jobs SET status='pending',attempts=0,available_at=?,lease_until=NULL,last_error=NULL,updated_at=? WHERE id=? AND status IN ('dead','cancelled')", now, now, id)
 	default:
 		http.Error(w, "invalid action", 400)
+		return
+	}
+	if err != nil {
+		writeError(w, 500, "internal_error", "The request could not be completed.")
 		return
 	}
 	w.WriteHeader(204)

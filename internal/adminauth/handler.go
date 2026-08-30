@@ -227,7 +227,10 @@ func (h *Handler) logout(w http.ResponseWriter, r *http.Request) {
 		writeError(w, 403, "csrf_denied", "The CSRF token is invalid.")
 		return
 	}
-	_, _ = h.db.ExecContext(r.Context(), "UPDATE _trestle_admin_sessions SET revoked_at=? WHERE id=?", h.now().UTC().Format(time.RFC3339Nano), sessionID)
+	if _, err := h.db.ExecContext(r.Context(), "UPDATE _trestle_admin_sessions SET revoked_at=? WHERE id=?", h.now().UTC().Format(time.RFC3339Nano), sessionID); err != nil {
+		writeError(w, 500, "internal_error", "The request could not be completed.")
+		return
+	}
 	http.SetCookie(w, &http.Cookie{Name: cookieName, Value: "", Path: "/", HttpOnly: true, Secure: requestmeta.Scheme(r) == "https", SameSite: http.SameSiteStrictMode, MaxAge: -1})
 	w.WriteHeader(204)
 }

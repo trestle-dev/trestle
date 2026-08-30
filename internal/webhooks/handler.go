@@ -14,6 +14,7 @@ import (
 	"errors"
 	"fmt"
 	"github.com/trestle-dev/trestle/internal/adminauth"
+	"github.com/trestle-dev/trestle/internal/httperr"
 	"github.com/trestle-dev/trestle/internal/jobs"
 	"github.com/trestle-dev/trestle/internal/store"
 	"io"
@@ -187,7 +188,15 @@ func (h *Handler) action(w http.ResponseWriter, r *http.Request, id string) {
 		http.Error(w, "invalid action", 400)
 		return
 	}
-	h.db.ExecContext(r.Context(), "UPDATE _trestle_webhooks SET enabled=?,updated_at=? WHERE id=?", h.db.Dialect().Boolean(in.Action == "enable"), h.now().UTC().Format(time.RFC3339Nano), id)
+	result, err := h.db.ExecContext(r.Context(), "UPDATE _trestle_webhooks SET enabled=?,updated_at=? WHERE id=?", h.db.Dialect().Boolean(in.Action == "enable"), h.now().UTC().Format(time.RFC3339Nano), id)
+	if err != nil {
+		writeError(w, 500, "internal_error", "The request could not be completed.")
+		return
+	}
+	if n, _ := result.RowsAffected(); n == 0 {
+		writeError(w, 404, "webhook_not_found", "The webhook was not found.")
+		return
+	}
 	w.WriteHeader(204)
 }
 func (h *Handler) encrypt(value []byte) ([]byte, error) {
@@ -254,5 +263,8 @@ func strconvTime(t time.Time) string { return fmt.Sprintf("%d", t.Unix()) }
 func writeJSON(w http.ResponseWriter, status int, v any) {
 	w.Header().Set("Content-Type", "application/json")
 	w.WriteHeader(status)
-	json.NewEncoder(w).Encode(v)
+	_ = json.NewEncoder(w).Encode(v)
+}
+func writeError(w http.ResponseWriter, status int, code, message string) {
+	writeJSON(w, status, httperr.New(code, message, w.Header().Get("X-Request-ID")))
 }

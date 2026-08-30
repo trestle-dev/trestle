@@ -189,7 +189,14 @@ func (h *Handler) logout(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	sum := sha256.Sum256([]byte(in.RefreshToken))
-	h.db.ExecContext(r.Context(), "UPDATE _trestle_app_sessions SET revoked_at=? WHERE refresh_hash=? AND revoked_at IS NULL", h.now().UTC().Format(time.RFC3339Nano), sum[:])
+	result, err := h.db.ExecContext(r.Context(), "UPDATE _trestle_app_sessions SET revoked_at=? WHERE refresh_hash=? AND revoked_at IS NULL", h.now().UTC().Format(time.RFC3339Nano), sum[:])
+	if err != nil {
+		writeError(w, 500, "internal_error", "The request could not be completed.")
+		return
+	}
+	// An unknown or already-revoked token is an idempotent success; a durable
+	// write failure above is the only case that must not report success.
+	_ = result
 	w.WriteHeader(204)
 }
 func (h *Handler) adminRoutes(w http.ResponseWriter, r *http.Request) {
@@ -217,8 +224,24 @@ func (h *Handler) adminRoutes(w http.ResponseWriter, r *http.Request) {
 	parts := strings.Split(strings.Trim(r.URL.Path, "/"), "/")
 	if len(parts) == 5 && r.Method == http.MethodPost && parts[4] == "disable" {
 		now := h.now().UTC().Format(time.RFC3339Nano)
-		h.db.ExecContext(r.Context(), "UPDATE _trestle_app_users SET disabled_at=? WHERE id=?", now, parts[3])
-		h.db.ExecContext(r.Context(), "UPDATE _trestle_app_sessions SET revoked_at=? WHERE user_id=? AND revoked_at IS NULL", now, parts[3])
+		tx, err := h.db.BeginTx(r.Context(), nil)
+		if err != nil {
+			writeError(w, 500, "internal_error", "The request could not be completed.")
+			return
+		}
+		defer tx.Rollback()
+		if _, err := tx.ExecContext(r.Context(), "UPDATE _trestle_app_users SET disabled_at=? WHERE id=?", now, parts[3]); err != nil {
+			writeError(w, 500, "internal_error", "The request could not be completed.")
+			return
+		}
+		if _, err := tx.ExecContext(r.Context(), "UPDATE _trestle_app_sessions SET revoked_at=? WHERE user_id=? AND revoked_at IS NULL", now, parts[3]); err != nil {
+			writeError(w, 500, "internal_error", "The request could not be completed.")
+			return
+		}
+		if err := tx.Commit(); err != nil {
+			writeError(w, 500, "internal_error", "The request could not be completed.")
+			return
+		}
 		w.WriteHeader(204)
 		return
 	}

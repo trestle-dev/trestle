@@ -1101,6 +1101,64 @@ Known limits: rows marked unsupported/unverified are explicit; the matrix is
   evidence-linked, not a claim of engine-internal identity
 ```
 
+
+## CP10 - Authentication, authorization and session hardening
+
+Status: complete
+
+Conducted an adversarial review of administrator and application
+authentication, explicitly inventoried ignored database errors, and repaired
+every security-sensitive mutation so it never reports success when its durable
+write failed. Failure injection on SQLite and real PostgreSQL proves the
+fail-closed behaviour.
+
+### Application
+
+- Repaired ignored durable-write errors in security-sensitive mutations:
+  administrator logout and application logout revocation (now return 500 on
+  failure and leave the session valid); application user disable (now
+  transactional: disabling the user and revoking its sessions commit together);
+  webhook and function enable/disable (return 500/404 and leave the enabled
+  state unchanged); credential revocation (checks the write error, not just
+  affected rows); job cancel/retry (return 500 on failure); collection rule
+  updates (a failed insert rolls back the delete and preserves the prior
+  rules). Best-effort telemetry paths (credential last-used, audit facts) and
+  the job worker's internal transitions are documented as such (the latter is
+  recovered by lease expiry and idempotent delivery keys).
+- Add `internal/authaudit/mutation_failure_test.go`:
+  `TestSecuritySensitiveMutationsFailClosed` injects a durable-write failure
+  into each of the seven paths and asserts a 500 and unchanged prior state on
+  both providers.
+- `docs/hardening/atomicity-inventory.json` gains an
+  `ignoredDatabaseErrorsAudit` section listing the checked paths, the
+  best-effort exceptions and the evidence.
+- SECURITY.md documents the fail-closed durable-mutation guarantee.
+
+### Public website and handover
+
+- The security page documents the fail-closed durable-mutation guarantee.
+
+### Exit evidence
+
+- Failure-injection suite passes on SQLite and real PostgreSQL 18.6; full suite
+  and vet green on both providers.
+
+Completion record:
+
+```text
+Status: complete
+Application commit: recorded by this commit
+Website output commit: recorded by this commit
+Website source commit: recorded by this commit
+Verified: TestSecuritySensitiveMutationsFailClosed on both providers; full suite and vet
+Findings repaired: logout/revocation/enable-disable/job-action/rule-update
+  paths could report success when their durable write failed; disable-user was
+  non-transactional
+Known limits: best-effort telemetry and worker-internal transitions are
+  documented; rate limiting and forwarded-proxy behaviour are covered by
+  existing suites
+```
+
 ## Checkpoint roadmap
 
 - CP1 - PostgreSQL contract and baseline (this checkpoint)

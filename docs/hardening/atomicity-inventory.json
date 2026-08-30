@@ -8,114 +8,215 @@
     {
       "mutation": "first-administrator setup",
       "package": "internal/adminauth",
-      "tables": ["_trestle_admins", "_trestle_admin_sessions"],
+      "tables": [
+        "_trestle_admins",
+        "_trestle_admin_sessions"
+      ],
       "atomicity": "Administrator insert is transactional and guarded by a PostgreSQL advisory lock (single-winner). Session issuance is a post-commit convenience: if its insert fails after the admin commit, the admin exists and can sign in; no data-loss or privilege issue. Documented minor non-atomicity.",
-      "evidence": ["TestFirstRunPostgresWorkflow", "PG04 competing-setup single-winner"]
+      "evidence": [
+        "TestFirstRunPostgresWorkflow",
+        "PG04 competing-setup single-winner"
+      ]
     },
     {
       "mutation": "application login (session + access token)",
       "package": "internal/appauth",
-      "tables": ["_trestle_app_sessions", "_trestle_app_access"],
+      "tables": [
+        "_trestle_app_sessions",
+        "_trestle_app_access"
+      ],
       "atomicity": "Atomic after CP4 repair: the session and its short-lived access token commit in one transaction; a failed access insert rolls back the session, leaving no orphaned row.",
-      "evidence": ["TestLoginAndRefreshAreAtomicUnderInjectedFailure"]
+      "evidence": [
+        "TestLoginAndRefreshAreAtomicUnderInjectedFailure"
+      ]
     },
     {
       "mutation": "application refresh-token rotation",
       "package": "internal/appauth",
-      "tables": ["_trestle_app_sessions", "_trestle_app_access"],
+      "tables": [
+        "_trestle_app_sessions",
+        "_trestle_app_access"
+      ],
       "atomicity": "Atomic after CP4 repair: revoke-old + insert-new session + access token commit in one transaction; a failed access insert leaves the original refresh token valid (no partially consumed rotation).",
-      "evidence": ["TestLoginAndRefreshAreAtomicUnderInjectedFailure"]
+      "evidence": [
+        "TestLoginAndRefreshAreAtomicUnderInjectedFailure"
+      ]
     },
     {
       "mutation": "application user registration",
       "package": "internal/appauth",
-      "tables": ["_trestle_app_users"],
+      "tables": [
+        "_trestle_app_users"
+      ],
       "atomicity": "Single-statement insert; atomic by the engine.",
-      "evidence": ["registration suite"]
+      "evidence": [
+        "registration suite"
+      ]
     },
     {
       "mutation": "collection creation",
       "package": "internal/collections",
-      "tables": ["_trestle_collections", "_trestle_fields", "physical collection table"],
+      "tables": [
+        "_trestle_collections",
+        "_trestle_fields",
+        "physical collection table"
+      ],
       "atomicity": "Transactional: metadata, field rows and the physical table create or roll back together.",
-      "evidence": ["PG05 collections lifecycle", "schema-change rollback"]
+      "evidence": [
+        "PG05 collections lifecycle",
+        "schema-change rollback"
+      ]
     },
     {
       "mutation": "collection deletion (cascading cleanup)",
       "package": "internal/collections",
-      "tables": ["physical collection table", "_trestle_collections", "cascade: _trestle_fields, _trestle_record_idempotency, _trestle_collection_rules"],
+      "tables": [
+        "physical collection table",
+        "_trestle_collections",
+        "cascade: _trestle_fields, _trestle_record_idempotency, _trestle_collection_rules"
+      ],
       "atomicity": "Transactional: physical table dropped and metadata deleted in one transaction; dependent rows are removed by foreign-key cascade.",
-      "evidence": ["collections delete suite"]
+      "evidence": [
+        "collections delete suite"
+      ]
     },
     {
       "mutation": "schema change (add/change/remove field)",
       "package": "internal/collections",
-      "tables": ["_trestle_collections", "_trestle_fields", "physical collection table"],
+      "tables": [
+        "_trestle_collections",
+        "_trestle_fields",
+        "physical collection table"
+      ],
       "atomicity": "Transactional metadata plus safe create/copy/validate/swap of the physical table with rollback on incompatible data.",
-      "evidence": ["CP06/PG05 incompatible-data and rollback tests"]
+      "evidence": [
+        "CP06/PG05 incompatible-data and rollback tests"
+      ]
     },
     {
       "mutation": "collection rule update",
       "package": "internal/rules",
-      "tables": ["_trestle_collection_rules"],
+      "tables": [
+        "_trestle_collection_rules"
+      ],
       "atomicity": "Transactional: delete + reinsert of the rule set commit together.",
-      "evidence": ["PG08 rules suite"]
+      "evidence": [
+        "PG08 rules suite"
+      ]
     },
     {
       "mutation": "record create/update/delete with audit, event and outbox",
       "package": "internal/records",
-      "tables": ["physical collection table", "_trestle_events", "_trestle_audit", "_trestle_jobs", "_trestle_record_idempotency"],
+      "tables": [
+        "physical collection table",
+        "_trestle_events",
+        "_trestle_audit",
+        "_trestle_jobs",
+        "_trestle_record_idempotency"
+      ],
       "atomicity": "Transactional and composed: record, durable event, audit fact and any required outbox job commit together; rollback produces no event, audit fact or provider call.",
-      "evidence": ["TestComposedRecordRollbackLeavesNoExternalState", "PG06 batch rollback", "PG09 composed rollback"]
+      "evidence": [
+        "TestComposedRecordRollbackLeavesNoExternalState",
+        "PG06 batch rollback",
+        "PG09 composed rollback"
+      ]
     },
     {
       "mutation": "atomic record batch",
       "package": "internal/records",
-      "tables": ["physical collection table", "idempotency", "events", "audit", "jobs"],
+      "tables": [
+        "physical collection table",
+        "idempotency",
+        "events",
+        "audit",
+        "jobs"
+      ],
       "atomicity": "Transactional: a 1,000-record batch commits or rolls back as a whole.",
-      "evidence": ["PG06 1,000-record atomic batch"]
+      "evidence": [
+        "PG06 1,000-record atomic batch"
+      ]
     },
     {
       "mutation": "file upload (bytes then metadata)",
       "package": "internal/files",
-      "tables": ["_trestle_files"],
+      "tables": [
+        "_trestle_files"
+      ],
       "atomicity": "Bytes are written to storage before metadata insert (deliberately non-atomic external effect); a failed metadata insert triggers a compensating storage delete. Quota and staging are handled before publication.",
-      "evidence": ["PG08 file lifecycle suite", "interrupted-upload tests"]
+      "evidence": [
+        "PG08 file lifecycle suite",
+        "interrupted-upload tests"
+      ]
     },
     {
       "mutation": "file deletion (durable state machine)",
       "package": "internal/files",
-      "tables": ["_trestle_files", "_trestle_file_deletions"],
+      "tables": [
+        "_trestle_files",
+        "_trestle_file_deletions"
+      ],
       "atomicity": "Fail-closed and recoverable. A deletion request (1) records durable intent and marks the metadata unavailable in one transaction (_trestle_file_deletions pending row + _trestle_files.deleted_at), (2) commits, (3) deletes the storage object, (4) finalizes the intent (status done). A failed begin, intent write or commit changes nothing externally; no object is deleted before durable intent exists; a storage failure leaves the intent pending and the file unavailable. Recovery target selection fails closed: a pending intent is processed only when its file metadata is absent or marked deleted, and a live metadata reference to a storage key (same id or any live file) causes the intent to be skipped, logged and left pending (recoverable once the reference is resolved). Startup runs an initial sweep and a bounded periodic worker (RunDeletionRecovery, 5m, shutdown-aware, logs observable status) converges during a continuously running process. Storage deletion and finalization are idempotent, so interruption at any point converges. Downloads refuse once deleted_at is set, and the sweep never touches objects referenced by live metadata (deleted_at IS NULL).",
-      "evidence": ["TestFileDeletionDurableStateMachine", "TestFileDeletionBoundaryFailures", "TestFileDeletionStorageFailureLeavesPendingAndResumes", "TestFileDeletionFinalizeFailureRecovers", "TestResumeCleansRestoredDeletedFiles", "TestFileDeletionSweepNeverDeletesLiveMetadata", "TestFileDeletionSweepProceedsForDeletedOrAbsentMetadata", "TestFileDeletionConflictRemainsRecoverable", "TestFileDeletionConcurrentRecoveryHarmless", "TestDeletionRecoveryWorkerProcessesPending"]
+      "evidence": [
+        "TestFileDeletionDurableStateMachine",
+        "TestFileDeletionBoundaryFailures",
+        "TestFileDeletionStorageFailureLeavesPendingAndResumes",
+        "TestFileDeletionFinalizeFailureRecovers",
+        "TestResumeCleansRestoredDeletedFiles",
+        "TestFileDeletionSweepNeverDeletesLiveMetadata",
+        "TestFileDeletionSweepProceedsForDeletedOrAbsentMetadata",
+        "TestFileDeletionConflictRemainsRecoverable",
+        "TestFileDeletionConcurrentRecoveryHarmless",
+        "TestDeletionRecoveryWorkerProcessesPending"
+      ]
     },
     {
       "mutation": "webhook target create/update/enable",
       "package": "internal/webhooks",
-      "tables": ["_trestle_webhooks"],
+      "tables": [
+        "_trestle_webhooks"
+      ],
       "atomicity": "Single-statement insert/update with in-process secret encryption; atomic by the engine.",
-      "evidence": ["webhook suite", "PG09"]
+      "evidence": [
+        "webhook suite",
+        "PG09"
+      ]
     },
     {
       "mutation": "credential create/revoke",
       "package": "internal/identities",
-      "tables": ["_trestle_credentials"],
+      "tables": [
+        "_trestle_credentials"
+      ],
       "atomicity": "Single-statement insert/update; atomic by the engine.",
-      "evidence": ["identities suite"]
+      "evidence": [
+        "identities suite"
+      ]
     },
     {
       "mutation": "job claiming and completion",
       "package": "internal/jobs",
-      "tables": ["_trestle_jobs", "attempts/lease state"],
+      "tables": [
+        "_trestle_jobs",
+        "attempts/lease state"
+      ],
       "atomicity": "Transactional claiming; PostgreSQL uses FOR UPDATE SKIP LOCKED, SQLite serializes. One execution per successful claim; leases recover after expiry.",
-      "evidence": ["PG09 eight-worker claiming", "lease-expiry tests"]
+      "evidence": [
+        "PG09 eight-worker claiming",
+        "lease-expiry tests"
+      ]
     },
     {
       "mutation": "portable archive import and restore",
       "package": "internal/backup",
-      "tables": ["all portable-owned tables"],
+      "tables": [
+        "all portable-owned tables"
+      ],
       "atomicity": "All-or-nothing transactional import into an initialized empty destination; a failed import leaves the destination unchanged.",
-      "evidence": ["PG10 restore", "PG11R2 hostile preflight", "PG11R3 empty destination"]
+      "evidence": [
+        "PG10 restore",
+        "PG11R2 hostile preflight",
+        "PG11R3 empty destination"
+      ]
     }
   ],
   "deliberatelyNonAtomicExternalEffects": [
@@ -126,5 +227,81 @@
   ],
   "knownHardeningItems": [
     "adminauth setup issues the session after the admin commit (documented convenience; the administrator itself exists and can sign in)"
-  ]
+  ],
+  "ignoredDatabaseErrorsAudit": {
+    "checkpoint": "CP10",
+    "scope": "Security-sensitive mutations must not report success when their durable write fails. This audit lists the checked paths and the failure-injection evidence.",
+    "checkedPaths": [
+      {
+        "path": "admin logout (revoke session)",
+        "behavior": "returns 500 on durable-write failure; session stays valid",
+        "evidence": [
+          "TestSecuritySensitiveMutationsFailClosed"
+        ]
+      },
+      {
+        "path": "application logout (revoke session)",
+        "behavior": "returns 500 on durable-write failure; session stays valid",
+        "evidence": [
+          "TestSecuritySensitiveMutationsFailClosed"
+        ]
+      },
+      {
+        "path": "application user disable (disable + revoke sessions)",
+        "behavior": "transactional; returns 500 on failure; user stays enabled and sessions stay live",
+        "evidence": [
+          "TestSecuritySensitiveMutationsFailClosed"
+        ]
+      },
+      {
+        "path": "webhook enable/disable",
+        "behavior": "returns 500 on durable-write failure or 404 when missing; enabled state unchanged",
+        "evidence": [
+          "TestSecuritySensitiveMutationsFailClosed"
+        ]
+      },
+      {
+        "path": "function enable/disable",
+        "behavior": "returns 500 on durable-write failure or 404 when missing; enabled state unchanged",
+        "evidence": [
+          "TestSecuritySensitiveMutationsFailClosed"
+        ]
+      },
+      {
+        "path": "credential revocation",
+        "behavior": "returns 500 on durable-write failure; credential stays active",
+        "evidence": [
+          "TestSecuritySensitiveMutationsFailClosed"
+        ]
+      },
+      {
+        "path": "job cancel/retry",
+        "behavior": "returns 500 on durable-write failure; job state unchanged",
+        "evidence": [
+          "TestSecuritySensitiveMutationsFailClosed"
+        ]
+      },
+      {
+        "path": "collection rules update",
+        "behavior": "transactional; a failed insert rolls back the delete and preserves prior rules",
+        "evidence": [
+          "TestSecuritySensitiveMutationsFailClosed"
+        ]
+      }
+    ],
+    "bestEffort": [
+      {
+        "path": "credential last_used_at update",
+        "note": "telemetry; failure is non-fatal"
+      },
+      {
+        "path": "credential.use audit fact",
+        "note": "best-effort audit telemetry"
+      },
+      {
+        "path": "job worker success/retry transitions",
+        "note": "a failure is recovered by lease expiry and idempotent delivery keys"
+      }
+    ]
+  }
 }

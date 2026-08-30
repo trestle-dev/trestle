@@ -112,9 +112,13 @@ func (h *Handler) list(w http.ResponseWriter, r *http.Request) {
 	writeJSON(w, 200, map[string]any{"items": items})
 }
 func (h *Handler) revoke(w http.ResponseWriter, r *http.Request, id string) {
-	result, _ := h.db.ExecContext(r.Context(), "UPDATE _trestle_credentials SET revoked_at=? WHERE id=? AND revoked_at IS NULL", h.now().UTC().Format(time.RFC3339Nano), id)
-	n, _ := result.RowsAffected()
-	if n == 0 {
+	result, err := h.db.ExecContext(r.Context(), "UPDATE _trestle_credentials SET revoked_at=? WHERE id=? AND revoked_at IS NULL", h.now().UTC().Format(time.RFC3339Nano), id)
+	if err != nil {
+		writeError(w, 500, "internal_error", "The request could not be completed.")
+		return
+	}
+	n, err := result.RowsAffected()
+	if err != nil || n == 0 {
 		writeError(w, 404, "credential_not_found", "The credential was not found.")
 		return
 	}

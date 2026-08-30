@@ -86,10 +86,16 @@ func (h *Handler) put(w http.ResponseWriter, r *http.Request, name string) {
 		writeError(w, 404, "collection_not_found", "The collection was not found.")
 		return
 	}
-	tx.ExecContext(r.Context(), "DELETE FROM _trestle_collection_rules WHERE collection_id=?", id)
+	if _, err := tx.ExecContext(r.Context(), "DELETE FROM _trestle_collection_rules WHERE collection_id=?", id); err != nil {
+		writeError(w, 500, "internal_error", "The request could not be completed.")
+		return
+	}
 	now := h.now().UTC().Format(time.RFC3339Nano)
 	for op, expr := range in.Rules {
-		tx.ExecContext(r.Context(), "INSERT INTO _trestle_collection_rules(collection_id,operation,expression,updated_at) VALUES(?,?,?,?)", id, op, strings.TrimSpace(expr), now)
+		if _, err := tx.ExecContext(r.Context(), "INSERT INTO _trestle_collection_rules(collection_id,operation,expression,updated_at) VALUES(?,?,?,?)", id, op, strings.TrimSpace(expr), now); err != nil {
+			writeError(w, 500, "internal_error", "The request could not be completed.")
+			return
+		}
 	}
 	if tx.Commit() != nil {
 		writeError(w, 500, "internal_error", "The request could not be completed.")
