@@ -93,12 +93,22 @@ func (h *Handler) issue(w http.ResponseWriter, r *http.Request, userID, email st
 	sum := sha256.Sum256([]byte(raw))
 	id := "aps_" + token(18)
 	now := h.now().UTC()
-	if _, err := h.db.ExecContext(r.Context(), "INSERT INTO _trestle_app_sessions(id,user_id,refresh_hash,created_at,expires_at) VALUES(?,?,?,?,?)", id, userID, sum[:], now.Format(time.RFC3339Nano), now.Add(30*24*time.Hour).Format(time.RFC3339Nano)); err != nil {
+	tx, err := h.db.BeginTx(r.Context(), nil)
+	if err != nil {
 		writeError(w, 500, "internal_error", "The request could not be completed.")
 		return
 	}
-	access, err := h.createAccess(r, id, userID)
+	defer tx.Rollback()
+	if _, err := tx.ExecContext(r.Context(), "INSERT INTO _trestle_app_sessions(id,user_id,refresh_hash,created_at,expires_at) VALUES(?,?,?,?,?)", id, userID, sum[:], now.Format(time.RFC3339Nano), now.Add(30*24*time.Hour).Format(time.RFC3339Nano)); err != nil {
+		writeError(w, 500, "internal_error", "The request could not be completed.")
+		return
+	}
+	access, err := h.createAccessTx(r, tx, id, userID)
 	if err != nil {
+		writeError(w, 500, "internal_error", "The request could not be completed.")
+		return
+	}
+	if err := tx.Commit(); err != nil {
 		writeError(w, 500, "internal_error", "The request could not be completed.")
 		return
 	}
@@ -135,22 +145,30 @@ func (h *Handler) refresh(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	_, err = tx.ExecContext(r.Context(), "INSERT INTO _trestle_app_sessions(id,user_id,refresh_hash,created_at,expires_at) VALUES(?,?,?,?,?)", nextID, userID, nextSum[:], now.Format(time.RFC3339Nano), now.Add(30*24*time.Hour).Format(time.RFC3339Nano))
-	if err != nil || tx.Commit() != nil {
+	if err != nil {
 		writeError(w, 500, "internal_error", "The request could not be completed.")
 		return
 	}
-	access, err := h.createAccess(r, nextID, userID)
+	access, err := h.createAccessTx(r, tx, nextID, userID)
 	if err != nil {
+		writeError(w, 500, "internal_error", "The request could not be completed.")
+		return
+	}
+	if err := tx.Commit(); err != nil {
 		writeError(w, 500, "internal_error", "The request could not be completed.")
 		return
 	}
 	writeJSON(w, 200, map[string]any{"userId": userID, "email": email, "accessToken": access, "accessExpiresIn": 900, "refreshToken": next, "expiresIn": 2592000})
 }
 
-func (h *Handler) createAccess(r *http.Request, sessionID, userID string) (string, error) {
+// createAccessTx inserts the short-lived access-token row on the caller's
+// transaction so a session and its access token commit together. A failed
+// access insert rolls back the whole login or refresh: no orphaned session,
+// and no rotated refresh token without a usable access token.
+func (h *Handler) createAccessTx(r *http.Request, tx store.Transaction, sessionID, userID string) (string, error) {
 	raw := "ta_" + token(24)
 	sum := sha256.Sum256([]byte(raw))
-	_, err := h.db.ExecContext(r.Context(), "INSERT INTO _trestle_app_access(token_hash,session_id,user_id,expires_at) VALUES(?,?,?,?)", sum[:], sessionID, userID, h.now().UTC().Add(15*time.Minute).Format(time.RFC3339Nano))
+	_, err := tx.ExecContext(r.Context(), "INSERT INTO _trestle_app_access(token_hash,session_id,user_id,expires_at) VALUES(?,?,?,?)", sum[:], sessionID, userID, h.now().UTC().Add(15*time.Minute).Format(time.RFC3339Nano))
 	return raw, err
 }
 func (h *Handler) Authenticate(r *http.Request) (string, bool) {

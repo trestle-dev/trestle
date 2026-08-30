@@ -385,6 +385,54 @@ Known limits: fixtures model each retained logical version with the current
   authoritative DDL; historical DDL as first written is not retained separately
 ```
 
+## CP4 - Transactional mutation and audit atomicity
+
+Status: complete
+
+Inventoried every security-sensitive multi-table mutation and proved each
+commits atomically under PostgreSQL (or documents a deliberately non-atomic
+external effect). The composed rollback test already covered records + events +
+audit + webhook and Lambda outbox jobs; this checkpoint repaired the one
+genuine non-atomicity found and locked it with failure injection between
+statements.
+
+### Application
+
+- Defect repaired: application login and refresh-token rotation inserted the
+  session row and its short-lived access token in two separate
+  non-transactional statements. A failure between them left an orphaned session
+  on login, and on refresh consumed the old refresh token without issuing an
+  access token. Both now commit the session and access rows in one transaction
+  (`createAccessTx`).
+- Add `TestLoginAndRefreshAreAtomicUnderInjectedFailure`: a fault-injecting
+  executor fails the access insert after the session row was written and proves,
+  on SQLite and real PostgreSQL, that login leaves no session or access row and
+  a failed refresh leaves the original refresh token valid.
+- Add `docs/hardening/atomicity-inventory.json`: the machine-readable inventory
+  of every security-sensitive multi-table mutation with its transaction
+  boundary, evidence and deliberately non-atomic external effects, plus the
+  remaining hardening items.
+
+### Exit evidence
+
+- Failure-injection atomicity test passes on SQLite and real PostgreSQL 18.6;
+  full suite, race and vet green on both providers.
+
+Completion record:
+
+```text
+Status: complete
+Application commit: 6337404
+Website output commit: n/a (no public documentation change)
+Website source commit: n/a (no public documentation change)
+Verified: appauth atomicity test on SQLite and real PostgreSQL 18.6; full go
+  test ./..., race and vet on both providers
+Findings repaired: login/refresh session+access non-atomicity (orphaned
+  sessions; refresh token consumed without an access token)
+Known limits: files.remove ignores BeginTx/Commit errors (hardening item); admin
+  setup issues its session after the admin commit as a documented convenience
+```
+
 ## Checkpoint roadmap
 
 - CP1 - PostgreSQL contract and baseline (this checkpoint)
