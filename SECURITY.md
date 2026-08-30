@@ -10,7 +10,8 @@ impossible or a substitute for independent assessment.
 - Trusted application backends: authenticated by scoped service identities, not
   automatically trusted because of network location.
 - Administrators: scoped administrative identities; superuser is exceptional.
-- Trestle process and SQLite: trusted computing boundary for one deployment.
+- Trestle process and its configured database (SQLite file or PostgreSQL
+  service): trusted computing boundary for one deployment.
 - External systems: object stores, proxies, webhooks, Lambda, email, and identity
   providers; responses and callbacks remain untrusted input.
 

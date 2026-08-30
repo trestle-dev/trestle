@@ -27,6 +27,15 @@ corpus, migration safety and recovery semantics are exercised against
 PostgreSQL 16, 17 and 18 in CI and PostgreSQL 18.6 locally. See
 `POSTGRES-CHECKPOINTS.md`.
 
+An active public-preview campaign (`PREVIEW-CHECKPOINTS.md`) is hardening the
+whole product for an honest preview. It adds a machine-readable PostgreSQL
+readiness contract, a single reproducible PostgreSQL gate
+(`scripts/test-postgres-gate.sh`), and proceeds through recovery, parity,
+release, domain and publish/no-publish checkpoints. Trestle is an early preview
+for evaluation and prototypes; it is not presented as battle-proven or
+production-immune. Nothing is published until the campaign's publish gate
+authorizes it.
+
 ## Requirements
 
 - Go 1.22 or newer
@@ -90,13 +99,13 @@ The installer defaults to the current user's `~/.local/bin` and does not use
 root privileges:
 
 ```sh
-curl -fsSL https://trestle.dev/install.sh | sh
+curl -fsSL https://trestle.cv/install.sh | sh
 ```
 
 Update the installed binary without changing instance data or configuration:
 
 ```sh
-curl -fsSL https://trestle.dev/update.sh | sh
+curl -fsSL https://trestle.cv/update.sh | sh
 ```
 
 The updater supports `--dry-run`, `--version vX.Y.Z`, and `--rollback`.
@@ -105,7 +114,7 @@ System installations pass `--system` through `sudo` for install and update.
 For an explicit machine-wide install:
 
 ```sh
-curl -fsSL https://trestle.dev/install.sh | sudo sh -s -- --system
+curl -fsSL https://trestle.cv/install.sh | sudo sh -s -- --system
 ```
 
 Tagged releases contain Linux, macOS, and Windows archives for amd64 and arm64,
@@ -179,7 +188,7 @@ proxy addresses you administer.
 ```sh
 nift build
 nift status
-node --check content/assets/js/script.js
+node --check internal/web/public/assets/js/script.js
 node scripts/check-web.mjs internal/web/public
 go test ./...
 go test -race ./...

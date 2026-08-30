@@ -6,7 +6,9 @@ release candidate, not a published stable release.
 ## Candidate-supported surfaces
 
 - Linux and macOS on amd64 and arm64, and Windows on amd64 and arm64.
-- One Trestle process owning one local SQLite database on a local filesystem.
+- One Trestle process owning one configured database: an owned local SQLite
+  database on a local filesystem, or an external PostgreSQL 16, 17 or 18
+  service.
 - The versioned `/api/v1`, `/admin/v1`, and `/system` HTTP contracts documented
   by the bundled OpenAPI document and public documentation.
 - Application users, administrator sessions, scoped service credentials,

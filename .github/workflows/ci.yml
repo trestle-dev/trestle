@@ -87,7 +87,7 @@ jobs:
           done
       - name: Release packaging and installer syntax
         run: |
-          sh -n install.sh update.sh scripts/package-release.sh scripts/test-release.sh scripts/test-installer.sh scripts/test-update.sh
+          sh -n install.sh update.sh scripts/package-release.sh scripts/test-release.sh scripts/test-installer.sh scripts/test-update.sh scripts/test-postgres-gate.sh
           ./scripts/test-installer.sh
           ./scripts/test-update.sh
           ./scripts/test-release.sh

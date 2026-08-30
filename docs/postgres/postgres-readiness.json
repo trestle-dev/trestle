@@ -1,0 +1,150 @@
+{
+  "contractName": "trestle-postgres-readiness",
+  "contractVersion": 1,
+  "checkpoint": "CP1",
+  "campaign": "public-preview",
+  "provider": "postgres",
+  "status": "implemented",
+  "currentSchemaVersion": 13,
+  "driver": "github.com/lib/pq",
+  "supportedServerVersions": [16, 17, 18],
+  "configurationInputs": {
+    "provider": {
+      "flag": "--database-provider",
+      "env": "TRESTLE_DATABASE_PROVIDER",
+      "default": "sqlite",
+      "values": ["sqlite", "postgres"]
+    },
+    "url": {
+      "flag": "--database-url",
+      "env": "TRESTLE_DATABASE_URL",
+      "secret": true,
+      "note": "postgres:// URL; never returned by an API and never written to logs, diagnostics or support bundles"
+    },
+    "maxOpen": {
+      "flag": "--database-max-open",
+      "env": "TRESTLE_DATABASE_MAX_OPEN",
+      "default": 10,
+      "range": "1..500"
+    },
+    "maxIdle": {
+      "flag": "--database-max-idle",
+      "env": "TRESTLE_DATABASE_MAX_IDLE",
+      "default": 2,
+      "range": "0..maxOpen"
+    },
+    "connectTimeout": {
+      "flag": "--database-connect-timeout",
+      "env": "TRESTLE_DATABASE_CONNECT_TIMEOUT",
+      "default": "10s",
+      "constraint": "whole number of seconds; injected as connect_timeout into every connection configuration"
+    },
+    "connMaxLifetime": {
+      "flag": "--database-conn-max-lifetime",
+      "env": "TRESTLE_DATABASE_CONN_MAX_LIFETIME",
+      "default": "30m"
+    }
+  },
+  "persistedBootstrap": {
+    "path": "<data-dir>/database.json",
+    "permissions": "owner-only 0600",
+    "atomic": true,
+    "neverExposed": true
+  },
+  "connection": {
+    "tlsDefault": "TLS required for non-loopback hosts",
+    "loopbackException": "sslmode=disable permitted only when the host is localhost or a loopback address",
+    "connectTimeout": "whole-second bound enforced at dial time through the driver",
+    "readiness": "startup waits for provider connection and required migrations before serving application traffic",
+    "probe": "first-run setup tests the connection and reports server version without exposing credentials",
+    "diagnostics": "authenticated diagnostics report provider, applied schema version and pool bound, never the DSN"
+  },
+  "schemaOwnership": {
+    "reservedPrefix": "_trestle_",
+    "migrationTable": "_trestle_schema_migrations",
+    "systemMeta": "_trestle_system_meta",
+    "sourceOfTruth": "validated migration history on both providers; SQLite PRAGMA user_version is a compatibility mirror only",
+    "userIdentifiers": "user collection and field names never become SQL identifiers; stable physical IDs name generated tables and columns",
+    "databaseIdentity": "one provider per instance; the provider cannot be changed online after first setup"
+  },
+  "migrationBehaviour": {
+    "logicalVersions": "1..13",
+    "oneLogicalSchemaPerVersion": true,
+    "transactionality": "migration DDL and its history row commit in one transaction",
+    "locking": "PostgreSQL advisory lock on a pinned connection serializes concurrent startup",
+    "rollback": "a failed statement rolls back the entire migration; no partially recorded migration remains",
+    "futureSchema": "refused with a useful, non-secret error",
+    "historyValidation": "every version present exactly once with an authoritative name; gapped, future or malformed history fails closed",
+    "trafficGating": "no application traffic before required migrations complete",
+    "recovery": "interrupted startup resumes or fails closed with actionable redacted guidance"
+  },
+  "transactionBoundaries": {
+    "perMutation": "each logical mutation and its required audit record commit atomically",
+    "isolation": "ordinary operations use engine defaults; logical export uses REPEATABLE READ READ ONLY on PostgreSQL",
+    "advisoryLocking": "first-administrator setup and migration startup use PostgreSQL advisory locks",
+    "externalEffects": "remote side effects such as webhook or Lambda deliveries are deliberately non-atomic and documented"
+  },
+  "pooling": {
+    "defaults": { "maxOpen": 10, "maxIdle": 2, "connMaxLifetime": "30m" },
+    "bounds": "maxOpen 1..500, maxIdle 0..maxOpen",
+    "sqlite": "single owned connection; not affected by PostgreSQL pool settings",
+    "topology": "single Trestle process per instance"
+  },
+  "timeouts": {
+    "connect": "whole-second bound enforced at dial time",
+    "request": "context deadlines propagate to queries",
+    "operation": "bounded query depth, page size and result limits"
+  },
+  "cancellation": {
+    "mechanism": "Go context cancellation propagates to in-flight queries",
+    "requirement": "requests must not hang indefinitely or report false success"
+  },
+  "retries": {
+    "transactions": "no automatic retry of failed transactions at the HTTP layer",
+    "idempotency": "clients must use idempotency keys for retry-unsafe mutations",
+    "jobs": "durable job engine provides explicit retry, backoff and dead-letter state",
+    "webhooks": "explicit delivery retries with backoff and idempotency"
+  },
+  "backupAndRestore": {
+    "portableArchive": "a transactionally consistent Trestle logical archive is the cross-provider backup format",
+    "sqliteSnapshot": "SQLite retains its native consistent snapshot",
+    "postgresDump": "operator pg_dump or managed-cluster backup responsibilities are documented separately; the portable archive does not back up the operator's whole PostgreSQL cluster",
+    "restoreContract": "restore only into an initialized, logically empty destination; all-or-nothing publication; a failed restore leaves the destination unchanged",
+    "migration": "offline trestle migrate uses the portable format with a read-only source, empty-destination preflight, zero-write dry run and explicit confirmation"
+  },
+  "deploymentShapes": {
+    "supported": [
+      "single Trestle process with an external PostgreSQL 16, 17 or 18 service",
+      "remote PostgreSQL with TLS",
+      "loopback PostgreSQL without TLS for development",
+      "operator-managed pg_dump or managed-cluster backups alongside the portable archive"
+    ],
+    "unsupported": [
+      "multi-process Trestle clustering",
+      "changing the database provider online",
+      "PostgreSQL major versions outside 16, 17 and 18",
+      "managed/serverless PostgreSQL topologies (open limitation)",
+      "SQLite on network or shared filesystems"
+    ]
+  },
+  "differencesFromSQLite": {
+    "connection": "network service with TLS and connection pooling instead of an embedded file",
+    "booleans": "native BOOLEAN type instead of the SQLite integer codec",
+    "json": "TEXT with a database-level jsonb validation constraint instead of SQLite json_valid",
+    "caseInsensitiveContains": "ILIKE instead of LIKE",
+    "nullSemantics": "IS NULL / IS NOT NULL compiled through the dialect on both providers",
+    "jobClaiming": "FOR UPDATE SKIP LOCKED instead of the serialized SQLite claim",
+    "concurrency": "MVCC instead of single-writer serialization",
+    "eventSequence": "numeric gaps in the event sequence are not treated as missing committed events",
+    "migrationLocking": "advisory lock on a pinned connection instead of single-process serialization",
+    "backup": "portable logical archive with optional operator pg_dump instead of the native SQLite snapshot",
+    "sizeReporting": "real database size instead of file bytes",
+    "timestampStorage": "identical ordering from the shared text-timestamp contract on both providers",
+    "generatedIds": "stable UUID identifiers on both providers"
+  },
+  "evidence": {
+    "localRealService": "PostgreSQL 18 exercised on a disposable local instance",
+    "ciMatrix": "PostgreSQL 16, 17 and 18 in CI (historical PG12 run at 6af777b)",
+    "status": "baseline green; no unresolved failures recorded at CP1"
+  }
+}

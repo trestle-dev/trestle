@@ -3,7 +3,8 @@
 Trestle is an open-source, self-hosted application backend. It provides
 collections, authentication, access rules, files, realtime events, migrations,
 administration, audit, backups, and event-driven integrations from one compact
-Go executable with an embedded Nift-built web interface and SQLite foundation.
+Go executable with an embedded Nift-built web interface, a SQLite foundation and
+PostgreSQL as an available external-database option.
 
 The canonical module and repository are intended to be:
 
@@ -11,11 +12,25 @@ The canonical module and repository are intended to be:
 github.com/trestle-dev/trestle
 ```
 
-The project is at product-definition/scaffold stage. Do not describe planned
-capabilities as implemented. `CHECKPOINTS.md` is the step-by-step execution
-handover; `PLAN.md` is the higher-level phase map. `ARCHITECTURE.md`, `API.md`,
-`UI.md`, `FUNCTIONS.md`, and `SECURITY.md` define the initial contracts. Keep
-them aligned as implementation turns decisions into tested behaviour.
+The project is in pre-release hardening in preparation for an honest public
+preview. Do not describe planned capabilities as implemented, and do not present
+Trestle as battle-proven, highly available, or production-ready. `CHECKPOINTS.md`
+is the completed step-by-step execution handover; `PLAN.md` is the phase map;
+`POSTGRES-CHECKPOINTS.md` records the completed PostgreSQL parity campaign;
+`PREVIEW-CHECKPOINTS.md` is the active public-preview campaign.
+`ARCHITECTURE.md`, `API.md`, `UI.md`, `FUNCTIONS.md`, and `SECURITY.md` define
+the initial contracts. Keep them aligned as implementation turns decisions into
+tested behaviour.
+
+`PREVIEW-CHECKPOINTS.md` is the active campaign preparing an honest public
+preview: PostgreSQL battle-hardening, SQLite/PostgreSQL parity proof, product
+hardening, reproducible releases and installers, the public domain (`trestle.cv`)
+and website, and a final publish/no-publish review. Its checkpoints are named
+CP1-CP22 and are distinct from the completed CP00-CP23 and PG00-PG12 campaigns.
+The preview positioning is intentionally restrained: an early preview for
+evaluation and prototypes, never presented as battle-proven, highly available,
+or immune to outages because it is self-hosted. Do not publicise Trestle until
+the publish gate in `PREVIEW-CHECKPOINTS.md` authorizes it.
 
 ## Implementation handover
 

@@ -157,7 +157,15 @@ implemented guarantees from roadmap work.
 
 ## Deliberately deferred
 
-PostgreSQL, clustering, GraphQL, a plugin marketplace, a hosted cloud, exact
+Clustering, GraphQL, a plugin marketplace, a hosted cloud, exact
 third-party API compatibility, and a local user-code runtime are not first-release
 requirements. Revisit them only with a concrete use case and an architecture
 that preserves the single-node product's safety and clarity.
+
+PostgreSQL was originally listed here as deliberately deferred; that decision
+was superseded by the completed PostgreSQL parity campaign
+(`POSTGRES-CHECKPOINTS.md`, PG00-PG12), which made PostgreSQL an available
+external-database option with provider-parameterized parity, offline
+cross-provider migration, and a 16/17/18 support window. The public-preview
+campaign (`PREVIEW-CHECKPOINTS.md`) hardens that support rather than
+re-architecting it.

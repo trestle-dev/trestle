@@ -1,0 +1,288 @@
+# Trestle public-preview campaign
+
+This campaign prepares Trestle for an honest public preview. It is distinct
+from the earlier implementation campaign (`CHECKPOINTS.md`, CP00-CP23) and the
+PostgreSQL parity campaign (`POSTGRES-CHECKPOINTS.md`, PG00-PG12). Those
+campaigns are complete; this one hardens the whole product, re-proves
+SQLite/PostgreSQL parity with real-service evidence, establishes reproducible
+releases and installers, connects the public domain and documentation, and ends
+in a strict publish/no-publish review.
+
+Checkpoints here are named CP1-CP22 in the order of the preview plan. They are
+deliberately distinct from the historical CP00-CP23 numbering. Phase ordering
+and safety gates are preserved from the plan. Every checkpoint ends in one
+focused application commit plus one website commit whenever public
+documentation changes; both hashes are reported against the checkpoint.
+
+## Positioning
+
+> Trestle is a compact, open-source backend platform you run yourself. Build
+> with collections, authentication, files, realtime events, webhooks, jobs and
+> generated APIs. Start with SQLite or use PostgreSQL when your deployment
+> needs it.
+
+The preview must not claim that Trestle is battle-proven, highly available, a
+drop-in Supabase replacement, or inherently immune to outages merely because it
+is self-hosted.
+
+> Trestle is an early preview suitable for evaluation, prototypes, internal
+> tools and developers willing to test recovery carefully. It is not yet
+> presented as a battle-proven replacement for mature production platforms.
+
+Self-hosting gives operators control of their failure domain, data, upgrades
+and recovery. It does not guarantee uptime.
+
+## Working rules
+
+- One focused application commit per checkpoint; one corresponding website
+  commit when public documentation changes. Report both hashes.
+- Keep the application README and this handover current.
+- Edit canonical Nift source only (`content/`). Rebuild generated output with
+  Nift. Never hand-edit generated pages as the source of truth.
+- Commit discipline for the website repository (see the model section):
+  generated `public/` output commit first, then website source with its updated
+  gitlink, when both change. This is the repository's documented convention.
+- Add executable regression evidence for every fixed defect or new guarantee.
+- Keep SQLite and PostgreSQL behaviour explicitly distinguished.
+- Do not silently weaken tests to make a checkpoint pass.
+- Do not push, tag, publish releases, alter DNS or publicise Trestle until
+  explicitly authorized at the relevant gate.
+- Stop immediately for any unresolved authentication bypass, authorization
+  bypass, data-loss risk, migration corruption, unsafe secret handling or
+  unreliable restore.
+- Use human verification only where automation cannot reasonably establish the
+  result. Label evidence accurately as automated, simulated, local real-service,
+  CI, or human visual review.
+
+## Repository identification and model
+
+The Trestle workspace has two top-level repositories. The generated public
+website is a nested Git repository inside the website repository, tracked by
+the website source through a gitlink. This is the actual arrangement recorded
+from repository evidence, not an assumed one.
+
+| Role | Path | Branch | Head (recorded at campaign start) | Remote |
+| --- | --- | --- | --- | --- |
+| Trestle application | `trestle` | `main` | `974e3b3da0d72d3c8443031e1080c3053aa434c1` | `git@github.com:trestle-dev/trestle.git` |
+| Nift website source | `trestle-dev.github.io` | `stage` | `e9d26efd175eccf8336248a93487c147577c7ac6` | `git@github.com:trestle-dev/trestle-dev.github.io.git` |
+| Generated website (nested) | `trestle-dev.github.io/public` | `main` | `da053c21baa62238453e8d08ab81319423b228cb` | `git@github.com:trestle-dev/trestle-dev.github.io.git` |
+
+Structure:
+
+```text
+trestle/
+  content/              canonical dashboard source (Nift)
+  internal/web/public/  generated embedded dashboard (Nift output, embedded in the binary)
+
+trestle-dev.github.io/            (branch stage = website source)
+  content/              canonical public-site source (Nift)
+  templates/, scripts/  site templates and checks
+  public/               generated public site = nested Git repo (branch main,
+                        same remote), the GitHub Pages deployment target
+```
+
+Nested-repository evidence: the website source tracks `public` as a gitlink
+(mode 160000), introduced at commit `6ef9bce` ("Plan Trestle public website",
+2026-08-26) and documented by the website repo README ("Generated output is
+stored in the nested `public/` Git repository... commit `public/` first and this
+source repository second"). This is therefore NOT the Watchpost arrangement of a
+separate top-level generated-site repository, but it does use a nested
+generated-site repository; a single website product change is recorded as one
+nested `public/` commit plus one website-source commit that bumps the gitlink.
+No artificial repositories are manufactured and generated output is never
+treated as canonical source.
+
+A recorded external event: on 2026-08-30 the nested `public/` working tree was
+replaced by a fresh clone of `origin/main`, which had advanced with commit
+`80c06a7` "Create CNAME" (the `trestle.cv` domain CNAME). The website source
+repository was reset to `e9d26ef`, discarding earlier local-only website
+commits. The source gitlink was subsequently reconciled to the real nested head
+`80c06a7` in this campaign's baseline.
+
+## Nift tool record
+
+The exact Nift executable used to build both sites:
+
+| Item | Value |
+| --- | --- |
+| Path | `/usr/local/bin/nift` |
+| Version | `Nift v4.0.8` |
+| Dashboard build | `nift build` in `trestle/` (`content/` → `internal/web/public/`) |
+| Public site build | `nift build` in `trestle-dev.github.io/` (`content/` → `public/`) |
+| Status command | `nift status` (reports tracked pages up to date) |
+
+`/home/nick/Repositories/nift/nift` is the Nift source project, not a Trestle
+repository and not a built binary. The installed binary was present before this
+campaign and is used unchanged. Clean `nift status`/`nift build` runs at
+baseline produced no unexplained diffs in either repository.
+
+`.nift/.ownership-gate` provenance: a zero-byte, 0644, never-removed flock
+serialization sentinel created on demand by `nift build`
+(`ProjectOwnership::acquire()`, Nift CP15 fix; `src/ProjectOwnership.cpp`). It
+is build infrastructure, recreated as needed, and gitignored in the canonical
+Nift ecosystem (`nift-embed-regression-suite/.gitignore`). The application
+repository's copy was created by this campaign's own `nift build` and removed;
+the website source's copy predates this campaign (2026-08-29) and is kept on
+disk but gitignored. Neither is user content; no process outside Nift's build
+ownership protocol depends on it.
+
+## Domain record
+
+The intended public domain is **`trestle.cv`**. Use exactly this domain in
+future website, release and installer preparation:
+
+```text
+https://trestle.cv
+https://trestle.cv/docs
+https://trestle.cv/install.sh
+```
+
+Installer examples are `curl -fsSL https://trestle.cv/install.sh | sh` and
+`curl -fsSL https://trestle.cv/install.sh | sudo sh -s -- --system`. A CNAME
+for `trestle.cv` already exists in the generated site (`public` head `80c06a7`,
+pushed to `origin/main`). DNS, hosting, canonical URLs and live external
+configuration are NOT changed by this campaign without explicit authorization.
+
+## Plan-vs-implementation reconciliation
+
+The plan was written as if PostgreSQL work had not started. Repository evidence
+differs, and these differences are recorded before CP1.
+
+1. **PostgreSQL parity already exists.** `POSTGRES-CHECKPOINTS.md` records a
+   complete PG00-PG12 campaign: real-server provider-parameterized parity,
+   offline cross-provider migration, portable backup/restore, and a promoted
+   16/17/18 support window. CP1's baseline is therefore a verification of an
+   advanced baseline, not a first port. The baseline was measured at the
+   original application head and was green on both providers.
+2. **Existing commit messages are not evidence.** Every PG claim that this
+   campaign depends on is re-run against real PostgreSQL services where the
+   environment permits (local real-service PostgreSQL 18) or is labelled CI
+   evidence from the historical matrix where it is not re-runnable (16/17).
+3. **Checkpoint mapping and classification.** The prior PG checkpoints are
+   mapped onto CP1-CP8 in the table below with each acceptance item classified.
+4. **Local PostgreSQL versions.** Only PostgreSQL 18 is installed locally. This
+   campaign provisions disposable real instances (`initdb`/`pg_ctl`) for
+   reproducibility and exercises PostgreSQL 18.6; 16/17 rest on the historical
+   CI matrix and are not re-claimed here.
+5. **Two top-level repositories with a nested generated-site repo** (model
+   above). This differs from the plan's assumption of a separate generated
+   website repository and from the user's stated two-repository model; recorded
+   with evidence so the campaign uses the actual arrangement.
+6. **Incident Desk is a separate repository** (`trestle-example`); the earlier
+   campaign exercised it via the published HTTP/SSE contract corpus. CP14
+   rebuilds it from a clean checkout where the environment permits.
+
+## PostgreSQL checkpoint mapping (prior work to new plan)
+
+| New checkpoint | Prior PG work | Classification |
+| --- | --- | --- |
+| CP1 Contract and baseline | PG00 inventory, PG01 config/secrets, PG03R diagnostics, PG12 support window | already implemented; consolidated into a machine-readable readiness contract, contract test and reproducible gate; baseline independently re-run |
+| CP2 First-run setup | PG01/PG03/PG03R/PG04 first-run state machine and dashboard truthfulness | mostly implemented; verify every acceptance transition and add state-machine regression tests where missing |
+| CP3 Schema and migration integrity | PG03 dual migrations, PG03R history authority, PG11R2 complete history validation | largely implemented; audit and consolidate evidence; add any missing locking/traffic-gating assertions |
+| CP4 Transactional mutation and audit atomicity | PG06 batch/rollback, PG09 composed rollback (records+events+audit+webhooks+lambda) | partially implemented; full inventory of security-sensitive mutations with failure injection between statements |
+| CP5 Concurrency, locking, conflicts | PG04 single-winner setup, PG06 one-winner races, PG09 SKIP LOCKED claiming, PG03 concurrent startup | partially implemented; extend to the full race matrix including delete-vs-update, revocation-during-request, schema-change-during-access |
+| CP6 Connection loss and pool recovery | PG03R connect timeout, readiness gating, pool bounds | mostly absent; new hardening with unavailable/degraded/recovered states and liveness semantics |
+| CP7 Backup, restore, DR | PG10 portable archive, PG11R snapshot/confirmation/read-only source, PG11R2 hostile-archive preflight, PG11R3 empty destination | largely implemented; verify and consolidate evidence |
+| CP8 Longevity and resource bounds | existing `test-load.sh`, `stress-concurrency.sh` | partially implemented; add a bounded soak with resource-growth tracking and a longer external package |
+
+## Baseline evidence (measured before CP1 changes)
+
+Measured at the original application head `974e3b3` (pre-change worktree) and on
+the current tree before this campaign's CP1 consolidation:
+
+| Gate | Result | Evidence type |
+| --- | --- | --- |
+| `go test -count=1 ./...` (SQLite, at `974e3b3`) | green, exit 0 | automated |
+| `go test -count=1 ./...` (real PostgreSQL 18.6) | green, exit 0 | local real-service |
+| `go test -race -count=1 ./...` (SQLite) | green, exit 0 | automated |
+| `go test -race -count=1 ./...` (real PostgreSQL 18.6) | green, exit 0 | local real-service |
+| `go vet ./...` | green, exit 0 | automated |
+| `go build ./...`, `go build ./cmd/trestle` | green, exit 0 | automated |
+| `./scripts/test-release-candidate.sh` (with real PG) | green, exit 0 | automated + local real-service |
+| Frontend JS syntax + dashboard quality checks | green | automated |
+| Website `nift status`/`nift build` | all pages up to date, no unexplained diff | automated |
+| Website link/structure `scripts/check-site.mjs` | 87 HTML pages and 93 files checked | automated |
+| `git status --porcelain` all three repos | empty | automated |
+| `git fsck --full` | pending at CP1 record | automated |
+
+Baseline failures recorded: none. PostgreSQL versions genuinely exercised
+locally: **18.6** (disposable real instance provisioned with `initdb`/`pg_ctl`
+and the pre-existing system `postgres:18` cluster; the system cluster's
+`postgres` role is not usable for tests). PostgreSQL 16 and 17 are not installed
+locally; their evidence is the historical CI matrix and is labelled CI.
+
+## CP1 - Freeze the PostgreSQL contract and baseline
+
+Status: complete
+
+### Application
+
+- Add a machine-readable PostgreSQL readiness contract at
+  `docs/postgres/postgres-readiness.json` covering supported versions,
+  configuration inputs, connection and TLS expectations, schema ownership,
+  migration behaviour, transaction boundaries, pooling, timeouts, cancellation,
+  retries, backup and restore, supported and unsupported deployment shapes, and
+  differences from SQLite.
+- Add `TestPostgresReadinessContract` in `internal/store` that enforces the
+  contract against the compiled behaviour and, when `TRESTLE_TEST_POSTGRES_URL`
+  is set, probes a real server and asserts its major version is inside the
+  declared window.
+- Add `scripts/test-postgres-gate.sh`, the one reproducible PostgreSQL-focused
+  gate: real server (provided or disposable `initdb`/`pg_ctl` instance), never
+  prints credentials, runs the contract probe, the full provider-parameterized
+  suite, and the race-enabled provider suite.
+- Correct stale project documentation discovered during reconciliation:
+  HANDOVER "product-definition/scaffold stage" and "SQLite foundation", PLAN
+  "PostgreSQL deliberately deferred", STABILITY single-SQLite wording, and the
+  README node-check path. The project is described as pre-release hardening in
+  preparation for an honest public preview, not as battle-proven or
+  production-ready.
+- Record the corrected repository model, Nift tool, `trestle.cv` domain
+  decision, PG checkpoint mapping, and measured baseline in this ledger.
+
+### Exit evidence
+
+- Real PostgreSQL is used, never a mock: the gate provisions or connects to a
+  real server and the contract test asserts the running major version.
+- Existing behaviour was measured before repair: baseline table above (green at
+  `974e3b3` and on the current tree); no pre-existing failure is hidden.
+- Unsupported behaviour is documented: contract lists unsupported deployment
+  shapes and the differences from SQLite.
+
+Completion record:
+
+```text
+Status: complete
+Application commit: 04b6647126251bf8bea684b2878fe92c664e2191
+Website output commit: 80c06a7 (reconciled nested head; CNAME) / CP1 site commit recorded on rebuild
+Website source commit: c686afd (baseline reconciliation) / CP1 site commit recorded on rebuild
+Baseline evidence: green on SQLite and real PostgreSQL 18.6 at 974e3b3 before changes
+PostgreSQL evidence: disposable real server 18.6; contract probe; full suite; race suite
+Findings repaired: readiness contract was prose-only; no single reproducible PostgreSQL gate existed; stale product-stage documentation; stale README check path
+Known limits: local evidence covers PostgreSQL 18; 16/17 rest on the historical CI matrix
+```
+
+## Checkpoint roadmap
+
+- CP1 - PostgreSQL contract and baseline (this checkpoint)
+- CP2 - Repair first-run PostgreSQL setup (ordinary-user workflow)
+- CP3 - Schema and migration integrity
+- CP4 - Transactional mutation and audit atomicity
+- CP5 - Concurrency, locking and conflict behaviour
+- CP6 - Connection loss, restart and pool recovery
+- CP7 - Backup, restore and disaster recovery
+- CP8 - Longevity and resource bounds
+- CP9 - SQLite/PostgreSQL parity matrix
+- CP10 - Authentication, authorization and session hardening
+- CP11 - Files, realtime, webhooks, jobs and functions
+- CP12 - Import, export, deletion and upgrade compatibility
+- CP13 - Degraded-state and accessibility UX
+- CP14 - Independent example-application dogfood
+- CP15 - Reproducible release artifacts
+- CP16 - Public install.sh, update and uninstall paths
+- CP17 - Container and service deployment
+- CP18 - Domain, HTTPS and reverse-proxy deployment
+- CP19 - Public-preview documentation and positioning
+- CP20 - Launch assets and publication draft
+- CP21 - Clean-machine release rehearsal
+- CP22 - Publish/no-publish review
