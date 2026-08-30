@@ -56,9 +56,59 @@ globalThis.TrestleDatabaseSetup = (() => {
       body: `PostgreSQL ${version} is configured. Stop and start Trestle, then reload this page to create the administrator account.`
     };
   }
-  return { computeState, authGateCopy, restartNotice };
+  // connectionState maps the process/database readiness probe to operator
+  // copy: a clear heading, a consequence, and a next action. States: connecting
+  // (initial), ready, starting (not_ready), databaseUnavailable (degraded) and
+  // unreachable (network/process). Recovery is the transition back to ready on
+  // a later successful probe.
+  function connectionState(phase, errorCode) {
+    if (phase === "connecting") {
+      return {
+        heading: "Connecting to Trestle",
+        description: "Checking process and database readiness.",
+        stateLabel: "Checking",
+        kind: "connecting",
+        nextAction: "This is a startup check. It resolves on its own."
+      };
+    }
+    if (phase === "ready") {
+      return {
+        heading: "Trestle is ready",
+        description: "The process and database are accepting work.",
+        stateLabel: "Ready",
+        kind: "ready",
+        nextAction: "Nothing to do."
+      };
+    }
+    if (phase === "databaseUnavailable") {
+      return {
+        heading: "Database unavailable",
+        description: "The process is up but the database connection failed.",
+        stateLabel: "Unavailable",
+        kind: "databaseUnavailable",
+        nextAction: "Check the database and the server logs, then retry."
+      };
+    }
+    if (phase === "starting") {
+      return {
+        heading: "Trestle is starting",
+        description: "Startup has not finished yet.",
+        stateLabel: "Starting",
+        kind: "starting",
+        nextAction: "Check back shortly."
+      };
+    }
+    return {
+      heading: "Trestle is unreachable",
+      description: "The server did not respond to the readiness probe.",
+      stateLabel: "Unreachable",
+      kind: "unreachable",
+      nextAction: "Check the process, network and logs, then retry."
+    };
+  }
+  return { computeState, authGateCopy, restartNotice, connectionState };
 })();
-const statusCard=document.querySelector("#status-card");const databaseState=document.querySelector("#database-state");const databaseProvider=document.querySelector("#database-provider");const connection=document.querySelector("#connection");const retry=document.querySelector("#retry");async function check(){statusCard.className="status-card";statusCard.querySelector("h2").textContent="Connecting to Trestle";statusCard.querySelector("p").textContent="Checking process and database readiness.";databaseState.textContent="Checking";retry.disabled=true;try{const response=await fetch("/system/ready",{headers:{Accept:"application/json"}});if(response.ok){statusCard.classList.add("ready");statusCard.querySelector("h2").textContent="Trestle is ready";statusCard.querySelector("p").textContent="The process and database are accepting work.";databaseState.textContent="Ready";databaseProvider.textContent=window.trestleProvider||"Configured";connection.className="connection ready";connection.querySelector("span").textContent="Ready"}else{throw new Error("not ready")}}catch{statusCard.classList.add("error");statusCard.querySelector("h2").textContent="Trestle is not ready";statusCard.querySelector("p").textContent="Check server logs and database initialization, then retry.";databaseState.textContent="Unavailable";connection.className="connection error";connection.querySelector("span").textContent="Unavailable"}finally{retry.disabled=false}}retry.addEventListener("click",check);const mobile=document.querySelector(".mobile-nav");const rail=document.querySelector("#primary-nav");mobile.addEventListener("click",()=>{const open=mobile.getAttribute("aria-expanded")==="true";mobile.setAttribute("aria-expanded",String(!open));rail.classList.toggle("open",!open)});document.addEventListener("keydown",event=>{if(event.key==="Escape"&&rail.classList.contains("open")){rail.classList.remove("open");mobile.setAttribute("aria-expanded","false");mobile.focus()}});document.querySelectorAll("[data-route]").forEach(link=>link.addEventListener("click",event=>{event.preventDefault();selectDashboardRoute(link.dataset.route,link.textContent);history.replaceState(null,"",link.getAttribute("href"));document.querySelector(".workspace").focus()}));check();
+const statusCard=document.querySelector("#status-card");const databaseState=document.querySelector("#database-state");const databaseProvider=document.querySelector("#database-provider");const connection=document.querySelector("#connection");const retry=document.querySelector("#retry");function applyConnection(state){statusCard.className="status-card "+state.kind;statusCard.querySelector("h2").textContent=state.heading;statusCard.querySelector("p").textContent=state.description;statusCard.querySelector(".next-action").textContent=state.nextAction;databaseState.textContent=state.stateLabel;databaseProvider.textContent=window.trestleProvider||"Configured";connection.className="connection "+state.kind;connection.querySelector("span").textContent=state.stateLabel}async function check(){const connecting=TrestleDatabaseSetup.connectionState("connecting");statusCard.className="status-card";statusCard.querySelector("h2").textContent=connecting.heading;statusCard.querySelector("p").textContent=connecting.description;databaseState.textContent=connecting.stateLabel;retry.disabled=true;let state;try{const response=await fetch("/system/ready",{headers:{Accept:"application/json"}});if(response.ok){state=TrestleDatabaseSetup.connectionState("ready")}else{const body=await response.json().catch(()=>null);state=body&&body.error&&body.error.code==="database_unavailable"?TrestleDatabaseSetup.connectionState("databaseUnavailable"):TrestleDatabaseSetup.connectionState("starting")}}catch{state=TrestleDatabaseSetup.connectionState("unreachable")}applyConnection(state);retry.disabled=false}retry.addEventListener("click",check);const mobile=document.querySelector(".mobile-nav");const rail=document.querySelector("#primary-nav");mobile.addEventListener("click",()=>{const open=mobile.getAttribute("aria-expanded")==="true";mobile.setAttribute("aria-expanded",String(!open));rail.classList.toggle("open",!open)});document.addEventListener("keydown",event=>{if(event.key==="Escape"&&rail.classList.contains("open")){rail.classList.remove("open");mobile.setAttribute("aria-expanded","false");mobile.focus()}});document.querySelectorAll("[data-route]").forEach(link=>link.addEventListener("click",event=>{event.preventDefault();selectDashboardRoute(link.dataset.route,link.textContent);history.replaceState(null,"",link.getAttribute("href"));document.querySelector(".workspace").focus()}));check();
 const authGate=document.querySelector("#auth-gate");const authForm=document.querySelector("#auth-form");const authTitle=document.querySelector("#auth-title");const authDescription=document.querySelector("#auth-description");const authKicker=document.querySelector("#auth-kicker");const authEmail=document.querySelector("#auth-email");const authPassword=document.querySelector("#auth-password");const authError=document.querySelector("#auth-error");let setupRequired=false;let csrfToken="";async function jsonRequest(url,options={}){const response=await fetch(url,{...options,headers:{Accept:"application/json","Content-Type":"application/json",...(options.headers||{})}});const body=response.status===204?null:await response.json();if(!response.ok){throw new Error(body?.error?.message||"The request could not be completed.")}return body}async function initializeAuth(){try{const session=await jsonRequest("/admin/v1/session");window.trestleProvider=session.provider||"";if(session.authenticated){authGate.classList.add("hidden");check();window.dispatchEvent(new Event("trestle:authenticated"));return}const setup=await jsonRequest("/admin/v1/setup/status");setupRequired=setup.setupRequired;authForm.classList.toggle("first-run",setupRequired);const copy=TrestleDatabaseSetup.authGateCopy(setupRequired);authKicker.textContent=copy.kicker;authTitle.hidden=false;authDescription.hidden=false;authTitle.textContent=copy.title;authDescription.textContent=copy.description;authPassword.autocomplete=copy.autocomplete;authForm.querySelector("#auth-submit").textContent=copy.submitLabel;syncDatabaseFields();authEmail.focus()}catch{authTitle.textContent="Trestle is unavailable";authDescription.textContent="Check the server and database, then reload this page.";authForm.querySelector("button").disabled=true}}authForm.addEventListener("submit",async event=>{event.preventDefault();authError.textContent="";if(setupRequired&&databaseSelectable&&selectedDatabase()==="postgres"){authError.textContent="Test and save the PostgreSQL connection before creating the administrator.";databasePreview.querySelector('[name="database-url"]').focus();return}const button=authForm.querySelector("#auth-submit");button.disabled=true;try{const session=await jsonRequest(setupRequired?"/admin/v1/setup":"/admin/v1/session",{method:"POST",body:JSON.stringify({email:authEmail.value,password:authPassword.value})});csrfToken=session.csrfToken||"";authPassword.value="";authGate.classList.add("hidden");check();window.dispatchEvent(new Event("trestle:authenticated"))}catch(error){authError.textContent=error.message;authPassword.focus();authPassword.select()}finally{button.disabled=false}});initializeAuth();
 const collectionDraftKey="trestle-collection-draft";
 const fieldTypeOptions=["text","number","boolean","datetime","json","select","relation","email","url"].map(type=>`<option value="${type}">${type}</option>`).join("");
