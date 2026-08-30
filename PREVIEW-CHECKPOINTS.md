@@ -740,6 +740,58 @@ Known limits: the dashboard distinguishes ready/unavailable via the readiness
   server skips that scenario)
 ```
 
+
+## CP7 - Backup, restore and disaster recovery
+
+Status: complete
+
+Established a documented, tested PostgreSQL recovery contract and added a
+destructive drill that runs against isolated temporary data only. The portable
+Trestle logical archive is the cross-provider backup format and is described
+honestly: it never implies a backup of an operator's whole PostgreSQL cluster;
+`pg_dump`/managed-cluster backup responsibilities are documented separately.
+
+### Application
+
+- Add `docs/postgres/recovery-contract.json`: the machine-readable recovery
+  contract covering SQLite snapshot and portable archive formats, `pg_dump` as
+  a separate operator responsibility, the restore contract (initialized,
+  logically empty destination; all-or-nothing import; hostile-archive
+  preflight; secrets/sessions treatment; file-manifest consistency), failure
+  modes (corrupted/incomplete/future-schema/occupied/wrong-credentials/failed
+  upgrade), semantic verification and operator steps.
+- Add `scripts/test-restore-drill.sh`: a destructive backup, destroy, restore
+  and verify drill against isolated temporary data. Leg 1 (SQLite): create
+  data, online backup, destroy the data directory, offline restore into a new
+  directory, sign in again (sessions are revoked by the restore policy) and
+  verify the record. Leg 2 (PostgreSQL): restore the portable archive into an
+  empty initialized destination and verify the record. Wired into CI syntax
+  checks.
+- Existing evidence consolidated: hostile-archive preflight, empty-destination
+  rejection, snapshot consistency, session/secret revocation, cross-provider
+  restore and concurrent-import single-winner tests already cover the contract
+  on both providers.
+
+### Exit evidence
+
+- The destructive drill passes both legs against real disposable services
+  (SQLite and PostgreSQL 18.6); full suite and vet green.
+
+Completion record:
+
+```text
+Status: complete
+Application commit: recorded by this commit
+Website output commit: n/a (restore and backups pages already document the
+  initialized-empty-destination and portable-archive contracts)
+Website source commit: n/a
+Verified: scripts/test-restore-drill.sh (both legs); full suite and vet
+Findings repaired: none (restore semantics were already correct); added the
+  machine-readable recovery contract and the destructive drill
+Known limits: recovery-time and operator-step SLAs are documented behaviour,
+  not measured guarantees; pg_dump remains an operator responsibility
+```
+
 ## Checkpoint roadmap
 
 - CP1 - PostgreSQL contract and baseline (this checkpoint)

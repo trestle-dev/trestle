@@ -1,0 +1,49 @@
+{
+  "contractName": "trestle-recovery-contract",
+  "contractVersion": 1,
+  "checkpoint": "CP7",
+  "campaign": "public-preview",
+  "scope": "Documented and tested backup, restore and disaster-recovery behaviour for SQLite and PostgreSQL. The portable Trestle logical archive is the cross-provider backup format; it never implies a backup of an operator's whole PostgreSQL cluster.",
+  "backupFormats": {
+    "sqliteSnapshot": {
+      "description": "Native consistent SQLite snapshot (VACUUM INTO style) produced through the backup API.",
+      "restore": "trestle restore --backup ARCHIVE --data-dir NEW_DATA_DIR"
+    },
+    "portableArchive": {
+      "description": "Transactionally consistent Trestle logical archive (JSON) covering schema metadata, records, identities, rules, events, audit, jobs, integration targets and the file manifest, exported from one repeatable-read snapshot (PostgreSQL REPEATABLE READ READ ONLY; SQLite shared lock).",
+      "restore": "trestle restore --backup ARCHIVE --data-dir NEW_DATA_DIR | trestle restore --backup ARCHIVE --provider postgres --database-url URL"
+    },
+    "postgresDump": {
+      "description": "An operator-managed pg_dump or managed-cluster backup covers the whole PostgreSQL service and is a separate responsibility. Trestle does not produce it and never claims the portable archive replaces it."
+    }
+  },
+  "restoreContract": {
+    "destination": "restore only into an initialized, logically empty destination. Every portable-owned table must be empty and system metadata must contain only the provider/initialization marker. The migration history must be current and authoritative.",
+    "atomicity": "all-or-nothing transactional import; a failed restore leaves the destination semantically unchanged",
+    "preflight": "hostile-archive preflight rejects missing manifest, future schema, unsafe names, symlinks, duplicates and unexpected entries before the destination is opened",
+    "secrets": "webhook secrets are re-encrypted or disabled on restore; live sessions and bearer access tokens are revoked; credential secret hashes survive (lookup is hash-based)",
+    "files": "the archive carries the file manifest; file bytes are backed up separately (local file tree or object storage); a file whose deletion was pending when the archive was taken is restored unavailable and its bytes cleaned by the deletion sweep"
+  },
+  "failureModes": {
+    "corruptedArchive": "rejected by preflight with actionable diagnostics",
+    "incompleteArchive": "rejected (missing manifest/entries)",
+    "futureSchema": "rejected; the executable refuses a schema newer than it supports",
+    "occupiedDestination": "rejected; every portable-owned table must be empty",
+    "wrongCredentials": "connection failure is clean, bounded and never surfaces credentials",
+    "failedUpgrade": "migration failures roll back; the destination is left unchanged"
+  },
+  "verification": {
+    "semanticDigest": "cross-provider migration and restore verify a canonical content hash of the destination against the source, not row counts alone",
+    "drill": "scripts/test-restore-drill.sh runs a destructive backup, destroy, restore and verify round trip against isolated temporary data"
+  },
+  "operatorSteps": {
+    "onlineBackup": "use the authenticated backup API (or the portable export) while the deployment is running; the export is a repeatable-read snapshot",
+    "restoreIntoEmpty": "create an empty initialized destination, then run trestle restore with the archive and destination flags",
+    "pgDump": "operators of PostgreSQL may additionally schedule pg_dump/pg_basebackup or a managed-cluster backup; Trestle's portable archive is not a substitute",
+    "rollback": "executable rollback restores the previous binary; database downgrade is not automatic and is documented as unsupported"
+  },
+  "evidence": {
+    "localRealService": "portable round trips and restore drills on SQLite and real PostgreSQL 18.6",
+    "tests": ["TestRestoreLogicalArchive", "TestExportSnapshotConsistency", "TestRestorePolicyRevokesSessionsAndIntegrationSecrets", "TestRestorePortableArchiveToPostgres", "TestPostgresRestorePreflightsHostileArchives", "TestPostgresRestoreRequiresEmptyInitializedDestination", "TestConcurrentImportSingleWinner", "test-restore-drill.sh"]
+  }
+}
