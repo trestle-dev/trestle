@@ -2508,6 +2508,35 @@ Workflow: https://github.com/trestle-dev/trestle/actions/runs/33339028658
 Recommendation: see the CP21 evidence report; no promotion or announcement
 ```
 
+### Evidence classification (corrected)
+
+- Workflow-step success: the attest job (pinned attest-build-provenance v4.2.2)
+  completed successfully in run 33339028658.
+- Authenticated provenance verification: NOT completed. `gh attestation verify`
+  requires GitHub credentials; none are available in this environment and the
+  device-flow login needs a human browser step. Investigation: the sigstore
+  transparency log (rekor) has an entry whose subject digests match all six
+  public archives (`/api/v1/index/retrieve` returned the same UUID for each),
+  which is consistent with the attestation step having uploaded a bundle; the
+  entry carries a signedEntryTimestamp and inclusionProof. Full cryptographic
+  bundle verification is pending and is NOT claimed.
+- Archive inspection: all six archives pass checksum, structure, ownership and
+  path-safety inspection.
+- Native Linux execution: linux/amd64 binary executed and reported
+  `0.1.0-rc.1` / `b616ebc` / linux/amd64.
+- Isolated host testing: the download/install/update and SQLite/PostgreSQL
+  journeys ran in isolated directories with overridden HOME on the maintainer's
+  Ubuntu host.
+- Genuine container/VM testing: NOT performed (no container runtime/VM
+  available in this environment); the true clean-machine rehearsal is
+  incomplete.
+- Unavailable native macOS and Windows testing: NOT performed (no native
+  runtime); binaries inspected for embedded metadata only.
+- Documentation repair: prerelease pinning examples
+  (`--version v0.1.0-rc.1`) added to the website Install and Releases pages
+  via Nift source; generated output rebuilt. Website source and output commits
+  are separate.
+
 ## Checkpoint roadmap (authoritative status)
 
 This table reconciles the public-preview campaign's actual accepted scope with
