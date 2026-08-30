@@ -468,15 +468,71 @@ Completion record:
 
 ```text
 Status: complete
-Application commit: 6337404
+Application commit: c8df51a
 Website output commit: n/a (no public documentation change)
 Website source commit: n/a (no public documentation change)
 Verified: appauth atomicity test on SQLite and real PostgreSQL 18.6; full go
   test ./..., race and vet on both providers
 Findings repaired: login/refresh session+access non-atomicity (orphaned
   sessions; refresh token consumed without an access token)
-Known limits: files.remove ignores BeginTx/Commit errors (hardening item); admin
+Known limits: file deletion was not yet fail-closed (repaired in CP4R); admin
   setup issues its session after the admin commit as a documented convenience
+```
+
+## CP4R - Durable, fail-closed file deletion
+
+Status: complete
+
+CP4's atomicity inventory flagged that permanent file deletion was fail-open:
+the handler ignored every database error, deleted the stored object even when
+the metadata delete failed, and could return 204 without durable deletion
+state. This repair replaces it with a recoverable deletion state machine.
+
+### Application
+
+- Migration 14 "durable file deletion" (append-only; regenerated the lineage
+  manifest to final version 14): adds `_trestle_file_deletions` (id, storage_key,
+  status pending/done, attempts, created_at, finalized_at) and
+  `_trestle_files.deleted_at`.
+- `files.remove` now: (1) records durable intent and marks metadata unavailable
+  in one transaction, (2) commits, (3) deletes the storage object, (4) finalizes
+  the intent. A failed begin, intent write or commit returns an error and
+  changes nothing; no object is deleted before durable intent exists; a storage
+  failure returns `deletion_pending` and leaves the intent pending; success is
+  returned only after the object is gone and the intent is finalized.
+- `ResumePendingDeletions` recovers unfinished deletion at startup (and cleans
+  files restored from an archive whose deletion was pending). Storage deletion
+  and finalization are idempotent, so a crash at any point converges; the sweep
+  never touches objects referenced by live metadata.
+- Downloads and the file list refuse files once `deleted_at` is set.
+- `_trestle_file_deletions` is added to the portable-owned tables so an import
+  destination must be empty of deletion state.
+- Failure-injection tests at every boundary on SQLite and real PostgreSQL:
+  begin, intent-write, commit, storage-deletion failure + resume, crash between
+  storage deletion and finalization + resume, retry/duplicate worker, and
+  restored-deleted-file cleanup.
+- `docs/hardening/atomicity-inventory.json` now describes the implemented state
+  machine instead of retaining the known defect.
+
+### Exit evidence
+
+- Durable-deletion tests pass on SQLite and real PostgreSQL 18.6; full files,
+  backup and store suites pass on both providers; vet clean.
+
+Completion record:
+
+```text
+Status: complete (repair)
+Application commit: recorded by this commit
+Website output commit: n/a (no public documentation change)
+Website source commit: n/a (no public documentation change)
+Verified: durable-deletion suite on SQLite and real PostgreSQL 18.6; full
+  files/backup/store suites; vet
+Findings repaired: fail-open file deletion (ignored begin/metadata/commit
+  errors; object deleted without durable intent; 204 without durable state)
+Known limits: deletion state is retained as audit rows; a dedicated periodic
+  sweep beyond startup is not implemented (startup and the documented resume
+  path recover pending deletion)
 ```
 
 ## Checkpoint roadmap

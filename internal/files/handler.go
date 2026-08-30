@@ -1,6 +1,7 @@
 package files
 
 import (
+	"context"
 	"crypto/rand"
 	"crypto/sha256"
 	"database/sql"
@@ -95,7 +96,7 @@ func (h *Handler) authorized(r *http.Request, mutation bool) bool {
 }
 func (h *Handler) upload(w http.ResponseWriter, r *http.Request) {
 	var used int64
-	if h.db.QueryRowContext(r.Context(), "SELECT coalesce(sum(size),0) FROM _trestle_files").Scan(&used) != nil || used >= h.quota {
+	if h.db.QueryRowContext(r.Context(), "SELECT coalesce(sum(size),0) FROM _trestle_files WHERE deleted_at IS NULL").Scan(&used) != nil || used >= h.quota {
 		writeError(w, 413, "quota_exceeded", "The storage quota is exhausted.")
 		return
 	}
@@ -157,7 +158,7 @@ func (h *Handler) lookup(r *http.Request, id string) (Metadata, string, error) {
 	var m Metadata
 	var key string
 	var collection, record sql.NullString
-	err := h.db.QueryRowContext(r.Context(), "SELECT id,storage_key,original_name,content_type,size,sha256,collection_name,record_id,created_at FROM _trestle_files WHERE id=?", id).Scan(&m.ID, &key, &m.Name, &m.ContentType, &m.Size, &m.SHA256, &collection, &record, &m.CreatedAt)
+	err := h.db.QueryRowContext(r.Context(), "SELECT id,storage_key,original_name,content_type,size,sha256,collection_name,record_id,created_at FROM _trestle_files WHERE id=? AND deleted_at IS NULL", id).Scan(&m.ID, &key, &m.Name, &m.ContentType, &m.Size, &m.SHA256, &collection, &record, &m.CreatedAt)
 	if collection.Valid {
 		m.Collection = collection.String
 	}
@@ -177,23 +178,98 @@ func (h *Handler) download(w http.ResponseWriter, r *http.Request, id string) {
 	}
 }
 func (h *Handler) remove(w http.ResponseWriter, r *http.Request, id string) {
-	_, key, err := h.lookup(r, id)
-	if err != nil {
+	ctx := r.Context()
+	var key string
+	if err := h.db.QueryRowContext(ctx, "SELECT storage_key FROM _trestle_files WHERE id=?", id).Scan(&key); err != nil {
 		writeError(w, 404, "file_not_found", "The file was not found.")
 		return
 	}
-	tx, _ := h.db.BeginTx(r.Context(), nil)
-	defer tx.Rollback()
-	tx.ExecContext(r.Context(), "DELETE FROM _trestle_files WHERE id=?", id)
-	if err = h.storage.Delete(r.Context(), key); err != nil {
-		writeError(w, 500, "internal_error", "The file could not be removed.")
+	now := h.now().UTC().Format(time.RFC3339Nano)
+	// Durable deletion intent: mark the metadata unavailable to readers and
+	// record the deletion intent in one transaction. No storage object is
+	// deleted before this commits, and a failed transaction changes nothing.
+	tx, err := h.db.BeginTx(ctx, nil)
+	if err != nil {
+		writeError(w, 500, "internal_error", "The request could not be completed.")
 		return
 	}
-	tx.Commit()
+	defer tx.Rollback()
+	if _, err := tx.ExecContext(ctx, "INSERT INTO _trestle_file_deletions(id,storage_key,status,attempts,created_at) VALUES(?,?,'pending',0,?) ON CONFLICT(id) DO NOTHING", id, key, now); err != nil {
+		writeError(w, 500, "internal_error", "The request could not be completed.")
+		return
+	}
+	if _, err := tx.ExecContext(ctx, "UPDATE _trestle_files SET deleted_at=? WHERE id=?", now, id); err != nil {
+		writeError(w, 500, "internal_error", "The request could not be completed.")
+		return
+	}
+	if err := tx.Commit(); err != nil {
+		writeError(w, 500, "internal_error", "The request could not be completed.")
+		return
+	}
+	// Storage deletion runs only after durable intent is committed. A storage
+	// failure leaves the intent pending and the file unavailable; startup (and
+	// the cleanup endpoint) resumes it. Success is returned only after the
+	// object is gone and the intent is finalized.
+	if err := h.storage.Delete(ctx, key); err != nil {
+		writeError(w, 500, "deletion_pending", "The file is marked for deletion and will be cleaned up automatically.")
+		return
+	}
+	if err := h.finalizeDeletion(ctx, id, now); err != nil {
+		writeError(w, 500, "internal_error", "The request could not be completed.")
+		return
+	}
 	w.WriteHeader(204)
 }
+
+func (h *Handler) finalizeDeletion(ctx context.Context, id, now string) error {
+	_, err := h.db.ExecContext(ctx, "UPDATE _trestle_file_deletions SET status='done', finalized_at=? WHERE id=? AND status='pending'", now, id)
+	return err
+}
+
+// ResumePendingDeletions recovers unfinished file deletions: it ensures every
+// file marked deleted has a deletion-intent row (including files restored from
+// an archive whose deletion was pending), deletes the storage object for each
+// pending intent, and finalizes. Storage deletion is idempotent, so a
+// duplicate worker run or a crash between storage deletion and finalization
+// both converge to the finalized state. Objects referenced by live metadata
+// (deleted_at IS NULL) are never touched.
+func (h *Handler) ResumePendingDeletions(ctx context.Context) (int, error) {
+	if _, err := h.db.ExecContext(ctx, "INSERT INTO _trestle_file_deletions(id,storage_key,status,attempts,created_at) SELECT id,storage_key,'pending',0,deleted_at FROM _trestle_files WHERE deleted_at IS NOT NULL AND id NOT IN (SELECT id FROM _trestle_file_deletions) ON CONFLICT(id) DO NOTHING"); err != nil {
+		return 0, err
+	}
+	rows, err := h.db.QueryContext(ctx, "SELECT id,storage_key FROM _trestle_file_deletions WHERE status='pending'")
+	if err != nil {
+		return 0, err
+	}
+	type target struct{ id, key string }
+	var targets []target
+	for rows.Next() {
+		var t target
+		if err := rows.Scan(&t.id, &t.key); err != nil {
+			rows.Close()
+			return 0, err
+		}
+		targets = append(targets, t)
+	}
+	rows.Close()
+	if err := rows.Err(); err != nil {
+		return 0, err
+	}
+	now := h.now().UTC().Format(time.RFC3339Nano)
+	processed := 0
+	for _, t := range targets {
+		if err := h.storage.Delete(ctx, t.key); err != nil {
+			continue
+		}
+		if _, err := h.db.ExecContext(ctx, "UPDATE _trestle_file_deletions SET status='done', finalized_at=? WHERE id=? AND status='pending'", now, t.id); err == nil {
+			processed++
+		}
+	}
+	return processed, nil
+}
+
 func (h *Handler) list(w http.ResponseWriter, r *http.Request) {
-	rows, err := h.db.QueryContext(r.Context(), "SELECT id,original_name,content_type,size,sha256,coalesce(collection_name,''),coalesce(record_id,''),created_at FROM _trestle_files ORDER BY created_at DESC LIMIT 200")
+	rows, err := h.db.QueryContext(r.Context(), "SELECT id,original_name,content_type,size,sha256,coalesce(collection_name,''),coalesce(record_id,''),created_at FROM _trestle_files WHERE deleted_at IS NULL ORDER BY created_at DESC LIMIT 200")
 	if err != nil {
 		writeError(w, 500, "internal_error", "The request could not be completed.")
 		return

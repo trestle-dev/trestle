@@ -159,6 +159,7 @@ func TestBootstrapSchemaIntegrity(t *testing.T) {
 		"_trestle_jobs":               true,
 		"_trestle_webhooks":           true,
 		"_trestle_functions":          true,
+		"_trestle_file_deletions":     true,
 	}
 	expectedIndexes := map[string]bool{
 		"_trestle_admin_sessions_admin":  true,

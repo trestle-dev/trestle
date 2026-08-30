@@ -168,6 +168,11 @@ func main() {
 		logger.Error("file storage initialization failed", "error", err)
 		os.Exit(1)
 	}
+	if pending, err := fileAPI.ResumePendingDeletions(context.Background()); err != nil {
+		logger.Error("file deletion recovery failed", "error", err)
+	} else if pending > 0 {
+		logger.Info("resumed pending file deletions", "count", pending)
+	}
 	apiRoutes := http.NewServeMux()
 	apiRoutes.Handle("/api/v1/auth/", applicationAuth)
 	apiRoutes.Handle("/api/v1/collections/", recordAPI)

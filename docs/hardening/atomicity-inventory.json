@@ -83,11 +83,11 @@
       "evidence": ["PG08 file lifecycle suite", "interrupted-upload tests"]
     },
     {
-      "mutation": "file deletion (metadata then bytes)",
+      "mutation": "file deletion (durable state machine)",
       "package": "internal/files",
-      "tables": ["_trestle_files"],
-      "atomicity": "Metadata delete is deferred inside a transaction until the storage delete succeeds; a failed storage delete rolls back and preserves metadata. BeginTx/Commit errors are currently ignored (documented hardening item).",
-      "evidence": ["PG08 file lifecycle suite"]
+      "tables": ["_trestle_files", "_trestle_file_deletions"],
+      "atomicity": "Fail-closed and recoverable. A deletion request (1) records durable intent and marks the metadata unavailable in one transaction (_trestle_file_deletions pending row + _trestle_files.deleted_at), (2) commits, (3) deletes the storage object, (4) finalizes the intent (status done). A failed begin, intent write or commit changes nothing externally; no object is deleted before durable intent exists; a storage failure leaves the intent pending and the file unavailable; startup (ResumePendingDeletions) resumes unfinished deletions; storage deletion and finalization are idempotent, so interruption at any point converges. Downloads refuse once deleted_at is set, and the sweep never touches objects referenced by live metadata (deleted_at IS NULL).",
+      "evidence": ["TestFileDeletionDurableStateMachine", "TestFileDeletionBoundaryFailures", "TestFileDeletionStorageFailureLeavesPendingAndResumes", "TestFileDeletionFinalizeFailureRecovers", "TestResumeCleansRestoredDeletedFiles"]
     },
     {
       "mutation": "webhook target create/update/enable",
@@ -125,7 +125,6 @@
     "first-administrator session issuance follows the admin commit as a convenience"
   ],
   "knownHardeningItems": [
-    "files.remove ignores BeginTx/Commit errors (should fail closed)",
-    "adminauth setup issues the session after the admin commit (convenience, documented)"
+    "adminauth setup issues the session after the admin commit (documented convenience; the administrator itself exists and can sign in)"
   ]
 }

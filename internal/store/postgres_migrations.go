@@ -38,4 +38,7 @@ CREATE TABLE _trestle_jobs (id TEXT PRIMARY KEY, kind TEXT NOT NULL, payload_jso
 CREATE INDEX _trestle_jobs_claim ON _trestle_jobs(status,available_at,id);`,
 	12: `CREATE TABLE _trestle_webhooks (id TEXT PRIMARY KEY, name TEXT NOT NULL, url TEXT NOT NULL, topics TEXT NOT NULL, secret_cipher BYTEA NOT NULL, enabled BOOLEAN NOT NULL DEFAULT TRUE, created_at TEXT NOT NULL, updated_at TEXT NOT NULL);`,
 	13: `CREATE TABLE _trestle_functions (id TEXT PRIMARY KEY, name TEXT NOT NULL, provider TEXT NOT NULL CHECK(provider='aws-lambda'), target TEXT NOT NULL, region TEXT NOT NULL, topics TEXT NOT NULL, callback_scopes TEXT NOT NULL DEFAULT '', enabled BOOLEAN NOT NULL DEFAULT TRUE, created_at TEXT NOT NULL, updated_at TEXT NOT NULL);`,
+	14: `
+CREATE TABLE _trestle_file_deletions (id TEXT PRIMARY KEY, storage_key TEXT NOT NULL, status TEXT NOT NULL CHECK(status IN ('pending','done')), attempts INTEGER NOT NULL DEFAULT 0, created_at TEXT NOT NULL, finalized_at TEXT);
+ALTER TABLE _trestle_files ADD COLUMN deleted_at TEXT;`,
 }

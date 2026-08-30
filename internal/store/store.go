@@ -15,7 +15,7 @@ import (
 	_ "modernc.org/sqlite"
 )
 
-const CurrentVersion = 13
+const CurrentVersion = 14
 
 type Store struct {
 	db            *sql.DB
@@ -289,6 +289,16 @@ CREATE TABLE _trestle_functions (
  callback_scopes TEXT NOT NULL DEFAULT '', enabled INTEGER NOT NULL DEFAULT 1 CHECK(enabled IN (0,1)),
  created_at TEXT NOT NULL, updated_at TEXT NOT NULL
 ) STRICT;
+`}, {14, "durable file deletion", `
+CREATE TABLE _trestle_file_deletions (
+ id TEXT PRIMARY KEY,
+ storage_key TEXT NOT NULL,
+ status TEXT NOT NULL CHECK(status IN ('pending','done')),
+ attempts INTEGER NOT NULL DEFAULT 0,
+ created_at TEXT NOT NULL,
+ finalized_at TEXT
+) STRICT;
+ALTER TABLE _trestle_files ADD COLUMN deleted_at TEXT;
 `}}
 
 func Open(ctx context.Context, dataDir string) (*Store, error) {

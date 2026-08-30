@@ -566,6 +566,7 @@ var portableTables = []string{
 	"_trestle_app_sessions", "_trestle_app_access", "_trestle_credentials",
 	"_trestle_collection_rules", "_trestle_events", "_trestle_audit",
 	"_trestle_jobs", "_trestle_webhooks", "_trestle_functions", "_trestle_files",
+	"_trestle_file_deletions",
 }
 
 // ValidateEmptyDestination requires every portable-owned table to be empty and
