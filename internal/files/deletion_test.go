@@ -10,7 +10,9 @@ import (
 	"os"
 	"path/filepath"
 	"strings"
+	"sync"
 	"testing"
+	"time"
 
 	"github.com/trestle-dev/trestle/internal/adminauth"
 	"github.com/trestle-dev/trestle/internal/identities"
@@ -355,6 +357,228 @@ func TestResumeCleansRestoredDeletedFiles(t *testing.T) {
 			}
 			if !objectExists(t, f.h, liveKey) {
 				t.Fatal("live object was deleted by the sweep")
+			}
+		})
+	}
+}
+
+// TestFileDeletionSweepNeverDeletesLiveMetadata proves the fail-closed target
+// selection: a pending deletion intent paired with live metadata never deletes
+// the storage object, whether the live reference is the same file id or any
+// other live file sharing the storage key.
+func TestFileDeletionSweepNeverDeletesLiveMetadata(t *testing.T) {
+	for _, provider := range storetest.Providers(t) {
+		t.Run(provider, func(t *testing.T) {
+			f, s, _ := openStoreFixture(t, provider)
+
+			// Case A: pending intent for a file whose metadata is still live
+			// (same id). Case B: a pending intent under another id that
+			// references the same live storage key.
+			m := f.upload(t, "a.txt", "same-id")
+			var key string
+			if err := s.DB().QueryRow("SELECT storage_key FROM _trestle_files WHERE id=?", m.ID).Scan(&key); err != nil {
+				t.Fatal(err)
+			}
+			if _, err := s.DB().Exec("INSERT INTO _trestle_file_deletions(id,storage_key,status,attempts,created_at) VALUES(?,?,'pending',0,'2026-01-01T00:00:00Z') ON CONFLICT(id) DO NOTHING", m.ID, key); err != nil {
+				t.Fatal(err)
+			}
+			if _, err := s.DB().Exec("INSERT INTO _trestle_file_deletions(id,storage_key,status,attempts,created_at) VALUES(?,?,'pending',0,'2026-01-01T00:00:00Z') ON CONFLICT(id) DO NOTHING", "fil_cross", key); err != nil {
+				t.Fatal(err)
+			}
+
+			processed, err := f.h.ResumePendingDeletions(context.Background())
+			if err != nil {
+				t.Fatal(err)
+			}
+			if processed != 0 {
+				t.Fatalf("sweep processed %d targets, want 0", processed)
+			}
+			if !objectExists(t, f.h, key) {
+				t.Fatal("object deleted despite live metadata (same id or cross-file key reference)")
+			}
+			if deletionRows(t, f.h, "SELECT count(*) FROM _trestle_file_deletions WHERE status='pending'") != 2 {
+				t.Fatal("conflicted intents were finalized")
+			}
+		})
+	}
+}
+
+// TestFileDeletionSweepProceedsForDeletedOrAbsentMetadata proves that pending
+// intents with deleted metadata or absent metadata are processed.
+func TestFileDeletionSweepProceedsForDeletedOrAbsentMetadata(t *testing.T) {
+	for _, provider := range storetest.Providers(t) {
+		t.Run(provider, func(t *testing.T) {
+			f, s, _ := openStoreFixture(t, provider)
+
+			// Deleted metadata: object removed and intent finalized.
+			m := f.upload(t, "d.txt", "deleted")
+			var key string
+			if err := s.DB().QueryRow("SELECT storage_key FROM _trestle_files WHERE id=?", m.ID).Scan(&key); err != nil {
+				t.Fatal(err)
+			}
+			if _, err := s.DB().Exec("UPDATE _trestle_files SET deleted_at=? WHERE id=?", "2026-01-01T00:00:00Z", m.ID); err != nil {
+				t.Fatal(err)
+			}
+			if _, err := s.DB().Exec("INSERT INTO _trestle_file_deletions(id,storage_key,status,attempts,created_at) VALUES(?,?,'pending',0,'2026-01-01T00:00:00Z') ON CONFLICT(id) DO NOTHING", m.ID, key); err != nil {
+				t.Fatal(err)
+			}
+
+			// Absent metadata: an orphan object with a pending intent only.
+			orphanKey := "orphan-key"
+			if err := os.WriteFile(filepath.Join(f.h.root, orphanKey), []byte("orphan"), 0o600); err != nil {
+				t.Fatal(err)
+			}
+			if _, err := s.DB().Exec("INSERT INTO _trestle_file_deletions(id,storage_key,status,attempts,created_at) VALUES('fil_orphan',?,'pending',0,'2026-01-01T00:00:00Z') ON CONFLICT(id) DO NOTHING", orphanKey); err != nil {
+				t.Fatal(err)
+			}
+
+			processed, err := f.h.ResumePendingDeletions(context.Background())
+			if err != nil {
+				t.Fatal(err)
+			}
+			if processed != 2 {
+				t.Fatalf("sweep processed %d, want 2", processed)
+			}
+			if objectExists(t, f.h, key) || objectExists(t, f.h, orphanKey) {
+				t.Fatal("objects with deleted/absent metadata were not removed")
+			}
+			if deletionRows(t, f.h, "SELECT count(*) FROM _trestle_file_deletions WHERE status='done'") != 2 {
+				t.Fatal("intents not finalized")
+			}
+		})
+	}
+}
+
+// TestFileDeletionConflictRemainsRecoverable proves a conflicted intent stays
+// pending and is processed once the live reference is deliberately resolved.
+func TestFileDeletionConflictRemainsRecoverable(t *testing.T) {
+	for _, provider := range storetest.Providers(t) {
+		t.Run(provider, func(t *testing.T) {
+			f, s, _ := openStoreFixture(t, provider)
+			live := f.upload(t, "live.txt", "live")
+			var liveKey string
+			if err := s.DB().QueryRow("SELECT storage_key FROM _trestle_files WHERE id=?", live.ID).Scan(&liveKey); err != nil {
+				t.Fatal(err)
+			}
+			// Conflicted intent referencing the live file's key under another id.
+			if _, err := s.DB().Exec("INSERT INTO _trestle_file_deletions(id,storage_key,status,attempts,created_at) VALUES('fil_conflict',?,'pending',0,'2026-01-01T00:00:00Z') ON CONFLICT(id) DO NOTHING", liveKey); err != nil {
+				t.Fatal(err)
+			}
+
+			processed, err := f.h.ResumePendingDeletions(context.Background())
+			if err != nil || processed != 0 {
+				t.Fatalf("initial resume processed=%d err=%v, want 0", processed, err)
+			}
+			if deletionRows(t, f.h, "SELECT count(*) FROM _trestle_file_deletions WHERE id='fil_conflict' AND status='pending'") != 1 {
+				t.Fatal("conflicted intent was not left pending")
+			}
+
+			// Resolve the live reference, then recovery proceeds.
+			if w := f.request("DELETE", "/api/v1/files/"+live.ID, nil, ""); w.Code != 204 {
+				t.Fatalf("resolve delete %d %s", w.Code, w.Body.String())
+			}
+			processed, err = f.h.ResumePendingDeletions(context.Background())
+			if err != nil || processed != 1 {
+				t.Fatalf("post-resolution resume processed=%d err=%v, want 1", processed, err)
+			}
+			if deletionRows(t, f.h, "SELECT count(*) FROM _trestle_file_deletions WHERE id='fil_conflict' AND status='done'") != 1 {
+				t.Fatal("conflicted intent not finalized after resolution")
+			}
+		})
+	}
+}
+
+// TestFileDeletionConcurrentRecoveryHarmless proves duplicate or concurrent
+// recovery runs are harmless: the object is removed once and the intent is
+// finalized once.
+func TestFileDeletionConcurrentRecoveryHarmless(t *testing.T) {
+	for _, provider := range storetest.Providers(t) {
+		t.Run(provider, func(t *testing.T) {
+			f, s, _ := openStoreFixture(t, provider)
+			m := f.upload(t, "c.txt", "concurrent")
+			var key string
+			if err := s.DB().QueryRow("SELECT storage_key FROM _trestle_files WHERE id=?", m.ID).Scan(&key); err != nil {
+				t.Fatal(err)
+			}
+			if _, err := s.DB().Exec("UPDATE _trestle_files SET deleted_at=? WHERE id=?", "2026-01-01T00:00:00Z", m.ID); err != nil {
+				t.Fatal(err)
+			}
+			if _, err := s.DB().Exec("INSERT INTO _trestle_file_deletions(id,storage_key,status,attempts,created_at) VALUES(?,?,'pending',0,'2026-01-01T00:00:00Z') ON CONFLICT(id) DO NOTHING", m.ID, key); err != nil {
+				t.Fatal(err)
+			}
+
+			var wg sync.WaitGroup
+			errs := make(chan error, 2)
+			for i := 0; i < 2; i++ {
+				wg.Add(1)
+				go func() {
+					defer wg.Done()
+					_, err := f.h.ResumePendingDeletions(context.Background())
+					errs <- err
+				}()
+			}
+			wg.Wait()
+			close(errs)
+			for err := range errs {
+				if err != nil {
+					t.Fatal(err)
+				}
+			}
+			if objectExists(t, f.h, key) {
+				t.Fatal("object still exists after concurrent recovery")
+			}
+			if deletionRows(t, f.h, "SELECT count(*) FROM _trestle_file_deletions WHERE id='"+m.ID+"' AND status='done'") != 1 {
+				t.Fatal("intent finalized more than once")
+			}
+		})
+	}
+}
+
+// TestDeletionRecoveryWorkerProcessesPending proves the bounded periodic worker
+// resumes pending deletion during a continuously running process and stops on
+// shutdown.
+func TestDeletionRecoveryWorkerProcessesPending(t *testing.T) {
+	for _, provider := range storetest.Providers(t) {
+		t.Run(provider, func(t *testing.T) {
+			f, s, _ := openStoreFixture(t, provider)
+			m := f.upload(t, "w.txt", "worker")
+			var key string
+			if err := s.DB().QueryRow("SELECT storage_key FROM _trestle_files WHERE id=?", m.ID).Scan(&key); err != nil {
+				t.Fatal(err)
+			}
+			if _, err := s.DB().Exec("UPDATE _trestle_files SET deleted_at=? WHERE id=?", "2026-01-01T00:00:00Z", m.ID); err != nil {
+				t.Fatal(err)
+			}
+			if _, err := s.DB().Exec("INSERT INTO _trestle_file_deletions(id,storage_key,status,attempts,created_at) VALUES(?,?,'pending',0,'2026-01-01T00:00:00Z') ON CONFLICT(id) DO NOTHING", m.ID, key); err != nil {
+				t.Fatal(err)
+			}
+
+			ctx, cancel := context.WithCancel(context.Background())
+			done := make(chan struct{})
+			go func() {
+				f.h.RunDeletionRecovery(ctx, 20*time.Millisecond)
+				close(done)
+			}()
+
+			deadline := time.Now().Add(3 * time.Second)
+			for time.Now().Before(deadline) {
+				if deletionRows(t, f.h, "SELECT count(*) FROM _trestle_file_deletions WHERE id='"+m.ID+"' AND status='done'") == 1 {
+					break
+				}
+				time.Sleep(20 * time.Millisecond)
+			}
+			if deletionRows(t, f.h, "SELECT count(*) FROM _trestle_file_deletions WHERE id='"+m.ID+"' AND status='done'") != 1 {
+				t.Fatal("worker did not finalize the pending deletion")
+			}
+			if objectExists(t, f.h, key) {
+				t.Fatal("worker did not remove the object")
+			}
+
+			cancel()
+			select {
+			case <-done:
+			case <-time.After(2 * time.Second):
+				t.Fatal("recovery worker did not stop on shutdown")
 			}
 		})
 	}

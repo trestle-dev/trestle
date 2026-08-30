@@ -14,6 +14,7 @@ import (
 	"github.com/trestle-dev/trestle/internal/identities"
 	"github.com/trestle-dev/trestle/internal/store"
 	"io"
+	"log/slog"
 	"mime"
 	"net/http"
 	"os"
@@ -34,6 +35,7 @@ type Handler struct {
 	provider    string
 	now         func() time.Time
 	quota       int64
+	log         *slog.Logger
 }
 type Options struct{ Backend, S3Endpoint, S3Region, S3Bucket, S3AccessKey, S3SecretKey string }
 type Metadata struct {
@@ -60,6 +62,7 @@ func New(db any, admin *adminauth.Handler, credentials *identities.Handler, data
 	}
 	return &Handler{db: store.Adapt(db), admin: admin, credentials: credentials, root: root, storage: storage, provider: provider, now: time.Now, quota: DefaultQuota}, nil
 }
+func (h *Handler) SetLogger(log *slog.Logger) { h.log = log }
 func (h *Handler) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 	mutation := r.Method != http.MethodGet
 	if !h.authorized(r, mutation) {
@@ -207,9 +210,9 @@ func (h *Handler) remove(w http.ResponseWriter, r *http.Request, id string) {
 		return
 	}
 	// Storage deletion runs only after durable intent is committed. A storage
-	// failure leaves the intent pending and the file unavailable; startup (and
-	// the cleanup endpoint) resumes it. Success is returned only after the
-	// object is gone and the intent is finalized.
+	// failure leaves the intent pending and the file unavailable; startup and
+	// the periodic recovery worker resume it. Success is returned only after
+	// the object is gone and the intent is finalized.
 	if err := h.storage.Delete(ctx, key); err != nil {
 		writeError(w, 500, "deletion_pending", "The file is marked for deletion and will be cleaned up automatically.")
 		return
@@ -227,17 +230,28 @@ func (h *Handler) finalizeDeletion(ctx context.Context, id, now string) error {
 }
 
 // ResumePendingDeletions recovers unfinished file deletions: it ensures every
-// file marked deleted has a deletion-intent row (including files restored from
-// an archive whose deletion was pending), deletes the storage object for each
-// pending intent, and finalizes. Storage deletion is idempotent, so a
-// duplicate worker run or a crash between storage deletion and finalization
-// both converge to the finalized state. Objects referenced by live metadata
-// (deleted_at IS NULL) are never touched.
+// file whose metadata is marked deleted has a deletion-intent row (including
+// files restored from an archive whose deletion was pending), deletes the
+// storage object for each processable pending intent, and finalizes. Storage
+// deletion is idempotent, so a duplicate worker run or a crash between storage
+// deletion and finalization both converge to the finalized state.
+//
+// Target selection fails closed: a pending intent is processed only when its
+// file metadata is absent or marked deleted, and before each storage deletion
+// the sweep confirms no live metadata (deleted_at IS NULL) references that
+// storage key. An intent paired with live metadata is a conflict: it is
+// skipped, logged, and not finalized, and it remains recoverable once the live
+// reference is deliberately removed.
 func (h *Handler) ResumePendingDeletions(ctx context.Context) (int, error) {
 	if _, err := h.db.ExecContext(ctx, "INSERT INTO _trestle_file_deletions(id,storage_key,status,attempts,created_at) SELECT id,storage_key,'pending',0,deleted_at FROM _trestle_files WHERE deleted_at IS NOT NULL AND id NOT IN (SELECT id FROM _trestle_file_deletions) ON CONFLICT(id) DO NOTHING"); err != nil {
 		return 0, err
 	}
-	rows, err := h.db.QueryContext(ctx, "SELECT id,storage_key FROM _trestle_file_deletions WHERE status='pending'")
+	// Only pending intents whose file row is absent or marked deleted are
+	// processable; live metadata paired with an intent is a conflict.
+	rows, err := h.db.QueryContext(ctx, `SELECT d.id, d.storage_key
+		FROM _trestle_file_deletions d
+		LEFT JOIN _trestle_files f ON f.id = d.id
+		WHERE d.status='pending' AND (f.id IS NULL OR f.deleted_at IS NOT NULL)`)
 	if err != nil {
 		return 0, err
 	}
@@ -258,6 +272,17 @@ func (h *Handler) ResumePendingDeletions(ctx context.Context) (int, error) {
 	now := h.now().UTC().Format(time.RFC3339Nano)
 	processed := 0
 	for _, t := range targets {
+		// Fail closed: never delete an object referenced by live metadata.
+		var live int
+		if err := h.db.QueryRowContext(ctx, "SELECT count(*) FROM _trestle_files WHERE storage_key=? AND deleted_at IS NULL", t.key).Scan(&live); err != nil {
+			continue
+		}
+		if live > 0 {
+			if h.log != nil {
+				h.log.Warn("file deletion conflict: storage key still referenced by live metadata; intent left pending", "id", t.id)
+			}
+			continue
+		}
 		if err := h.storage.Delete(ctx, t.key); err != nil {
 			continue
 		}
@@ -266,6 +291,36 @@ func (h *Handler) ResumePendingDeletions(ctx context.Context) (int, error) {
 		}
 	}
 	return processed, nil
+}
+
+// RunDeletionRecovery periodically resumes pending file deletions so a storage
+// failure during a continuously running process converges without waiting for a
+// restart. It is bounded, stops when ctx is cancelled, and logs observable
+// status; errors and conflicts are logged and pending deletions remain
+// recoverable at the next tick or at startup.
+func (h *Handler) RunDeletionRecovery(ctx context.Context, interval time.Duration) {
+	ticker := time.NewTicker(interval)
+	defer ticker.Stop()
+	run := func() {
+		processed, err := h.ResumePendingDeletions(ctx)
+		if err != nil {
+			if h.log != nil {
+				h.log.Error("file deletion recovery failed", "error", err)
+			}
+			return
+		}
+		if processed > 0 && h.log != nil {
+			h.log.Info("resumed pending file deletions", "count", processed)
+		}
+	}
+	for {
+		select {
+		case <-ctx.Done():
+			return
+		case <-ticker.C:
+			run()
+		}
+	}
 }
 
 func (h *Handler) list(w http.ResponseWriter, r *http.Request) {

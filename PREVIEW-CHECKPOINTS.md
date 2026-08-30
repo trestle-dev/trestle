@@ -582,6 +582,56 @@ Findings repaired: the manifest generator could bless a rewritten historical
 Known limits: none retained
 ```
 
+
+## CP4R2 - Fail-closed deletion recovery and periodic worker
+
+Status: complete
+
+CP4R's recovery sweep selected every pending intent, so an inconsistent
+restored/imported state pairing a pending intent with live metadata
+(deleted_at IS NULL) could delete an object still referenced by live metadata.
+This repair makes recovery target selection fail closed and adds bounded
+periodic recovery so convergence does not depend on a restart.
+
+### Application
+
+- `ResumePendingDeletions` now selects only pending intents whose file metadata
+  is absent or marked deleted (LEFT JOIN guard) and, before each storage
+  deletion, confirms no live `_trestle_files` row references that storage key
+  (same id or any live file). A live reference causes the intent to be skipped,
+  logged (SetLogger) and left pending, and it remains recoverable once the
+  reference is deliberately resolved.
+- Add `RunDeletionRecovery`: a bounded, shutdown-aware periodic worker
+  (5-minute interval in the process) that resumes pending deletion during a
+  continuously running process and logs observable status. The startup sweep is
+  retained; the misleading 'cleanup endpoint' comment is corrected.
+- Provider-parameterized tests (SQLite and real PostgreSQL): pending intent plus
+  matching live metadata leaves the object intact; pending intent whose key is
+  referenced by any live file leaves the object intact; pending intent with
+  deleted metadata proceeds; pending intent with absent metadata proceeds; a
+  conflicted intent stays recoverable after resolution; duplicate/concurrent
+  recovery is harmless; the periodic worker finalizes during operation and stops
+  on shutdown.
+
+### Exit evidence
+
+- All deletion and recovery tests pass on SQLite and real PostgreSQL 18.6.
+
+Completion record:
+
+```text
+Status: complete (repair)
+Application commit: recorded by this commit
+Website output commit: recorded by this commit
+Website source commit: recorded by this commit
+Verified: deletion/recovery tests and full files suite on SQLite and real
+  PostgreSQL 18.6; build and vet clean
+Findings repaired: recovery could delete an object referenced by live metadata;
+  convergence required a restart; misleading comment about a cleanup endpoint
+Known limits: the recovery worker interval is a fixed 5 minutes; conflicts
+  remain pending until the live reference is resolved
+```
+
 ## Checkpoint roadmap
 
 - CP1 - PostgreSQL contract and baseline (this checkpoint)

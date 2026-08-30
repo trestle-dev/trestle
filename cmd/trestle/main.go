@@ -11,6 +11,7 @@ import (
 	"os"
 	"os/signal"
 	"syscall"
+	"time"
 
 	"github.com/trestle-dev/trestle/internal/adminauth"
 	"github.com/trestle-dev/trestle/internal/apidocs"
@@ -173,6 +174,7 @@ func main() {
 	} else if pending > 0 {
 		logger.Info("resumed pending file deletions", "count", pending)
 	}
+	fileAPI.SetLogger(logger)
 	apiRoutes := http.NewServeMux()
 	apiRoutes.Handle("/api/v1/auth/", applicationAuth)
 	apiRoutes.Handle("/api/v1/collections/", recordAPI)
@@ -218,6 +220,7 @@ func main() {
 	ctx, stop := signal.NotifyContext(context.Background(), os.Interrupt, syscall.SIGTERM)
 	defer stop()
 	jobAPI.Start(ctx)
+	go fileAPI.RunDeletionRecovery(ctx, 5*time.Minute)
 	errCh := make(chan error, 1)
 	go func() {
 		logger.Info("server starting", "listen", cfg.Listen, "data_dir", cfg.DataDir, "trusted_proxy_count", len(cfg.TrustedProxies), "read_header_timeout", cfg.ReadHeaderTimeout, "read_timeout", cfg.ReadTimeout, "idle_timeout", cfg.IdleTimeout, "max_header_bytes", cfg.MaxHeaderBytes)
