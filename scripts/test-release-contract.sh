@@ -9,23 +9,68 @@ fail() { echo "release contract FAIL: $*" >&2; failures=$((failures + 1)); }
 
 # 1. Workflow YAML is valid and carries the required release wiring.
 python3 - "$root" <<'PY'
-import json, sys, yaml
+import json, sys, yaml, re
 root = sys.argv[1]
 d = yaml.safe_load(open(root + "/.github/workflows/release.yml"))
-steps = d["jobs"]["release"]["steps"]
-names = [s.get("name") or next(iter(s)) for s in steps]
+jobs = d["jobs"]
 checks = []
-body_path_ok = any("body_path" in s.get("with", {}) for s in steps)
-gen_notes_ok = any(s.get("with", {}).get("generate_release_notes") is True for s in steps)
+
+# Every action in the privileged release workflow must be pinned to a full
+# 40-hex commit SHA (with an optional human-readable version comment), never a
+# mutable major-version tag.
+pinned = {
+    "actions/checkout": "3d3c42e5aac5ba805825da76410c181273ba90b1",
+    "actions/setup-go": "b7ad1dad31e06c5925ef5d2fc7ad053ef454303e",
+    "actions/upload-artifact": "043fb46d1a93c77aae656e7c1c64a875d1fc6a0a",
+    "actions/download-artifact": "3e5f45b2cfb9172054b4087a40e8e0b5a5461e7c",
+    "actions/attest-build-provenance": "4d101475d8b20a2381f78447822ac1eab6504dd8",
+    "softprops/action-gh-release": "efb35369e0ad2afab669f228072c1b0d510eae64",
+}
+uses = []
+for job, jd in jobs.items():
+    for s in jd.get("steps", []):
+        if isinstance(s, dict) and "uses" in s:
+            uses.append(s["uses"])
+if not uses:
+    checks.append("release workflow has no action uses")
+for u in uses:
+    m = re.match(r"^([A-Za-z0-9_.-]+/[A-Za-z0-9_.-]+)@([0-9a-f]{40})(\s+# .+)?$", u)
+    if not m:
+        checks.append(f"release workflow action is not pinned to a full commit SHA: {u}")
+        continue
+    name, sha = m.group(1), m.group(2)
+    if name in pinned and sha != pinned[name]:
+        checks.append(f"release workflow action {name} pinned to an unexpected SHA {sha}")
+if set(pinned) - {u.split("@")[0] for u in uses}:
+    missing = set(pinned) - {u.split("@")[0] for u in uses}
+    checks.append(f"expected pinned action absent: {sorted(missing)}")
+
+# Privilege separation: build is read-only, attest holds only OIDC/attestation
+# permissions, and only publish holds contents: write.
+if d.get("permissions", {}).get("contents") != "read":
+    checks.append("workflow-level permissions are not contents: read")
+perm = lambda j: jobs[j].get("permissions", {})
+if "build" not in jobs or any(v != "none" and v != "read" for v in perm("build").values() if v):
+    checks.append("build job is not read-only")
+if perm("attest").get("id-token") != "write" or perm("attest").get("attestations") != "write":
+    checks.append("attestation job permissions are not id-token+attestations write only")
+if perm("publish").get("contents") != "write":
+    checks.append("publish job does not hold contents: write")
+
+steps = jobs["build"]["steps"]
+names = [s.get("name") or next(iter(s)) for s in steps]
+body_path_ok = any("body_path" in s.get("with", {}) for s in jobs["publish"]["steps"])
+gen_notes_ok = any(s.get("with", {}).get("generate_release_notes") is True for s in jobs["publish"]["steps"])
 package_ok = any("package-release.sh" in (s.get("run") or "") for s in steps)
-files_ok = any("dist/*" in (s.get("with", {}).get("files") or "") for s in steps)
-subject_ok = any("dist/*" in (s.get("with", {}).get("subject-path") or "") for s in steps)
-print("steps:", names)
-if not body_path_ok: checks.append("release workflow has no body_path (release-notes body)")
-if not gen_notes_ok: checks.append("release workflow has no generate_release_notes")
-if not package_ok: checks.append("release workflow does not run package-release.sh")
-if not files_ok: checks.append("release workflow does not upload dist/*")
-if not subject_ok: checks.append("release workflow does not attest dist/*")
+files_ok = any("dist/*" in (s.get("with", {}).get("files") or "") for s in jobs["publish"]["steps"])
+subject_ok = any("dist/*" in (s.get("with", {}).get("subject-path") or "") for s in jobs["attest"]["steps"])
+print("jobs:", list(jobs))
+print("build steps:", names)
+if not body_path_ok: checks.append("publish step has no body_path (release-notes body)")
+if not gen_notes_ok: checks.append("publish step has no generate_release_notes")
+if not package_ok: checks.append("build job does not run package-release.sh")
+if not files_ok: checks.append("publish step does not upload dist/*")
+if not subject_ok: checks.append("attest step does not attest dist/*")
 for c in checks: print("workflow issue:", c)
 if checks: sys.exit(1)
 PY
