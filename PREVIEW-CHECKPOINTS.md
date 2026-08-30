@@ -1979,6 +1979,73 @@ Known limits: pending file deletion, database-unavailable and backup-progress
   hook rather than server fault injection; browser acceptance is partial
 ```
 
+## CP12R5 - Reset per-visit realtime pause and bound Chromium process-group cleanup
+
+Status: complete (browser acceptance partial)
+
+Two narrow lifecycle defects remained after CP12R4: the pause state survived
+across Realtime visits, and the Chromium cleanup routine could hang waiting for
+an exit event that had already fired.
+
+### Application
+
+- Realtime pause is now a per-visit choice: `renderRealtime()` calls
+  `rt.setPaused(false)` at the start of every visit, so the controller always
+  agrees with the freshly-rendered "Pause" button and a business event appears
+  immediately on re-entry. `cleanup()` deliberately does not reset pause,
+  because `connect()` reuses cleanup() for reconnects within a visit and must
+  preserve the pause state across a reconnect (documented in the controller).
+- The stale copy uses a normal hyphen ("may have dropped - check it") instead
+  of an em dash, matching the project style.
+- Chromium cleanup is now bounded: `scripts/browser-cleanup.mjs` provides
+  `signalGroup()`, which checks `exitCode`/`signalCode` before installing the
+  exit listener (so an already-fired exit event is detected, never awaited
+  forever), installs the listener before delivering the signal (so a mid-flight
+  exit is observed), and resolves after a bounded wait. The harness escalates
+  SIGTERM to SIGKILL on the same owned group only after the SIGTERM bound.
+  Upper bound of the routine: 5s + 5s + settle.
+
+### Regressions
+
+- `scripts/test-realtime-controller.mjs`: enter / pause / leave / re-enter
+  asserts the controller is unpaused, the fresh button copy says "Pause", and a
+  delivered business event appears immediately (plus exactly one live source
+  and interval on the re-entered visit).
+- `scripts/test-browser-cleanup.mjs` drives the real `signalGroup()` against
+  real detached children and proves: a running group is SIGTERMed; a
+  pre-exited child is detected and resolved immediately (no hang); a child
+  that exits between the state check and signal delivery is bounded; a
+  SIGTERM-ignoring child times out and then SIGKILL escalates within its own
+  bound; and a sentinel in a sibling group survives the owned-group kill.
+
+### Exit evidence
+
+- Realtime lifecycle/heartbeat regression and browser-cleanup regression pass;
+  browser harness passes (jobs three states, realtime healthy/stale/recovered,
+  session-expired, no uncaught JS errors, sentinel survives); focused Go
+  heartbeat test passes; Nift build/status clean; full normal and race Go
+  suites green.
+
+Completion record:
+
+```text
+Status: complete (repair); browser acceptance partial
+Application commit: recorded by this commit
+Website output commit: n/a
+Website source commit: n/a
+Verified: realtime controller regression (pause reset per visit);
+  browser-cleanup regression (bounded, never hangs, sentinel survives);
+  browser harness; focused Go heartbeat test; full normal and race suites
+Findings repaired: pause state persisted across Realtime visits (business
+  events suppressed on re-entry with a misleading button); Chromium cleanup
+  could hang awaiting an exit event that had already fired; stale copy used an
+  em dash inconsistent with project style
+Known limits: pending file deletion, database-unavailable and backup-progress
+  states are not browser-screenshotted (need a faulting backend); realtime
+  stale/recovered screenshots simulate the heartbeat gap via the controller
+  hook rather than server fault injection; browser acceptance is partial
+```
+
 ## Checkpoint roadmap
 
 - CP1 - PostgreSQL contract and baseline (this checkpoint)

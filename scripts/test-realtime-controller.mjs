@@ -224,6 +224,28 @@ eq("onerror sets Reconnecting, not stale", stateEl.textContent, "Reconnecting…
 source.onopen();
 eq("onopen restores Connected", stateEl.textContent.slice(0, 9), "Connected");
 
+// --- Pause is a per-visit choice (CP12R5) ---------------------------------
+// Pause the current visit, then leave and re-enter: the controller must be
+// unpaused and the fresh button copy must say "Pause", so a business event
+// appears immediately instead of being suppressed by a stale pause flag.
+pauseEl.fire("click", {currentTarget: pauseEl});
+eq("paused during the visit", hook.paused(), true);
+eq("pause button label while paused", pauseEl.textContent, "Resume");
+viewChangeListeners[0](); // leave
+eq("after leave: no live sources", liveSources(), 0);
+eq("after leave: no intervals", liveIntervals(), 0);
+
+renderRealtime(); // re-enter
+eq("re-entered visit starts unpaused", hook.paused(), false);
+eq("fresh button copy says Pause",
+  host.innerHTML.indexOf('data-pause>Pause</button>') !== -1, true);
+const reenteredSource = FakeEventSource.instances.at(-1);
+const inspectorBeforeEvent = inspector.children.length;
+reenteredSource.fire("record.created", {data: JSON.stringify({topic: "record.created", sequence: 9, occurredAt: new Date(0).toISOString()})});
+eq("business event appears immediately on re-entry", inspector.children.length, inspectorBeforeEvent + 1);
+eq("re-entered visit has exactly one live source", liveSources(), 1);
+eq("re-entered visit has exactly one interval", liveIntervals(), 1);
+
 // Teardown the active visit.
 viewChangeListeners[0]();
 eq("final teardown: no live sources", liveSources(), 0);

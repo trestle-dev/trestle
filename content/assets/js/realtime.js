@@ -24,6 +24,12 @@ function renderRealtime() {
   host.className = "record-view";
   host.innerHTML = '<div class="record-toolbar"><div><p class="eyebrow">Durable event journal</p><h2>Realtime</h2></div><button type="button" data-pause>Pause</button></div><form class="query-bar realtime-filter"><label>Topic filter<input name="topic" placeholder="record.created"></label><button>Reconnect</button></form><p class="connection-state">Connecting…</p><div class="event-inspector" aria-live="polite"></div>';
   const inspector = host.querySelector(".event-inspector");
+  // Paused is a per-visit choice (CP12R5): reset it at the start of every
+  // Realtime visit so the controller always agrees with the fresh "Pause"
+  // button copy, instead of inheriting a previous visit's pause. cleanup()
+  // deliberately does not reset it because reconnect() reuses cleanup() and a
+  // reconnect within the same visit must preserve the pause state.
+  rt.setPaused(false);
 
   const mark = () => {
     rt.setActivity(Date.now());
@@ -60,7 +66,7 @@ function renderRealtime() {
     );
     rt.setTimer(setInterval(() => {
       if (TrestleDatabaseSetup.staleState(rt.activity(), Date.now(), rt.paused())) {
-        host.querySelector(".connection-state").textContent = "Stale · no heartbeat for a while; the connection may have dropped — check it and re-open the stream";
+        host.querySelector(".connection-state").textContent = "Stale · no heartbeat for a while; the connection may have dropped - check it and re-open the stream";
       }
     }, 10000));
   };

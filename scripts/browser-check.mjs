@@ -7,14 +7,17 @@
 // heartbeat and shows stale/recovered transitions, the session-expired flow,
 // and captures desktop and mobile screenshots. Chromium is spawned detached in
 // its own process group so cleanup can SIGTERM then SIGKILL only that owned
-// group (PID/process-group ID recorded; no name-wide or user-owned cleanup), and
-// an unrelated sentinel process is verified to survive the cleanup.
+// group with bounded waits (signalGroup checks exitCode/signalCode first and
+// never awaits an exit event that may have already fired; no name-wide or
+// user-owned cleanup), and an unrelated sentinel process is verified to survive
+// the cleanup.
 //
 // Usage: node scripts/browser-check.mjs [--out DIR]
 import {spawn, execSync} from "node:child_process";
 import {mkdtemp, rm, writeFile, mkdir} from "node:fs/promises";
 import {tmpdir} from "node:os";
 import {join} from "node:path";
+import {signalGroup} from "./browser-cleanup.mjs";
 
 const root = new URL("../", import.meta.url).pathname;
 const outDir = process.argv.includes("--out") ? process.argv[process.argv.indexOf("--out") + 1] : join(root, "docs", "visual");
@@ -245,21 +248,18 @@ try {
 } finally {
   stopTrestle();
   // Terminate only the Chromium process group we own (detached spawn made the
-  // PID the process-group ID). Close the CDP socket first, SIGTERM the owned
-  // group, wait for exit, and escalate to SIGKILL for the same group only
-  // after a timeout. Never any executable-name or user-owned cleanup.
-  if (chromePid) {
-    const exited = new Promise((res) => chromeProc.once("exit", res));
-    try { process.kill(-chromePid, "SIGTERM"); } catch {}
-    const done = await Promise.race([
-      exited.then(() => true),
-      new Promise((r) => setTimeout(() => r(false), 5000)),
-    ]);
-    if (!done) {
-      try { process.kill(-chromePid, "SIGKILL"); } catch {}
-      await exited;
+  // PID the process-group ID). signalGroup checks exitCode/signalCode before
+  // installing the exit listener and bounds each wait, so cleanup can never
+  // hang on a missed exit event even if Chromium already exited or exits
+  // mid-flight. Escalate to SIGKILL for the same owned group only after the
+  // SIGTERM bound. Never any executable-name or user-owned cleanup. Upper
+  // bound: SIGTERM <= 5s + SIGKILL <= 5s + settle.
+  if (chromePid && chromeProc) {
+    let ok = await signalGroup(chromeProc, "SIGTERM", 5000);
+    if (!ok) {
+      await signalGroup(chromeProc, "SIGKILL", 5000);
     }
-    await new Promise((r) => setTimeout(r, 400));
+    await new Promise((r) => setTimeout(r, 300));
   }
   // Verify the sentinel survived the Chromium group cleanup, then release it.
   if (sentinel && sentinel.pid) {

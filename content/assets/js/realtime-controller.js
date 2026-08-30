@@ -29,6 +29,10 @@ globalThis.TrestleRealtimeController = (() => {
       paused() { return paused; },
       // cleanup returns the closed source so a caller can null its handlers
       // before/after close if it wants; the resource itself is always released.
+      // paused is intentionally NOT reset here: connect() reuses cleanup() for
+      // reconnects within a visit, so pausing must survive a reconnect. A fresh
+      // visit resets paused through setPaused(false) at render time, so the
+      // controller and the per-visit "Pause" button copy always agree.
       cleanup() {
         const s = source;
         source = null;
