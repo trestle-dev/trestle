@@ -45,15 +45,21 @@ if set(pinned) - {u.split("@")[0] for u in uses}:
     missing = set(pinned) - {u.split("@")[0] for u in uses}
     checks.append(f"expected pinned action absent: {sorted(missing)}")
 
-# Privilege separation: build is read-only, attest holds only OIDC/attestation
-# permissions, and only publish holds contents: write.
+# Privilege separation: build is read-only, attest holds exactly the
+# documented provenance contract (contents: read, id-token: write,
+# attestations: write) with no extra write permission, and only publish holds
+# contents: write.
 if d.get("permissions", {}).get("contents") != "read":
     checks.append("workflow-level permissions are not contents: read")
 perm = lambda j: jobs[j].get("permissions", {})
 if "build" not in jobs or any(v != "none" and v != "read" for v in perm("build").values() if v):
     checks.append("build job is not read-only")
-if perm("attest").get("id-token") != "write" or perm("attest").get("attestations") != "write":
-    checks.append("attestation job permissions are not id-token+attestations write only")
+expected_attest = {"contents": "read", "id-token": "write", "attestations": "write"}
+if perm("attest") != expected_attest:
+    checks.append(f"attestation job permissions are not exactly {sorted(expected_attest)}: {dict(perm('attest'))}")
+for scope, value in perm("attest").items():
+    if scope not in ("contents", "id-token", "attestations") and value not in ("none", "read"):
+        checks.append(f"attestation job carries an unexpected write permission: {scope}={value}")
 if perm("publish").get("contents") != "write":
     checks.append("publish job does not hold contents: write")
 
