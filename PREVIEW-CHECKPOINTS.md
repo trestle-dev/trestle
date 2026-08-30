@@ -893,6 +893,52 @@ Findings repaired: a truncated manifest could be mistaken for a no-op
 Known limits: none retained
 ```
 
+
+## CP5R - Repair concurrency evidence
+
+Status: complete
+
+CP5's revocation and import-race tests had evidence gaps: the revocation test
+did not wait for the logout goroutine before asserting post-logout rejection,
+and the import-race test checked only the collection count, which could not
+distinguish a complete import from a partial one.
+
+### Application
+
+- `TestRevocationDuringInFlightRequests` now races K authenticated requests and
+  the logout at one barrier, waits for both (logout in the wait group), captures
+  and asserts the logout status is 204, then proves every subsequent
+  authentication attempt is rejected. It runs 30 iterations with distinct users
+  so both interleavings are exercised without requiring both in any single run,
+  and requires at least one iteration where an in-flight request observed the
+  pre-revocation state.
+- `TestConcurrentImportSingleWinner` now compares a canonical semantic digest
+  (`SemanticDigest`, covering every portable-owned table and physical record
+  table) between the destination and the source archive / the pre-import
+  destination: exactly one winner requires the destination digest to equal the
+  source archive digest; zero winners require it to equal the pre-import digest.
+  It also asserts the physical data-table count equals the collection count so
+  no temporary or partially created physical tables remain.
+
+### Exit evidence
+
+- Both repaired tests pass on SQLite and real PostgreSQL 18.6; full suite and
+  race green on both providers.
+
+Completion record:
+
+```text
+Status: complete (repair)
+Application commit: recorded by this commit
+Website output commit: n/a (no public documentation change)
+Website source commit: n/a (no public documentation change)
+Verified: revocation race (30 iterations) and import semantic-digest tests on
+  SQLite and real PostgreSQL 18.6; full suite and race
+Findings repaired: revocation test raced its own assertion; import race proved
+  only the collection count, not whole-destination equality
+Known limits: none retained
+```
+
 ## Checkpoint roadmap
 
 - CP1 - PostgreSQL contract and baseline (this checkpoint)
