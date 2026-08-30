@@ -1,0 +1,29 @@
+{
+  "matrixName": "trestle-subsystem-hardening",
+  "matrixVersion": 1,
+  "checkpoint": "CP11R",
+  "statuses": ["proven", "source-inspected", "limitation"],
+  "surfaces": [
+    {"surface": "local files: upload/download/delete/quota/symlink", "status": "proven", "evidence": ["TestUploadGeneratedPathRangeAndDelete", "TestDownloadRejectsSymlinkAndUnknownCaller", "TestQuotaSymlinkAndCleanup", "TestFileDeletionDurableStateMachine", "TestFileDeletionBoundaryFailures", "TestFileDeletionSweepNeverDeletesLiveMetadata"]},
+    {"surface": "remote object storage (S3-compatible)", "status": "limitation", "evidence": [], "note": "S3 adapter has no local real-service evidence; requires a live S3-compatible endpoint"},
+    {"surface": "job claiming, leases, retry/backoff, dead-letter, cancellation", "status": "proven", "evidence": ["TestConcurrentClaimsExecuteEachJobOnce", "TestExpiredLeaseRecoversAfterRestart", "TestRolledBackTransactionDoesNotPublishJob", "TestJobRetryBackoffThenDeadLetter", "TestJobCreationTransactionPaths", "TestJobsEndpointQueryFailureIsStructured"]},
+    {"surface": "job worker recovery after restart", "status": "proven", "evidence": ["TestExpiredLeaseRecoversAfterRestart"]},
+    {"surface": "webhook SSRF and private-address refusal", "status": "proven", "evidence": ["TestTargetConfigurationDoesNotRequireLiveDNS", "TestDeliveryStillRefusesPrivateDestination"]},
+    {"surface": "webhook redirects", "status": "source-inspected", "evidence": [], "note": "delivery client refuses redirects via CheckRedirect; loopback delivery blocked by SSRF so no live redirect test"},
+    {"surface": "webhook signatures", "status": "proven", "evidence": ["TestWebhookSignatureScheme"]},
+    {"surface": "webhook DNS changes", "status": "limitation", "evidence": [], "note": "live DNS-change behaviour requires a real public destination"},
+    {"surface": "webhook live HTTPS delivery", "status": "limitation", "evidence": [], "note": "SSRF guard refuses private/loopback destinations; live delivery only against a non-private endpoint"},
+    {"surface": "webhook retries", "status": "proven", "evidence": ["TestJobRetryBackoffThenDeadLetter"]},
+    {"surface": "realtime reconnect and replay", "status": "proven", "evidence": ["TestEventSequencingAndGapTolerantReplay", "TestAuthorizedEventVisibility"]},
+    {"surface": "realtime slow consumers and backpressure", "status": "proven", "evidence": ["TestSlowConsumerDoesNotBlockOtherSubscribers"]},
+    {"surface": "realtime authorization changes", "status": "proven", "evidence": ["TestAuthorizedEventVisibility"]},
+    {"surface": "function target validation and outbound containment", "status": "proven", "evidence": ["TestTargetConfigurationDoesNotRequireLiveDNS", "TestRejectsUnknownScopesAndExpiredCreation"]},
+    {"surface": "function live AWS invocation", "status": "limitation", "evidence": [], "note": "AWS invocation is async and mocked in tests; no live AWS"},
+    {"surface": "event and audit ordering", "status": "proven", "evidence": ["TestEventSequencingAndGapTolerantReplay", "TestAuditFactsFilterRedactionAndCounts"]},
+    {"surface": "backup during concurrent writes", "status": "proven", "evidence": ["TestExportSnapshotConsistency"]},
+    {"surface": "startup recovery workers", "status": "proven", "evidence": ["TestFileDeletionStorageFailureLeavesPendingAndResumes", "TestDeletionRecoveryWorkerProcessesPending"]},
+    {"surface": "graceful shutdown", "status": "proven", "evidence": ["TestGracefulShutdownDrainsTrackedRequest"]},
+    {"surface": "malformed inputs and oversized payloads", "status": "proven", "evidence": ["TestUploadGeneratedPathRangeAndDelete", "TestQuotaSymlinkAndCleanup"]},
+    {"surface": "timeouts and unavailable dependencies", "status": "proven", "evidence": ["TestStartupUnavailableDatabaseFailsCleanly", "TestConnectionResetDuringRequestErrorsInsteadOfHanging"]}
+  ]
+}

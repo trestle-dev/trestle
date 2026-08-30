@@ -143,14 +143,21 @@ func (h *Handler) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 			http.Error(w, "invalid job", 400)
 			return
 		}
-		tx, _ := h.db.BeginTx(r.Context(), nil)
+		tx, err := h.db.BeginTx(r.Context(), nil)
+		if err != nil {
+			writeError(w, 500, "internal_error", "The request could not be completed.")
+			return
+		}
 		defer tx.Rollback()
 		id, err := h.Enqueue(r.Context(), tx, in.Kind, in.Payload, in.IdempotencyKey)
 		if err != nil {
-			http.Error(w, "enqueue failed", 409)
+			writeError(w, 409, "enqueue_failed", "The job could not be enqueued.")
 			return
 		}
-		tx.Commit()
+		if err := tx.Commit(); err != nil {
+			writeError(w, 500, "internal_error", "The request could not be completed.")
+			return
+		}
 		writeJSON(w, 201, map[string]string{"id": id})
 	case r.Method == http.MethodPost && id != "":
 		h.action(w, r, id)

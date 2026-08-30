@@ -1368,6 +1368,53 @@ Known limits: remote bootstrap tokens are not a product feature (headless setup
   is flag/env); rate-limit windows are fixed, not adaptive
 ```
 
+
+## CP11R - Complete subsystem and lifecycle hardening
+
+Status: complete
+
+CP11 added four narrow tests; this repair closes the concrete missed
+durable-write bug, replaces the invalid graceful-shutdown test with a real
+listener/client version, and records an explicit subsystem gap matrix.
+
+### Application
+
+- Defect repaired: job creation ignored the `BeginTx` error and the
+  `tx.Commit` result, so a begin failure could misbehave and a commit failure
+  could still return 201. The path now returns 500 on begin or commit failure
+  (rolled back), and `TestJobCreationTransactionPaths` proves begin/enqueue/
+  commit/success on both providers.
+- Replace the graceful-shutdown test with a real HTTP listener + client
+  version: `TestGracefulShutdownDrainsTrackedRequest` sends a request over an
+  HTTP client, the handler signals it started, Shutdown is called, the handler
+  is released and completes, the client receives its response, and Shutdown is
+  proven not to return before the tracked request finished.
+- Add `docs/hardening/subsystem-matrix.json`: an explicit matrix over the
+  requested surfaces with statuses proven / source-inspected / limitation.
+  Live HTTPS webhook delivery, S3 object storage, live AWS invocation and
+  live DNS-change behaviour are recorded as limitations (they require non-local
+  or non-private endpoints and are not exercised locally).
+
+### Exit evidence
+
+- Job transaction-path test and the real graceful-shutdown test pass on SQLite
+  and real PostgreSQL 18.6; full suite, race and vet green.
+
+Completion record:
+
+```text
+Status: complete (repair)
+Application commit: recorded by this commit
+Website output commit: n/a (no public documentation change)
+Website source commit: n/a (no public documentation change)
+Verified: TestJobCreationTransactionPaths, TestGracefulShutdownDrainsTrackedRequest
+  on both providers; full suite and race
+Findings repaired: job creation ignored BeginTx error and tx.Commit result;
+  graceful-shutdown test did not track a real HTTP request
+Known limits: live HTTPS/S3/AWS/DNS-change evidence is retained as explicit
+  limitations (no local non-private endpoint)
+```
+
 ## Checkpoint roadmap
 
 - CP1 - PostgreSQL contract and baseline (this checkpoint)
