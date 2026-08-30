@@ -21,25 +21,35 @@ for surface in m["surfaces"]:
             seen.add(key)
             entries.append(key)
 
+results = []
 failures = []
 for pkg, test in entries:
     pattern = "^" + test + "$"
     out = subprocess.run(["go", "test", "./internal/"+pkg, "-run", pattern, "-count=1", "-v"],
                          env=os.environ, capture_output=True, text=True)
     combined = out.stdout + out.stderr
-    if out.returncode != 0:
+    if "--- PASS: " + test in combined:
+        results.append((f"{pkg}.{test}", "PASS"))
+    elif "--- SKIP: " + test in combined:
+        # A proven surface's cited evidence must actually execute; a skip is
+        # reported explicitly and treated as not proven for this run.
+        results.append((f"{pkg}.{test}", "SKIP"))
+        failures.append(f"{pkg}.{test} SKIPPED (cited as proven evidence but did not execute)")
+    elif out.returncode != 0:
+        results.append((f"{pkg}.{test}", "FAIL"))
         failures.append(f"{pkg}.{test} FAILED:\n{combined[-1000:]}")
-        continue
-    if f"--- PASS: {test}" not in combined and "no tests to run" not in combined:
-        # Allowed: SKIP when PG-only without a server.
-        if "SKIP" not in combined:
-            failures.append(f"{pkg}.{test} did not report PASS or SKIP")
-        continue
-    if "no tests to run" in combined:
+    elif "no tests to run" in combined:
+        results.append((f"{pkg}.{test}", "NONE"))
         failures.append(f"{pkg}.{test} did not run (no matching test)")
+    else:
+        results.append((f"{pkg}.{test}", "FAIL"))
+        failures.append(f"{pkg}.{test} did not report PASS or SKIP")
 
+for name, status in results:
+    print(f"  {name}: {status}")
 if failures:
     sys.stderr.write("\n".join(failures) + "\n")
     sys.exit(1)
-print(f"subsystem gate: ran {len(entries)} cited proven tests; all pass")
+passed = sum(1 for _, s in results if s == "PASS")
+print(f"subsystem gate: {passed} of {len(entries)} cited proven tests PASS (none skipped or failed)")
 PY

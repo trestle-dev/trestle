@@ -2,64 +2,319 @@
   "matrixName": "trestle-subsystem-hardening",
   "matrixVersion": 2,
   "checkpoint": "CP11R2",
-  "statuses": ["proven", "source-inspected", "limitation"],
+  "statuses": [
+    "proven",
+    "source-inspected",
+    "limitation"
+  ],
   "evidenceFormat": "each evidence entry names the package, the exact test function, and the exact behavior it establishes",
   "surfaces": [
-    {"surface": "local files: upload/download/delete/range", "status": "proven", "evidence": [
-      {"package":"files","test":"TestUploadGeneratedPathRangeAndDelete","behavior":"file upload, generated storage path, range download and delete"},
-      {"package":"files","test":"TestDownloadRejectsSymlinkAndUnknownCaller","behavior":"download rejects symlinked paths and unknown callers"}]},
-    {"surface": "file quota enforcement", "status": "proven", "evidence": [
-      {"package":"files","test":"TestQuotaSymlinkAndCleanup","behavior":"quota limit and orphan cleanup"}]},
-    {"surface": "file deletion fail-closed state machine", "status": "proven", "evidence": [
-      {"package":"files","test":"TestFileDeletionDurableStateMachine","behavior":"durable deletion intent before object removal"},
-      {"package":"files","test":"TestFileDeletionBoundaryFailures","behavior":"deletion begin/intent/commit failures leave no partial state"},
-      {"package":"files","test":"TestFileDeletionSweepNeverDeletesLiveMetadata","behavior":"recovery sweep never deletes live-referenced objects"},
-      {"package":"files","test":"TestFileDeletionConflictRemainsRecoverable","behavior":"conflicted deletion intent recovers after resolution"}]},
-    {"surface": "S3-compatible object storage", "status": "limitation", "evidence": [], "note": "no local real-service evidence; requires a live S3-compatible endpoint"},
-    {"surface": "job claiming and lease recovery", "status": "proven", "evidence": [
-      {"package":"jobs","test":"TestConcurrentClaimsExecuteEachJobOnce","behavior":"eight workers claim 64 jobs with one execution each"},
-      {"package":"jobs","test":"TestExpiredLeaseRecoversAfterRestart","behavior":"expired lease is reclaimed after restart"}]},
-    {"surface": "job retry, backoff and dead-letter", "status": "proven", "evidence": [
-      {"package":"jobs","test":"TestJobRetryBackoffThenDeadLetter","behavior":"failing job retries with backoff then dead-letters after max attempts"}]},
-    {"surface": "job creation transaction boundaries", "status": "proven", "evidence": [
-      {"package":"jobs","test":"TestJobCreationTransactionPaths","behavior":"job create begin/enqueue/commit failures return 500 with no durable job"}]},
-    {"surface": "job cancel/retry admin actions fail closed", "status": "proven", "evidence": [
-      {"package":"authaudit","test":"TestSecuritySensitiveMutationsFailClosed","behavior":"job cancel/retry durable-write failure returns 500 with unchanged state"}]},
-    {"surface": "webhook SSRF and private-address refusal", "status": "proven", "evidence": [
-      {"package":"webhooks","test":"TestTargetConfigurationDoesNotRequireLiveDNS","behavior":"target URL validation accepts HTTPS without live DNS"},
-      {"package":"webhooks","test":"TestDeliveryStillRefusesPrivateDestination","behavior":"delivery refuses private/loopback destinations"}]},
-    {"surface": "webhook redirect refusal", "status": "source-inspected", "evidence": [], "note": "the delivery client refuses redirects via CheckRedirect; loopback delivery is blocked by SSRF so a live redirect test is not producible"},
-    {"surface": "webhook signature scheme", "status": "proven", "evidence": [
-      {"package":"webhooks","test":"TestWebhookSignatureScheme","behavior":"delivery signature is a verifiable HMAC that changes under any tampering"}]},
-    {"surface": "webhook live HTTPS delivery", "status": "limitation", "evidence": [], "note": "SSRF guard refuses private/loopback destinations; live delivery only against a non-private endpoint"},
-    {"surface": "webhook DNS-change behaviour", "status": "limitation", "evidence": [], "note": "requires a real public destination whose DNS changes"},
-    {"surface": "realtime sequencing, replay and gaps", "status": "proven", "evidence": [
-      {"package":"events","test":"TestEventSequencingAndGapTolerantReplay","behavior":"events are sequenced and replayed with numeric gaps not treated as missing"}]},
-    {"surface": "realtime authorization changes", "status": "proven", "evidence": [
-      {"package":"events","test":"TestAuthorizedEventVisibility","behavior":"realtime delivery rechecks current authorization"}]},
-    {"surface": "realtime slow-consumer backpressure", "status": "proven", "evidence": [
-      {"package":"events","test":"TestSlowConsumerDoesNotBlockOtherSubscribers","behavior":"a stalled consumer blocks only its own connection; healthy subscriber still receives events"}]},
-    {"surface": "function target validation and provider containment", "status": "proven", "evidence": [
-      {"package":"functions","test":"TestFunctionTargetValidation","behavior":"function targets are validated to the aws-lambda ARN shape and region pattern"}]},
-    {"surface": "function live AWS invocation", "status": "limitation", "evidence": [], "note": "AWS invocation is async and mocked in tests; no live AWS"},
-    {"surface": "event and audit ordering", "status": "proven", "evidence": [
-      {"package":"events","test":"TestEventSequencingAndGapTolerantReplay","behavior":"event sequence ordering"},
-      {"package":"audit","test":"TestAuditFactsFilterRedactionAndCounts","behavior":"audit facts, filter, redaction and counts"}]},
-    {"surface": "backup snapshot consistency under concurrent writes", "status": "proven", "evidence": [
-      {"package":"backup","test":"TestExportSnapshotConsistency","behavior":"export is a repeatable-read snapshot stable under concurrent writers"}]},
-    {"surface": "startup recovery workers", "status": "proven", "evidence": [
-      {"package":"files","test":"TestFileDeletionStorageFailureLeavesPendingAndResumes","behavior":"pending deletion resumes and finalizes at startup"},
-      {"package":"files","test":"TestDeletionRecoveryWorkerProcessesPending","behavior":"periodic recovery worker finalizes pending deletion and stops on shutdown"}]},
-    {"surface": "graceful shutdown", "status": "proven", "evidence": [
-      {"package":"server","test":"TestGracefulShutdownDrainsTrackedRequest","behavior":"Shutdown waits for a tracked in-flight request to complete"}]},
-    {"surface": "malformed file upload inputs", "status": "proven", "evidence": [
-      {"package":"files","test":"TestUploadGeneratedPathRangeAndDelete","behavior":"traversal-style filenames are normalized and range requests served"}]},
-    {"surface": "oversized file uploads", "status": "proven", "evidence": [
-      {"package":"files","test":"TestQuotaSymlinkAndCleanup","behavior":"uploads exceeding the quota are rejected"}]},
-    {"surface": "JSON/API request body limits", "status": "source-inspected", "evidence": [], "note": "handlers bound request bodies via http.MaxBytesReader and decode with DisallowUnknownFields (source-inspected, not separately load-tested)"},
-    {"surface": "database unavailable at startup and during requests", "status": "proven", "evidence": [
-      {"package":"store","test":"TestStartupUnavailableDatabaseFailsCleanly","behavior":"unavailable database at startup fails bounded and cleanly"},
-      {"package":"store","test":"TestConnectionResetDuringRequestErrorsInsteadOfHanging","behavior":"a reset connection errors promptly instead of hanging"}]},
-    {"surface": "outbound dependency timeouts", "status": "limitation", "evidence": [], "note": "webhook delivery client has a 12s timeout (source-inspected); live external timeout behaviour requires a real endpoint"}
+    {
+      "surface": "local files: upload/download/delete/range",
+      "status": "proven",
+      "evidence": [
+        {
+          "package": "files",
+          "test": "TestUploadGeneratedPathRangeAndDelete",
+          "behavior": "file upload, generated storage path, range download and delete"
+        },
+        {
+          "package": "files",
+          "test": "TestDownloadRejectsSymlinkAndUnknownCaller",
+          "behavior": "download rejects symlinked paths and unknown callers"
+        }
+      ]
+    },
+    {
+      "surface": "file quota enforcement",
+      "status": "proven",
+      "evidence": [
+        {
+          "package": "files",
+          "test": "TestQuotaSymlinkAndCleanup",
+          "behavior": "quota limit and orphan cleanup"
+        }
+      ]
+    },
+    {
+      "surface": "file deletion fail-closed state machine",
+      "status": "proven",
+      "evidence": [
+        {
+          "package": "files",
+          "test": "TestFileDeletionDurableStateMachine",
+          "behavior": "durable deletion intent before object removal"
+        },
+        {
+          "package": "files",
+          "test": "TestFileDeletionBoundaryFailures",
+          "behavior": "deletion begin/intent/commit failures leave no partial state"
+        },
+        {
+          "package": "files",
+          "test": "TestFileDeletionSweepNeverDeletesLiveMetadata",
+          "behavior": "recovery sweep never deletes live-referenced objects"
+        },
+        {
+          "package": "files",
+          "test": "TestFileDeletionConflictRemainsRecoverable",
+          "behavior": "conflicted deletion intent recovers after resolution"
+        }
+      ]
+    },
+    {
+      "surface": "S3-compatible object storage",
+      "status": "limitation",
+      "evidence": [],
+      "note": "no local real-service evidence; requires a live S3-compatible endpoint"
+    },
+    {
+      "surface": "job claiming and lease recovery",
+      "status": "proven",
+      "evidence": [
+        {
+          "package": "jobs",
+          "test": "TestConcurrentClaimsExecuteEachJobOnce",
+          "behavior": "eight workers claim 64 jobs with one execution each"
+        },
+        {
+          "package": "jobs",
+          "test": "TestExpiredLeaseRecoversAfterRestart",
+          "behavior": "expired lease is reclaimed after restart"
+        }
+      ]
+    },
+    {
+      "surface": "job retry, backoff and dead-letter",
+      "status": "proven",
+      "evidence": [
+        {
+          "package": "jobs",
+          "test": "TestJobRetryBackoffThenDeadLetter",
+          "behavior": "failing job retries with backoff then dead-letters after max attempts"
+        }
+      ]
+    },
+    {
+      "surface": "job creation transaction boundaries",
+      "status": "proven",
+      "evidence": [
+        {
+          "package": "jobs",
+          "test": "TestJobCreationTransactionPaths",
+          "behavior": "job create begin/enqueue/commit failures return 500 with no durable job"
+        }
+      ]
+    },
+    {
+      "surface": "job cancel/retry admin actions fail closed",
+      "status": "proven",
+      "evidence": [
+        {
+          "package": "authaudit",
+          "test": "TestSecuritySensitiveMutationsFailClosed",
+          "behavior": "job cancel/retry durable-write failure returns 500 with unchanged state"
+        }
+      ]
+    },
+    {
+      "surface": "webhook SSRF and private-address refusal",
+      "status": "proven",
+      "evidence": [
+        {
+          "package": "webhooks",
+          "test": "TestTargetConfigurationDoesNotRequireLiveDNS",
+          "behavior": "target URL validation accepts HTTPS without live DNS"
+        },
+        {
+          "package": "webhooks",
+          "test": "TestDeliveryStillRefusesPrivateDestination",
+          "behavior": "delivery refuses private/loopback destinations"
+        }
+      ]
+    },
+    {
+      "surface": "webhook redirect refusal",
+      "status": "source-inspected",
+      "evidence": [],
+      "note": "the delivery client refuses redirects via CheckRedirect; loopback delivery is blocked by SSRF so a live redirect test is not producible"
+    },
+    {
+      "surface": "webhook signature scheme",
+      "status": "proven",
+      "evidence": [
+        {
+          "package": "webhooks",
+          "test": "TestWebhookSignatureScheme",
+          "behavior": "delivery signature is a verifiable HMAC that changes under any tampering"
+        }
+      ]
+    },
+    {
+      "surface": "webhook live HTTPS delivery",
+      "status": "limitation",
+      "evidence": [],
+      "note": "SSRF guard refuses private/loopback destinations; live delivery only against a non-private endpoint"
+    },
+    {
+      "surface": "webhook DNS-change behaviour",
+      "status": "limitation",
+      "evidence": [],
+      "note": "requires a real public destination whose DNS changes"
+    },
+    {
+      "surface": "realtime sequencing, replay and gaps",
+      "status": "proven",
+      "evidence": [
+        {
+          "package": "events",
+          "test": "TestEventSequencingAndGapTolerantReplay",
+          "behavior": "events are sequenced and replayed with numeric gaps not treated as missing"
+        }
+      ]
+    },
+    {
+      "surface": "realtime authorization changes",
+      "status": "proven",
+      "evidence": [
+        {
+          "package": "events",
+          "test": "TestAuthorizedEventVisibility",
+          "behavior": "realtime delivery rechecks current authorization"
+        }
+      ]
+    },
+    {
+      "surface": "realtime slow-consumer backpressure",
+      "status": "proven",
+      "evidence": [
+        {
+          "package": "events",
+          "test": "TestSlowConsumerDoesNotBlockOtherSubscribers",
+          "behavior": "a stalled consumer blocks only its own connection; healthy subscriber still receives events"
+        }
+      ]
+    },
+    {
+      "surface": "function target ARN and region validation",
+      "status": "proven",
+      "evidence": [
+        {
+          "package": "functions",
+          "test": "TestFunctionTargetValidation",
+          "behavior": "function targets are validated to the aws-lambda ARN shape and region pattern"
+        }
+      ]
+    },
+    {
+      "surface": "function live AWS invocation",
+      "status": "limitation",
+      "evidence": [],
+      "note": "outbound execution containment (credentials, destination selection, timeout, scope, invocation boundary) is source-inspected/unverified; AWS invocation is async and mocked in tests, with no live AWS"
+    },
+    {
+      "surface": "event and audit ordering",
+      "status": "proven",
+      "evidence": [
+        {
+          "package": "events",
+          "test": "TestEventSequencingAndGapTolerantReplay",
+          "behavior": "event sequence ordering"
+        },
+        {
+          "package": "audit",
+          "test": "TestAuditFactsFilterRedactionAndCounts",
+          "behavior": "audit facts, filter, redaction and counts"
+        }
+      ]
+    },
+    {
+      "surface": "backup snapshot consistency under concurrent writes",
+      "status": "proven",
+      "evidence": [
+        {
+          "package": "backup",
+          "test": "TestExportSnapshotConsistency",
+          "behavior": "export is a repeatable-read snapshot stable under concurrent writers"
+        }
+      ]
+    },
+    {
+      "surface": "startup recovery workers",
+      "status": "proven",
+      "evidence": [
+        {
+          "package": "files",
+          "test": "TestFileDeletionStorageFailureLeavesPendingAndResumes",
+          "behavior": "pending deletion resumes and finalizes at startup"
+        },
+        {
+          "package": "files",
+          "test": "TestDeletionRecoveryWorkerProcessesPending",
+          "behavior": "periodic recovery worker finalizes pending deletion and stops on shutdown"
+        }
+      ]
+    },
+    {
+      "surface": "graceful shutdown",
+      "status": "proven",
+      "evidence": [
+        {
+          "package": "server",
+          "test": "TestGracefulShutdownDrainsTrackedRequest",
+          "behavior": "Shutdown waits for a tracked in-flight request to complete"
+        }
+      ]
+    },
+    {
+      "surface": "malformed file upload inputs",
+      "status": "proven",
+      "evidence": [
+        {
+          "package": "files",
+          "test": "TestUploadGeneratedPathRangeAndDelete",
+          "behavior": "traversal-style filenames are normalized and range requests served"
+        }
+      ]
+    },
+    {
+      "surface": "oversized file uploads",
+      "status": "proven",
+      "evidence": [
+        {
+          "package": "files",
+          "test": "TestQuotaSymlinkAndCleanup",
+          "behavior": "uploads exceeding the quota are rejected"
+        }
+      ]
+    },
+    {
+      "surface": "JSON/API request body limits",
+      "status": "source-inspected",
+      "evidence": [],
+      "note": "handlers bound request bodies via http.MaxBytesReader and decode with DisallowUnknownFields (source-inspected, not separately load-tested)"
+    },
+    {
+      "surface": "database unavailable at startup and during requests",
+      "status": "proven",
+      "evidence": [
+        {
+          "package": "store",
+          "test": "TestStartupUnavailableDatabaseFailsCleanly",
+          "behavior": "unavailable database at startup fails bounded and cleanly"
+        },
+        {
+          "package": "store",
+          "test": "TestConnectionResetDuringRequestErrorsInsteadOfHanging",
+          "behavior": "a reset connection errors promptly instead of hanging"
+        }
+      ]
+    },
+    {
+      "surface": "outbound dependency timeouts",
+      "status": "limitation",
+      "evidence": [],
+      "note": "webhook delivery client has a 12s timeout (source-inspected); live external timeout behaviour requires a real endpoint"
+    }
   ]
 }
