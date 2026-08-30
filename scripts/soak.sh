@@ -173,22 +173,15 @@ fi
 if [ "$thr_growth" -gt 20 ]; then
   echo "thread growth $thr_growth exceeds bound 20" >&2; exit 1
 fi
-heap_before_live=$(echo "$heap_before" | awk '{print $2}')
-heap_after_live=$(echo "$heap_after" | awk '{print $2}')
-heap_live_growth=$((heap_after_live - heap_before_live))
-# The authoritative leak signal is live heap growth (from gctrace): live memory
-# must not grow with the workload. Observed across the duration series
-# (828/1690/3280 records) heap-live stayed 64/6/16 MB, i.e. bounded and not
-# growing with records. RSS growth on short runs can transiently exceed the
-# 50 MiB bound because the settled sample catches the heap mid-expansion before
-# a GC returns memory; at 60s+ the settled RSS is at or below baseline.
-if [ "$heap_live_growth" -gt 128 ]; then
-  echo "live heap growth ${heap_live_growth} MB exceeds bound 128 MB (leak signal)" >&2
-  exit 1
-fi
+# The RSS gate (50 MiB) is the primary bound. The gctrace heap values are
+# reported as diagnostic evidence, not an authoritative leak signal: the
+# before/after values may sit at different points in independent GC cycles.
+# The duration series (30/60/120/300s) is consistent with bounded allocator
+# retention (heap-live stayed 64/6/16/33 MB while records grew 828/1690/3280/
+# 8369), but that is evidence consistent with bounded retention, not proof.
 if [ "$rss_growth" -gt 51200 ]; then
   echo "settled RSS growth ${rss_growth} KiB exceeds bound 51200 KiB" >&2
-  echo "diagnostics: baseline[$before] peak[$peak_rss $peak_fds $peak_thr] settled[$after] heap_before[$heap_before] heap_after[$heap_after] heap_live_growth=${heap_live_growth}MB records=$created" >&2
+  echo "diagnostics: baseline[$before] peak[$peak_rss $peak_fds $peak_thr] settled[$after] heap_before[$heap_before] heap_after[$heap_after] records=$created" >&2
   grep -oE 'gc [0-9]+ @[0-9.]+s .* MB' "$work/server.log" 2>/dev/null | tail -3 >&2
   exit 1
 fi

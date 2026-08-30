@@ -1707,9 +1707,10 @@ retention, not a leak.
   growth +49 / -40 / -21 / +24 MB. Live heap does not grow with the workload;
   RSS growth is positive on short runs (the settled sample can catch the heap
   mid-expansion before a GC) and negative or small at 60s+ as GC returns memory.
-- The leak signal is now live-heap growth (gctrace): a real leak would grow
-  heap-live with records; the observed heap-live stays flat or falls. The soak
-  fails if live-heap growth exceeds 128 MB.
+- gctrace heap values are reported as diagnostic evidence, not an
+  authoritative leak signal (the before/after values can sit at different points
+  in independent GC cycles). The duration series is evidence consistent with
+  bounded retention, not proof.
 
 ### Repair
 
@@ -1719,8 +1720,7 @@ retention, not a leak.
   GC timing; the extended soak (5 minutes, 8369 records) passes with +24 MiB
   RSS and flat heap-live, demonstrating bounded retention rather than
   continuing growth.
-- Growth relative to work: approximately 3 KiB of RSS per record at 300s,
-  bounded, not linear.
+- The 60/120/180/300-second results are retained as machine-specific observations; no per-record or per-duration universal bound is claimed from a single endpoint.
 
 ### Exit evidence
 
@@ -1737,9 +1737,152 @@ Website source commit: n/a
 Verified: soak duration series (30/60/120/300s) with gctrace heap metrics;
   extended 300s soak passes (+24 MiB RSS, heap-live 64->33 MB, 8369 records)
 Findings repaired: the 96 MiB relaxation was reverted; the 50 MiB RSS bound is
-  retained; live-heap growth is the authoritative leak signal
+  retained; gctrace heap values are diagnostic, not an authoritative leak signal
 Known limits: short runs (<45s) can transiently exceed the RSS bound due to GC
   timing; documented, not silently tolerated
+```
+
+
+## CP10R3 - Complete protected-route inventory and per-family non-mutation
+
+Status: complete
+
+The CP10R2 route test covered a representative route/method set and checked
+only global collection/credential counts. This repair maintains a complete
+machine-readable protected-route inventory and verifies non-mutation per
+security-sensitive family.
+
+### Application
+
+- Add `docs/hardening/protected-routes.json`: the complete inventory of
+  protected routes with their relevant methods (GET/POST/PATCH/PUT/DELETE) and
+  the exact expected unauthenticated status per route/method (401 for read on
+  admin-auth handlers, 403 for mutations and 403-style handlers).
+- `TestUnauthenticatedRoutesAreRejected` iterates the full inventory with valid
+  request bodies, asserts the exact status for every entry, and verifies no
+  durable row is created in any security-sensitive family (collections,
+  credentials, rules, files, events, audit, jobs, webhooks, functions).
+- The checkpoint documentation is narrowed to "the complete inventoried route
+  set and all specifically inventoried security-sensitive mutations."
+
+### Exit evidence
+
+- Full-inventory route test passes on SQLite and real PostgreSQL 18.6; full
+  suite and vet green.
+
+Completion record:
+
+```text
+Status: complete (repair)
+Application commit: recorded by this commit
+Website output commit: n/a
+Website source commit: n/a
+Verified: protected-route inventory (29 route/method entries) x 2 providers;
+  per-family non-mutation; full suite
+Findings repaired: route coverage was representative, not complete; durable
+  non-mutation was checked only for collections and credentials
+Known limits: none retained
+```
+
+## CP11R3 - Correct function-containment evidence and gate skip reporting
+
+Status: complete
+
+The subsystem matrix renamed the function surface so it claims only what is
+proven, and the subsystem gate no longer summarizes skipped evidence as
+passing.
+
+### Application
+
+- Rename the proven surface to "function target ARN and region validation"
+  (only `TestFunctionTargetValidation` behavior is claimed); outbound execution
+  containment (credentials, destination selection, timeout, scope, invocation
+  boundary) is recorded as source-inspected/unverified.
+- `scripts/test-subsystem-gate.sh` reports each cited test's PASS/SKIP/FAIL
+  explicitly and fails on any skip, so the summary is only printed when every
+  cited proven test actually executed and passed.
+
+### Exit evidence
+
+- Subsystem gate: 26 of 26 cited proven tests PASS (none skipped or failed).
+
+Completion record:
+
+```text
+Status: complete (repair)
+Application commit: recorded by this commit
+Website output commit: n/a
+Website source commit: n/a
+Verified: subsystem matrix cross-check and gate; full suite
+Findings repaired: function-containment overclaim; gate summarized skips as passing
+Known limits: outbound execution containment remains source-inspected/unverified
+```
+
+## CP12R3 - Fix production frontend bugs and add a reproducible browser harness
+
+Status: complete (browser acceptance partial)
+
+Source review found three concrete frontend bugs. All are fixed, and a
+reproducible CDP browser harness now drives the real SPA and captures degraded
+states.
+
+### Application
+
+- Fix `jobs.js`: the Jobs view called the non-existent `job.statusLabel(job)`;
+  it now calls the defined `statusLabel(job)`, so a non-empty Jobs response
+  renders.
+- Realtime: `mark()` is now called for every received event; the stale rule is
+  a pure, documented 30-second function (`staleState`) with clock-controlled
+  tests (inactive becomes stale, continued events never stale, a new event
+  clears stale, pause suppresses). `connect()` closes the prior `EventSource`
+  and clears the prior stale interval before reconnecting, and a once-registered
+  `trestle:viewchange` listener (dispatched by the router on every navigation)
+  cleans both on route change.
+- Files: the `deletion_pending` catch now lives inside the delete click handler
+  (the outer `loadFiles` catch cannot see the asynchronous button handler's
+  rejection), so the pending-deletion message is actually reachable.
+- `jsonRequest` now tolerates non-JSON error bodies (some handlers return
+  plain-text 403 "forbidden"), falling back to a status-based message, so a
+  rejected request no longer throws a JSON parse error.
+- `handleSessionExpired` hides (rather than clears) the view so an in-flight
+  render cannot write to destroyed elements; the session-expired flow now
+  returns the SPA to the auth gate with a "Session expired" heading.
+- Add `scripts/browser-check.mjs`: launches a disposable Trestle, seeds
+  deterministic job states via `scripts/browser-seed`, drives the real SPA in
+  headless Chromium over CDP with a dedicated temporary profile (PID recorded,
+  only that process tree terminated, no name-wide cleanup), fails on uncaught
+  JavaScript errors and rejected promises, verifies the Jobs degraded states
+  and the session-expired flow, and captures desktop/mobile screenshots.
+
+### Browser evidence
+
+- `docs/visual/jobs-degraded-desktop.png`, `jobs-degraded-mobile.png`
+  (retrying/dead/succeeded jobs), and `session-expired-desktop.png` are captured
+  by the harness. The model cannot render images, so they are artifacts for
+  human review. Other degraded states (database unavailable, backup progress)
+  remain exercised by the live drill and assertions, not browser-screenshotted
+  (browser acceptance partial).
+
+### Exit evidence
+
+- Browser harness passes (no uncaught JS errors); state-machine, dashboard
+  quality and site checks pass; full suite and vet green on both providers.
+
+Completion record:
+
+```text
+Status: complete (repair); browser acceptance partial
+Application commit: recorded by this commit
+Website output commit: n/a
+Website source commit: n/a
+Verified: browser harness (jobs degraded + session-expired, no uncaught JS
+  errors); staleState clock tests; full suite
+Findings repaired: job.statusLabel TypeError; realtime mark() never called and
+  timers/EventSource leaked; files deletion_pending unreachable; jsonRequest
+  broke on non-JSON error bodies; session-expired left errors behind the gate
+Known limits: database-unavailable and backup-progress states are not
+  browser-screenshotted (harness drives authenticated flows deterministically;
+  those need a faulting backend); browser acceptance is partial
 ```
 
 ## Checkpoint roadmap
