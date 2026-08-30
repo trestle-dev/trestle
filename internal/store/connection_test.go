@@ -79,13 +79,14 @@ func TestWrongCredentialsRejected(t *testing.T) {
 	defer cancel()
 	// The disposable suite server may run trust authentication, in which case
 	// passwords are not enforced and this specific scenario is not applicable.
-	if _, err := Probe(ctx, Postgres, u.String(), 5*time.Second); err == nil {
+	_, probeErr := Probe(ctx, Postgres, u.String(), 5*time.Second)
+	if probeErr == nil {
 		t.Skip("server uses trust authentication; wrong-credential rejection is not exercisable here")
 	}
 	// On a password-enforcing server the failure must be clean and must not
 	// surface the supplied secret.
-	if strings.Contains(err.Error(), "definitely-wrong-password") {
-		t.Fatalf("credentials leaked in error: %v", err)
+	if strings.Contains(probeErr.Error(), "definitely-wrong-password") {
+		t.Fatalf("credentials leaked in error: %v", probeErr)
 	}
 }
 

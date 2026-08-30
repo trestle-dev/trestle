@@ -2245,6 +2245,39 @@ Known limits: public curl commands not yet validated against a published
   stable release; browser acceptance partial as before
 ```
 
+## CP16 CI repair - wrong-credentials probe test shadowing bug
+
+The first CI run of the pushed campaign code failed all three PostgreSQL suites
+(16/17/18) at `go test ./...`. Local review had only ever run against a
+trust-authentication server, where the failing path is skipped.
+
+`internal/store/connection_test.go` `TestWrongCredentialsRejected` used:
+
+```go
+if _, err := Probe(...); err == nil { t.Skip(...) }
+```
+
+The if-init short declaration scoped the probe error to the `if`; the later
+`err.Error()` then used the function-scoped `err` from `url.Parse`, which is
+nil, so a password-enforcing server (any CI) hit a nil-pointer panic instead of
+asserting the clean rejection. The probe error is now captured explicitly
+(`_, probeErr := Probe(...)`) and used throughout.
+
+Verified locally under a CI-faithful password-enforcing PostgreSQL (scram,
+`postgres:postgres@127.0.0.1`): the test PASSES with wrong credentials and the
+secret is not surfaced; under trust auth it still SKIPs. Full `go test -count=1
+./...` and `go test -race -count=1 ./...` pass against the password-enforcing
+server.
+
+```text
+Status: complete (CI repair, application-only)
+Application commit: recorded by this commit
+Verified: wrong-credentials rejection is clean and secret-safe; full + race
+  suites green under password-enforcing PostgreSQL; trust-auth skip path intact
+Findings repaired: nil-pointer panic in TestWrongCredentialsRejected under
+  password authentication (test-scoping bug; product Probe behaviour was correct)
+```
+
 ## Checkpoint roadmap
 
 - CP1 - PostgreSQL contract and baseline (this checkpoint)
