@@ -1,6 +1,7 @@
 package server
 
 import (
+	"context"
 	"encoding/json"
 	"log/slog"
 	"net"
@@ -21,6 +22,7 @@ type Options struct{ TrustedProxies []netip.Prefix }
 type Server struct {
 	logger  *slog.Logger
 	ready   atomic.Bool
+	dbCheck func(context.Context) error
 	ids     atomic.Uint64
 	handler http.Handler
 }
@@ -65,6 +67,14 @@ func newServer(logger *slog.Logger, dashboard, api, admin http.Handler, options 
 
 func (s *Server) Handler() http.Handler { return s.handler }
 func (s *Server) SetReady(value bool)   { s.ready.Store(value) }
+
+// SetDatabaseCheck wires a liveness probe for the configured database into
+// readiness, so orchestration can distinguish a starting/unready process from
+// a ready process whose database became unavailable (degraded) and later
+// recovered. health remains pure process liveness.
+func (s *Server) SetDatabaseCheck(check func(context.Context) error) {
+	s.dbCheck = check
+}
 
 func (s *Server) requestContext(next http.Handler) http.Handler {
 	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
@@ -149,6 +159,14 @@ func (s *Server) readiness(w http.ResponseWriter, r *http.Request) {
 	if !s.ready.Load() {
 		writeJSON(w, http.StatusServiceUnavailable, httperr.New("not_ready", "The service is not ready.", w.Header().Get("X-Request-ID")))
 		return
+	}
+	if s.dbCheck != nil {
+		ctx, cancel := context.WithTimeout(r.Context(), 2*time.Second)
+		defer cancel()
+		if err := s.dbCheck(ctx); err != nil {
+			writeJSON(w, http.StatusServiceUnavailable, httperr.New("database_unavailable", "The database is unavailable.", w.Header().Get("X-Request-ID")))
+			return
+		}
 	}
 	writeJSON(w, http.StatusOK, map[string]string{"status": "ready"})
 }

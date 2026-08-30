@@ -685,6 +685,61 @@ Known limits: schema-change-during-access may reject cleanly (422/retryable) as
   topologies is not exhaustively exercised
 ```
 
+
+## CP6 - Connection loss, restart and pool recovery
+
+Status: complete
+
+Hardened connection-loss, restart and pool-recovery behaviour against a real
+PostgreSQL instance and added readiness semantics orchestration can use.
+Requests fail cleanly and promptly across every failure mode; the dashboard and
+APIs can distinguish an unavailable database from a ready one, and readiness
+recovers automatically when connectivity returns.
+
+### Application
+
+- `/system/ready` now reflects live database availability: a ready process
+  whose database probe fails returns 503 `database_unavailable` (degraded),
+  while `/system/health` stays 200 (process liveness). When the database
+  recovers, readiness returns 200. main wires the store Ping as the probe.
+- Add `TestReadinessDistinguishesDatabaseUnavailable` proving the
+  unavailable/degraded/recovered transitions.
+- Store connection corpus (real PostgreSQL 18.6): startup against an
+  unavailable database fails bounded and cleanly; DNS failure fails within the
+  configured bound; `sslmode=verify-full` rejects a server without a verifiable
+  certificate; wrong credentials fail cleanly without leaking the secret
+  (skipped on trust-authentication servers, documented); a cancelled request
+  surfaces immediately; a single-connection pool under concurrent load
+  serializes without hanging; a reset connection errors promptly instead of
+  hanging.
+- Add `scripts/test-connection-recovery.sh`: a real-service drill that starts
+  Trestle against a disposable PostgreSQL, stops the database (ready -> 503
+  database_unavailable, health stays 200), restarts it (ready -> 200), and
+  asserts no connection material in logs. Wired into CI syntax checks.
+
+### Exit evidence
+
+- Connection corpus passes on SQLite and real PostgreSQL 18.6; the real-service
+  drill passes with a live stop/restart of the database.
+
+Completion record:
+
+```text
+Status: complete
+Application commit: recorded by this commit
+Website output commit: n/a (no public documentation change)
+Website source commit: n/a (no public documentation change)
+Verified: connection corpus on both providers; connection-recovery drill
+  against a real disposable PostgreSQL; full suite and vet
+Findings repaired: /system/ready did not reflect live database availability
+  (could report ready with the database down); now distinct from health
+Known limits: the dashboard distinguishes ready/unavailable via the readiness
+  probe; a distinct three-way degraded state is represented by ready=503
+  database_unavailable with health=200; wrong-credential rejection is exercised
+  only where the server enforces passwords (the trust-auth disposable suite
+  server skips that scenario)
+```
+
 ## Checkpoint roadmap
 
 - CP1 - PostgreSQL contract and baseline (this checkpoint)

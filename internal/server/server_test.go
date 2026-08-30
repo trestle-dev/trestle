@@ -2,11 +2,15 @@ package server
 
 import (
 	"bytes"
+	"context"
+	"errors"
+	"io"
 	"log/slog"
 	"net/http"
 	"net/http/httptest"
 	"net/netip"
 	"strings"
+	"sync/atomic"
 	"testing"
 
 	"github.com/trestle-dev/trestle/internal/requestmeta"
@@ -82,5 +86,40 @@ func TestForwardedChainStopsAtFirstUntrustedHop(t *testing.T) {
 	s.Handler().ServeHTTP(w, r)
 	if got := strings.TrimSpace(w.Body.String()); got != "198.51.100.9" {
 		t.Fatalf("unexpected client: %q", got)
+	}
+}
+
+// TestReadinessDistinguishesDatabaseUnavailable proves /system/health stays
+// 200 (process liveness) while /system/ready returns 503 database_unavailable
+// when the database probe fails and 200 when it recovers.
+func TestReadinessDistinguishesDatabaseUnavailable(t *testing.T) {
+	app := New(slog.New(slog.NewTextHandler(io.Discard, nil)))
+	app.SetReady(true)
+	var dbUp atomic.Bool
+	dbUp.Store(true)
+	app.SetDatabaseCheck(func(context.Context) error {
+		if !dbUp.Load() {
+			return errors.New("database down")
+		}
+		return nil
+	})
+	get := func(path string) *httptest.ResponseRecorder {
+		w := httptest.NewRecorder()
+		app.Handler().ServeHTTP(w, httptest.NewRequest("GET", path, nil))
+		return w
+	}
+	if w := get("/system/ready"); w.Code != 200 || !strings.Contains(w.Body.String(), `"ready"`) {
+		t.Fatalf("ready up=%d %s", w.Code, w.Body.String())
+	}
+	dbUp.Store(false)
+	if w := get("/system/health"); w.Code != 200 {
+		t.Fatalf("health liveness must stay 200 while db down, got %d", w.Code)
+	}
+	if w := get("/system/ready"); w.Code != 503 || !strings.Contains(w.Body.String(), "database_unavailable") {
+		t.Fatalf("ready down=%d %s", w.Code, w.Body.String())
+	}
+	dbUp.Store(true)
+	if w := get("/system/ready"); w.Code != 200 || !strings.Contains(w.Body.String(), `"ready"`) {
+		t.Fatalf("ready recovered=%d %s", w.Code, w.Body.String())
 	}
 }

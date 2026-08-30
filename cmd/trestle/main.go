@@ -216,6 +216,7 @@ func main() {
 	adminRoutes.Handle("/admin/v1/support-bundle", deploymentAPI)
 	adminRoutes.Handle("/", admin)
 	app := server.NewWithOptions(logger, dashboard, apiRoutes, adminRoutes, server.Options{TrustedProxies: cfg.TrustedProxies})
+	app.SetDatabaseCheck(database.Ping)
 	httpServer := &http.Server{Addr: cfg.Listen, Handler: app.Handler(), ReadHeaderTimeout: cfg.ReadHeaderTimeout, ReadTimeout: cfg.ReadTimeout, IdleTimeout: cfg.IdleTimeout, MaxHeaderBytes: cfg.MaxHeaderBytes}
 	ctx, stop := signal.NotifyContext(context.Background(), os.Interrupt, syscall.SIGTERM)
 	defer stop()
