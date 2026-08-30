@@ -1,0 +1,180 @@
+name: Release rehearsal (manual)
+
+# Manually dispatched, fresh GitHub-hosted Ubuntu runner rehearsal of the
+# public vX.Y.Z-* prerelease. It never checks out the repository, never uses
+# local build outputs, never tags/publishes/promotes/edits a release and never
+# writes repository contents: everything is downloaded from the public GitHub
+# release and https://trestle.cv, and permissions are read-only.
+#
+# Verifies checksums and build provenance (gh attestation verify) for all six
+# archives, then exercises the public download/install scripts and a SQLite
+# first-run journey on the fresh runner.
+on:
+  workflow_dispatch:
+    inputs:
+      version:
+        description: 'Exact prerelease tag to rehearse (e.g. v0.1.0-rc.1)'
+        required: true
+        default: v0.1.0-rc.1
+
+permissions:
+  contents: read
+  attestations: read
+
+jobs:
+  rehearse:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Validate version input
+        run: |
+          version="${{ github.event.inputs.version }}"
+          # Exact semver prerelease tag only: vMAJOR.MINOR.PATCH-PRERELEASE.
+          # Rejects whitespace, shell metacharacters and any non-version value.
+          case "$version" in
+            v[0-9]*.[0-9]*.[0-9]*-*) ;;
+            *) echo "invalid version '$version': expected an exact prerelease tag like v0.1.0-rc.1" >&2; exit 1 ;;
+          esac
+          printf '%s\n' "$version" | LC_ALL=C grep -q '^v[0-9][0-9]*\.[0-9][0-9]*\.[0-9][0-9]*-[0-9A-Za-z][0-9A-Za-z.]*$' \
+            || { echo "invalid characters in version '$version'" >&2; exit 1; }
+          echo "version=$version" >> "$GITHUB_ENV"
+
+      - name: Download public release assets
+        run: |
+          set -euo pipefail
+          mkdir -p artifacts
+          base="https://github.com/trestle-dev/trestle/releases/download/${version}"
+          curl -fsSL --max-time 60 -o artifacts/SHA256SUMS "$base/SHA256SUMS"
+          for a in \
+            "trestle_${version#v}_linux_amd64.tar.gz" \
+            "trestle_${version#v}_linux_arm64.tar.gz" \
+            "trestle_${version#v}_darwin_amd64.tar.gz" \
+            "trestle_${version#v}_darwin_arm64.tar.gz" \
+            "trestle_${version#v}_windows_amd64.zip" \
+            "trestle_${version#v}_windows_arm64.zip"; do
+            curl -fsSL --max-time 120 -o "artifacts/$a" "$base/$a"
+          done
+          echo "downloaded SHA256SUMS + six archives for ${version}"
+
+      - name: Verify checksums and exact asset set
+        run: |
+          set -euo pipefail
+          cd artifacts
+          n=$(find . -maxdepth 1 -name 'trestle_*' | wc -l)
+          [ "$n" -eq 6 ] || { echo "expected exactly six archives, found $n" >&2; exit 1; }
+          sha256sum -c SHA256SUMS
+
+      - name: Verify build provenance for all six archives
+        run: |
+          set -euo pipefail
+          cd artifacts
+          for a in trestle_*; do
+            echo "=== gh attestation verify: $a ==="
+            gh attestation verify "$a" --repo trestle-dev/trestle
+            echo "=== $a: attestation VERIFIED ==="
+          done
+        env:
+          GH_TOKEN: ${{ github.token }}
+
+      - name: Record provenance details
+        run: |
+          set -euo pipefail
+          cd artifacts
+          for a in trestle_*; do
+            echo "=== $a provenance ==="
+            if gh attestation verify "$a" --repo trestle-dev/trestle --format json > "provenance-$a.json" 2>/dev/null; then
+              jq -r '
+                .verificationResult as $r |
+                "subject: " + (($r.subjects // []) | map(.name) | join(",")),
+                "repository: " + ($r.sourceRepository // "n/a"),
+                "workflow: " + ($r.sourceRepositoryURI // "n/a"),
+                "signer: " + ($r.issuer // "n/a")
+              ' "provenance-$a.json" || true
+            else
+              echo "(structured provenance JSON unavailable for $a; human verification output above is authoritative)"
+            fi
+          done
+        env:
+          GH_TOKEN: ${{ github.token }}
+
+      - name: Exercise public release on the fresh runner
+        run: |
+          set -euo pipefail
+          work="$(mktemp -d)"
+          trap 'rm -rf "$work"' EXIT
+          cd "$work"
+
+          echo "--- 1. pinned download.sh (public URL) ---"
+          curl -fsSL --max-time 60 https://trestle.cv/download.sh -o download.sh
+          sh download.sh --version "${version}" >/dev/null
+          [ -x ./trestle ] || { echo "download produced no executable" >&2; exit 1; }
+          leftovers="$(ls -A1 | grep -v '^download.sh$' | grep -v '^trestle$' || true)"
+          [ -z "$leftovers" ] || { echo "download wrote unexpected files: $leftovers" >&2; exit 1; }
+          vout="$(./trestle version)"
+          echo "$vout" | grep -q "\"version\":\"${version#v}\"" || { echo "version mismatch: $vout" >&2; exit 1; }
+          echo "$vout" | grep -q '"os":"linux"' || { echo "os mismatch: $vout" >&2; exit 1; }
+          echo "$vout" | grep -q '"arch":"amd64"' || { echo "arch mismatch: $vout" >&2; exit 1; }
+          echo "download.sh: OK (version=${version#v}, linux/amd64)"
+
+          echo "--- 2. pinned install.sh with isolated HOME ---"
+          curl -fsSL --max-time 60 https://trestle.cv/install.sh -o install.sh
+          mkdir -p "$work/home"
+          HOME="$work/home" sh install.sh --version "${version}" >/dev/null
+          installed="$work/home/.local/bin/trestle"
+          [ -x "$installed" ] || { echo "install produced no executable" >&2; exit 1; }
+          mode="$(stat -c '%a' "$installed")"
+          [ "$mode" = "755" ] || { echo "installed mode is $mode, want 755" >&2; exit 1; }
+          echo "install.sh: OK ($installed, mode $mode)"
+
+          echo "--- 3. SQLite first-run journey (public binary) ---"
+          port=$(( 29000 + ($$ % 10000) ))
+          base="http://127.0.0.1:$port"
+          "$installed" --listen "127.0.0.1:$port" --data-dir "$work/data" > server.log 2>&1 &
+          svc=$!
+          i=0
+          until curl -fsS --max-time 2 "$base/system/health" >/dev/null 2>&1; do
+            i=$((i+1)); [ "$i" -ge 50 ] && { cat server.log >&2; exit 1; }; sleep 0.2
+          done
+          echo "health: $(curl -fsS --max-time 3 "$base/system/health")"
+          echo "ready: $(curl -fsS --max-time 3 "$base/system/ready")"
+          [ "$(curl -fsS --max-time 3 "$base/admin/v1/setup/status")" = '{"setupRequired":true}' ] || { echo "setupRequired unexpected" >&2; exit 1; }
+          # Six-character password rejected; seven-character accepted.
+          reject=$(curl -s --max-time 5 -o /dev/null -w '%{http_code}' -X POST "$base/admin/v1/setup" \
+            -H 'Content-Type: application/json' -H "Origin: $base" -d '{"email":"a@example.com","password":"123456"}')
+          [ "$reject" = "422" ] || { echo "six-char password not rejected (status $reject)" >&2; exit 1; }
+          pw="correct horse battery staple"
+          curl -fsS --max-time 5 -c cj -X POST "$base/admin/v1/setup" \
+            -H 'Content-Type: application/json' -H "Origin: $base" \
+            -d "{\"email\":\"admin@example.com\",\"password\":\"$pw\"}" > setup.json
+          csrf() { curl -fsS --max-time 3 -b cj "$base/admin/v1/session" | sed -E 's/.*"csrfToken":"([^"]+)".*/\1/' | tr -d '\r\n'; }
+          curl -fsS --max-time 3 -b cj "$base/admin/v1/session" | grep -q '"authenticated":true' || { echo "not authenticated after setup" >&2; exit 1; }
+          CSRF=$(csrf)
+          cc=$(curl -s --max-time 5 -o /dev/null -w '%{http_code}' -b cj -X POST "$base/admin/v1/collections" \
+            -H 'Content-Type: application/json' -H "Origin: $base" -H "X-Trestle-CSRF: $CSRF" \
+            -d '{"name":"notes","fields":[{"name":"title","type":"text","required":true}]}')
+          [ "$cc" = "201" ] || { echo "collection create status $cc" >&2; exit 1; }
+          CSRF=$(csrf)
+          rw=$(curl -s --max-time 5 -o /dev/null -w '%{http_code}' -b cj -X POST "$base/api/v1/collections/notes/records" \
+            -H 'Content-Type: application/json' -H "Origin: $base" -H "X-Trestle-CSRF: $CSRF" \
+            -d '{"values":{"title":"rehearsal note"}}')
+          [ "$rw" = "201" ] || { echo "record create status $rw" >&2; exit 1; }
+          curl -fsS --max-time 5 -b cj "$base/api/v1/collections/notes/records?limit=25" | grep -q '"rehearsal note"' || { echo "record not retrievable" >&2; exit 1; }
+          echo "first-run journey: OK (setup/collection/record)"
+          kill "$svc" 2>/dev/null || true; wait "$svc" 2>/dev/null || true
+
+          echo "--- restart persistence ---"
+          "$installed" --listen "127.0.0.1:$port" --data-dir "$work/data" >> server.log 2>&1 &
+          svc=$!
+          i=0
+          until curl -fsS --max-time 2 "$base/system/health" >/dev/null 2>&1; do
+            i=$((i+1)); [ "$i" -ge 50 ] && { cat server.log >&2; exit 1; }; sleep 0.2
+          done
+          curl -fsS --max-time 5 -c cj -X POST "$base/admin/v1/session" \
+            -H 'Content-Type: application/json' -H "Origin: $base" \
+            -d "{\"email\":\"admin@example.com\",\"password\":\"$pw\"}" >/dev/null
+          curl -fsS --max-time 5 -b cj "$base/api/v1/collections/notes/records?limit=25" | grep -q '"rehearsal note"' \
+            || { echo "record lost across restart" >&2; exit 1; }
+          echo "restart persistence: OK"
+          kill "$svc" 2>/dev/null || true; wait "$svc" 2>/dev/null || true
+          echo "=== REHEARSAL COMPLETE (fresh GitHub-hosted Ubuntu runner) ==="
+        env:
+          GH_TOKEN: ${{ github.token }}

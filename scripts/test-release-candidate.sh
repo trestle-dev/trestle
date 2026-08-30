@@ -21,6 +21,7 @@ TRESTLE_FUZZ_TIME=2s ./scripts/fuzz-boundaries.sh
 ./scripts/test-release.sh
 ./scripts/test-release-contract.sh
 ./scripts/test-release-reproducible.sh
+./scripts/test-release-rehearsal.sh
 ./scripts/test-installer.sh
 ./scripts/test-update.sh
 ./scripts/test-download.sh
