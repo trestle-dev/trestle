@@ -2,9 +2,9 @@ package appauth
 
 import (
 	"encoding/json"
+	"fmt"
 	"net/http"
 	"net/http/httptest"
-	"fmt"
 	"sync"
 	"testing"
 
