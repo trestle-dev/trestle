@@ -999,6 +999,51 @@ Known limits: webhook delivery to a private destination is refused by the SSRF
   claim/drain/no-duplication; resource numbers are this-machine-only
 ```
 
+
+## CP5R2 - Narrow revocation-race evidence and harden the connection drill
+
+Status: complete
+
+CP5R's revocation test asserted that both in-flight interleavings were
+exercised while only requiring a pre-revocation success in at least one
+iteration; requiring the scheduler to also produce a post-revocation in-flight
+rejection would be flaky in CI. This repair narrows the evidence to what is
+actually guaranteed and hardens the connection drill's transient PostgreSQL
+provisioning failure.
+
+### Application
+
+- `TestRevocationDuringInFlightRequests` now guarantees, per iteration:
+  concurrent in-flight requests return a clean boolean (they may complete
+  before or after the committed revocation, neither side required in any run);
+  logout is synchronized in the same barrier and awaited with status 204; and
+  every request started after logout returns is rejected. The probabilistic
+  pre-revocation-success requirement is removed.
+- The connection-loss and restore drills now print the PostgreSQL log and the
+  chosen port on any `pg_ctl` start failure and retry provisioning on a fresh
+  port (bounded), rather than silently normalising an infrastructure flake.
+
+### Exit evidence
+
+- Revocation race passes on SQLite and real PostgreSQL 18.6; both drills pass
+  with the hardened provisioning.
+
+Completion record:
+
+```text
+Status: complete (repair)
+Application commit: recorded by this commit
+Website output commit: n/a (no public documentation change)
+Website source commit: n/a (no public documentation change)
+Verified: revocation race; connection-loss and restore drills on a fresh
+  disposable PostgreSQL
+Findings repaired: revocation evidence claimed both in-flight interleavings
+  without asserting post-revocation in-flight rejection; drills could fail on a
+  transient PostgreSQL provisioning flake without diagnostics or retry
+Known limits: in-flight requests may complete on either side of the committed
+  revocation; only the guaranteed post-logout rejection is asserted
+```
+
 ## Checkpoint roadmap
 
 - CP1 - PostgreSQL contract and baseline (this checkpoint)

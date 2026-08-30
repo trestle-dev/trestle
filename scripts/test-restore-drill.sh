@@ -79,7 +79,18 @@ echo "1) SQLite backup -> destroy -> restore -> verify passed"
 if [ -n "$bindir" ] && [ -x "$bindir/initdb" ]; then
   pgport=$((27400 + ($$ % 20000)))
   "$bindir/initdb" -D "$work/pg" -U postgres --auth=trust --no-locale -E UTF8 >"$work/initdb.log" 2>&1
-  "$bindir/pg_ctl" -D "$work/pg" -l "$work/pg.log" -o "-p $pgport -k $work" start >/dev/null
+  attempt=1
+  while [ "$attempt" -le 3 ]; do
+    p=$((pgport + (attempt - 1) * 97))
+    if "$bindir/pg_ctl" -D "$work/pg" -l "$work/pg.log" -o "-p $p -k $work" start >/dev/null 2>&1; then
+      pgport="$p"
+      break
+    fi
+    echo "postgres start attempt $attempt on port $p failed:" >&2
+    cat "$work/pg.log" >&2 2>/dev/null || true
+    attempt=$((attempt + 1))
+    [ "$attempt" -gt 3 ] && { echo "could not start disposable PostgreSQL" >&2; exit 1; }
+  done
   "$bindir/createdb" -h 127.0.0.1 -p "$pgport" -U postgres trestle_restore
   pgpid=$("$bindir/pg_ctl" -D "$work/pg" status | sed -n 's/.*PID: \([0-9]*\).*/\1/p')
   pgurl="postgres://postgres@127.0.0.1:$pgport/trestle_restore?sslmode=disable"

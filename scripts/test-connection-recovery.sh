@@ -25,8 +25,28 @@ pid=""
 trap '[ -z "$pid" ] || kill "$pid" 2>/dev/null || true; [ -n "${pgpid:-}" ] && kill "$pgpid" 2>/dev/null || true; rm -rf "$work"' EXIT INT TERM
 
 port=$((26432 + ($$ % 20000)))
-"$bindir/initdb" -D "$work/pg" -U postgres --auth=trust --no-locale -E UTF8 >"$work/initdb.log" 2>&1
-"$bindir/pg_ctl" -D "$work/pg" -l "$work/pg.log" -o "-p $port -k $work" start >/dev/null
+pgdata="$work/pg"
+"$bindir/initdb" -D "$pgdata" -U postgres --auth=trust --no-locale -E UTF8 >"$work/initdb.log" 2>&1
+
+# start_pg starts a disposable instance with a bounded retry on a fresh port;
+# a failed attempt prints the PostgreSQL log and the chosen port rather than
+# silently normalising an infrastructure flake.
+start_pg() {
+  attempt=1
+  while [ "$attempt" -le 3 ]; do
+    p=$((port + (attempt - 1) * 97))
+    if "$bindir/pg_ctl" -D "$pgdata" -l "$work/pg.log" -o "-p $p -k $work" start >/dev/null 2>&1; then
+      port="$p"
+      return 0
+    fi
+    echo "postgres start attempt $attempt on port $p failed:" >&2
+    cat "$work/pg.log" >&2 2>/dev/null || true
+    attempt=$((attempt + 1))
+  done
+  echo "could not start disposable PostgreSQL" >&2
+  exit 1
+}
+start_pg
 "$bindir/createdb" -h 127.0.0.1 -p "$port" -U postgres trestle
 pgpid=$("$bindir/pg_ctl" -D "$work/pg" status | sed -n 's/.*PID: \([0-9]*\).*/\1/p')
 url="postgres://postgres@127.0.0.1:$port/trestle?sslmode=disable"
@@ -67,7 +87,18 @@ fi
 echo "2) database_unavailable (503) with health 200 while database down"
 
 # Restart the database; readiness must recover.
-"$bindir/pg_ctl" -D "$work/pg" -l "$work/pg.log" -o "-p $port -k $work" start >/dev/null
+# Restart the database on the same port; a bounded wait with the log printed
+# on failure.
+i=0
+until "$bindir/pg_ctl" -D "$work/pg" -l "$work/pg.log" -o "-p $port -k $work" start >/dev/null 2>&1; do
+  i=$((i + 1))
+  if [ "$i" -ge 5 ]; then
+    echo "postgres restart on port $port failed:" >&2
+    cat "$work/pg.log" >&2 2>/dev/null || true
+    exit 1
+  fi
+  sleep 1
+done
 pgpid=$("$bindir/pg_ctl" -D "$work/pg" status | sed -n 's/.*PID: \([0-9]*\).*/\1/p')
 i=0
 until [ "$(curl -s -o /dev/null -w '%{http_code}' "$base/system/ready")" = 200 ]; do
