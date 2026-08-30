@@ -8,9 +8,11 @@ import (
 	"encoding/base64"
 	"encoding/json"
 	"fmt"
+	"github.com/trestle-dev/trestle/internal/requestmeta"
 	"net/http"
 	"net/mail"
 	"strings"
+	"sync"
 	"time"
 
 	"github.com/trestle-dev/trestle/internal/adminauth"
@@ -20,9 +22,10 @@ import (
 )
 
 type Handler struct {
-	db    store.Executor
-	admin *adminauth.Handler
-	now   func() time.Time
+	db      store.Executor
+	admin   *adminauth.Handler
+	now     func() time.Time
+	limiter *limiter
 }
 type credentials struct{ Email, Password string }
 type refreshInput struct {
@@ -30,7 +33,7 @@ type refreshInput struct {
 }
 
 func New(db any, admin *adminauth.Handler) *Handler {
-	return &Handler{db: store.Adapt(db), admin: admin, now: time.Now}
+	return &Handler{db: store.Adapt(db), admin: admin, now: time.Now, limiter: newLimiter(10, time.Minute)}
 }
 
 func (h *Handler) ServeHTTP(w http.ResponseWriter, r *http.Request) {
@@ -73,6 +76,15 @@ func (h *Handler) register(w http.ResponseWriter, r *http.Request) {
 	writeJSON(w, 201, map[string]any{"id": id, "email": email, "verificationRequired": true})
 }
 func (h *Handler) login(w http.ResponseWriter, r *http.Request) {
+	if !sameOrigin(r) {
+		writeError(w, 403, "origin_denied", "The request origin is not allowed.")
+		return
+	}
+	key := clientKey(r)
+	if !h.limiter.Allow(key, h.now()) {
+		writeError(w, 429, "rate_limited", "Too many attempts. Try again later.")
+		return
+	}
 	var in credentials
 	if !decode(w, r, &in) {
 		return
@@ -299,3 +311,44 @@ func writeJSON(w http.ResponseWriter, status int, value any) {
 	w.WriteHeader(status)
 	json.NewEncoder(w).Encode(value)
 }
+
+func sameOrigin(r *http.Request) bool {
+	origin := r.Header.Get("Origin")
+	if origin == "" {
+		return true
+	}
+	return origin == requestmeta.Scheme(r)+"://"+r.Host
+}
+func clientKey(r *http.Request) string {
+	return requestmeta.ClientIP(r)
+}
+
+// limiter is a small fixed-window per-key attempt limiter.
+type limiter struct {
+	mu       sync.Mutex
+	max      int
+	window   time.Duration
+	attempts map[string][]time.Time
+}
+
+func newLimiter(max int, window time.Duration) *limiter {
+	return &limiter{max: max, window: window, attempts: map[string][]time.Time{}}
+}
+func (l *limiter) Allow(key string, now time.Time) bool {
+	l.mu.Lock()
+	defer l.mu.Unlock()
+	cut := now.Add(-l.window)
+	items := l.attempts[key][:0]
+	for _, at := range l.attempts[key] {
+		if at.After(cut) {
+			items = append(items, at)
+		}
+	}
+	if len(items) >= l.max {
+		l.attempts[key] = items
+		return false
+	}
+	l.attempts[key] = append(items, now)
+	return true
+}
+func (l *limiter) Clear(key string) { l.mu.Lock(); delete(l.attempts, key); l.mu.Unlock() }

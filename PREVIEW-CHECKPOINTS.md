@@ -1317,6 +1317,57 @@ Known limits: hostile-archive preflight SQLite restore remains unverified;
   rows marked unverified stay honest
 ```
 
+
+## CP10R - Complete authentication and authorization hardening
+
+Status: complete
+
+CP10 repaired ignored durable-write errors; this repair closes the remaining
+evidence gaps with an adversarial matrix and fixes a real gap found: the
+application-user login/registration path had no rate limiter.
+
+### Application
+
+- Defect repaired: application-user login was not rate-limited (only
+  administrator login was), leaving credential-stuffing against the application
+  API unbounded. `appauth` now carries the same fixed-window per-client-address
+  limiter as adminauth and applies it to login; forwarded client addresses are
+  only honored behind trusted proxies.
+- Add `internal/authaudit/adversarial_test.go`, provider-parameterized:
+  - unauthenticated access to every protected admin and API route is rejected
+    and never returns success or leaks credentials;
+  - the admin cookie is HttpOnly and SameSite=Strict; browser mutations without
+    a valid CSRF token or with a foreign origin are rejected;
+  - disabled users, revoked sessions, refresh-token replay and session fixation
+    (distinct cookies per login) behave correctly, and responses never leak
+    passwords;
+  - repeated failed logins from one client address are throttled (429) while a
+    distinct address is unaffected;
+  - failure injection at transaction begin and commit (not only Exec) proves
+    the transactional app-user disable path fails closed.
+- First-administrator bootstrap has no remote bootstrap token by design (headless
+  provider selection is flag/env based); setup closes after the first
+  administrator (covered by the existing suites).
+
+### Exit evidence
+
+- Adversarial matrix passes on SQLite and real PostgreSQL 18.6; full suite and
+  vet green.
+
+Completion record:
+
+```text
+Status: complete (repair)
+Application commit: recorded by this commit
+Website output commit: n/a (no public documentation change)
+Website source commit: n/a (no public documentation change)
+Verified: adversarial matrix (routes, cookies, CSRF/origin, identity,
+  rate limiting, begin/commit injection) on both providers; full suite
+Findings repaired: application-user login lacked rate limiting
+Known limits: remote bootstrap tokens are not a product feature (headless setup
+  is flag/env); rate-limit windows are fixed, not adaptive
+```
+
 ## Checkpoint roadmap
 
 - CP1 - PostgreSQL contract and baseline (this checkpoint)

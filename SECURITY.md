@@ -48,7 +48,11 @@ the inspecting actor cannot access.
 - Apply security headers without breaking required dashboard behavior. Avoid
   inline script so a restrictive Content Security Policy remains practical.
 - Rate-limit authentication, recovery, token, expensive query, upload, and admin
-  operations with privacy-preserving errors.
+  operations with privacy-preserving errors. Application-user login and
+  registration are throttled per client address (a fixed window) in addition to
+  administrator login, so credential-stuffing against the application API is
+  bounded; forwarded client addresses are only honored behind configured trusted
+  proxies.
 
 ## Files and external calls
 
