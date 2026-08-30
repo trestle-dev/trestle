@@ -327,6 +327,64 @@ Known limits: browser-level coverage is via the pure state machine and DOM
   simulation of the browser transitions
 ```
 
+## CP3 - PostgreSQL schema and migration integrity
+
+Status: complete
+
+Audited every schema-creation and migration operation against the CP3 contract
+and closed the concrete evidence gaps. The pre-existing store suite already
+proved clean bootstrap, failed-migration rollback, future-schema refusal,
+history reconciliation and concurrent-startup locking on both providers; the
+checkpoint added what was genuinely missing and actionable recovery guidance.
+
+### Application
+
+- Add recovery instructions to fail-closed migration errors (gapped, future,
+  misnamed or marker-disagreement history now directs the operator to restore
+  the database from a backup before retrying), on both providers.
+- Add `TestUpgradeFromEveryRetainedSchemaVersionProvider`: upgrades from every
+  retained logical schema version (v0..v13) on SQLite and real PostgreSQL,
+  building historical fixtures from the authoritative per-version DDL, proving
+  the applied version reaches `CurrentVersion`, exactly `CurrentVersion`
+  migration rows (no re-application), and prior data survives.
+- Add `TestBootstrapSchemaIntegrity`: introspects a fresh bootstrap on both
+  providers and asserts the exact system-table set, cascade foreign keys
+  (admin sessions->admins, fields->collections, collection rules->collections),
+  uniqueness (fields collection_id+name, token_hash, refresh_hash) and the
+  named operational indexes.
+- Add `TestMigrationFailuresCarryRecoveryInstructions`: gapped history fails
+  closed with the actionable recovery hint on both providers.
+
+Traffic gating is by construction: the store opens (and migrations complete)
+before the HTTP server begins serving, and `/system/ready` reports not-ready
+until `SetReady(true)` after startup.
+
+### Public website
+
+- Migrations page now states that a rejected database leads Trestle to direct
+  the operator to restore from a backup before retrying.
+
+### Exit evidence
+
+- Upgrade-from-every-version, schema-integrity and recovery-instruction tests
+  pass on SQLite and real PostgreSQL 18.6; full suite and vet green.
+
+Completion record:
+
+```text
+Status: complete
+Application commit: a29d135
+Website output commit: c11608e
+Website source commit: 50bc788
+Verified: store suite, full go test ./... and go vet on SQLite and real
+  PostgreSQL 18.6; Nift rebuild and site check
+Findings repaired: PostgreSQL had no persistent upgrade-from-every-version
+  executable test; no schema-introspection test asserted indexes/foreign
+  keys/uniqueness; fail-closed migration errors lacked an operator recovery step
+Known limits: fixtures model each retained logical version with the current
+  authoritative DDL; historical DDL as first written is not retained separately
+```
+
 ## Checkpoint roadmap
 
 - CP1 - PostgreSQL contract and baseline (this checkpoint)

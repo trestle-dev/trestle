@@ -106,6 +106,17 @@ type migration struct {
 	name, sql string
 }
 
+// migrationRecoveryHint is appended to fail-closed migration errors so an
+// operator receives an actionable next step rather than a bare diagnostic.
+const migrationRecoveryHint = ". Recovery: restore this database from a backup before starting Trestle again"
+
+func withMigrationRecoveryHint(err error) error {
+	if err == nil {
+		return nil
+	}
+	return fmt.Errorf("%w%s", err, migrationRecoveryHint)
+}
+
 var migrations = []migration{{1, "system foundation", `
 CREATE TABLE _trestle_schema_migrations (
   version INTEGER PRIMARY KEY,
@@ -428,13 +439,13 @@ func (s *Store) readHistory(ctx context.Context, q queryer) (migrationHistory, e
 			return migrationHistory{}, fmt.Errorf("read migration history: %w", err)
 		}
 		if version > CurrentVersion {
-			return migrationHistory{}, fmt.Errorf("database schema version %d is newer than supported version %d", version, CurrentVersion)
+			return migrationHistory{}, withMigrationRecoveryHint(fmt.Errorf("database schema version %d is newer than supported version %d", version, CurrentVersion))
 		}
 		if version != expected {
-			return migrationHistory{}, fmt.Errorf("database migration history is not contiguous (expected version %d, found %d)", expected, version)
+			return migrationHistory{}, withMigrationRecoveryHint(fmt.Errorf("database migration history is not contiguous (expected version %d, found %d)", expected, version))
 		}
 		if name != migrations[version-1].name {
-			return migrationHistory{}, fmt.Errorf("database migration %d has an unexpected name", version)
+			return migrationHistory{}, withMigrationRecoveryHint(fmt.Errorf("database migration %d has an unexpected name", version))
 		}
 		history.version = version
 		expected++
@@ -459,11 +470,11 @@ func (s *Store) sqliteVersion(ctx context.Context) (int, error) {
 		return 0, fmt.Errorf("read schema version mirror: %w", err)
 	}
 	if mirror > CurrentVersion {
-		return 0, fmt.Errorf("database schema version %d is newer than supported version %d", mirror, CurrentVersion)
+		return 0, withMigrationRecoveryHint(fmt.Errorf("database schema version %d is newer than supported version %d", mirror, CurrentVersion))
 	}
 	if history.version == 0 {
 		if mirror != 0 {
-			return 0, fmt.Errorf("database has a schema version marker but no migration history")
+			return 0, withMigrationRecoveryHint(errors.New("database has a schema version marker but no migration history"))
 		}
 		return 0, nil
 	}
@@ -472,7 +483,7 @@ func (s *Store) sqliteVersion(ctx context.Context) (int, error) {
 			return 0, fmt.Errorf("restore schema version mirror: %w", err)
 		}
 	} else if mirror != history.version {
-		return 0, fmt.Errorf("database schema version marker %d does not match migration history version %d", mirror, history.version)
+		return 0, withMigrationRecoveryHint(fmt.Errorf("database schema version marker %d does not match migration history version %d", mirror, history.version))
 	}
 	s.schemaVersion = history.version
 	return history.version, nil
@@ -568,7 +579,7 @@ func ValidateMigrationHistory(ctx context.Context, db Executor) (int, error) {
 		exists = count > 0
 	}
 	if !exists {
-		return 0, errors.New("database has no migration history")
+		return 0, withMigrationRecoveryHint(errors.New("database has no migration history"))
 	}
 	rows, err := db.QueryContext(ctx, "SELECT version,name FROM _trestle_schema_migrations ORDER BY version")
 	if err != nil {
@@ -584,13 +595,13 @@ func ValidateMigrationHistory(ctx context.Context, db Executor) (int, error) {
 			return 0, fmt.Errorf("read migration history: %w", err)
 		}
 		if version > CurrentVersion {
-			return 0, fmt.Errorf("database schema version %d is newer than supported version %d", version, CurrentVersion)
+			return 0, withMigrationRecoveryHint(fmt.Errorf("database schema version %d is newer than supported version %d", version, CurrentVersion))
 		}
 		if version != expected {
-			return 0, fmt.Errorf("database migration history is not contiguous (expected version %d, found %d)", expected, version)
+			return 0, withMigrationRecoveryHint(fmt.Errorf("database migration history is not contiguous (expected version %d, found %d)", expected, version))
 		}
 		if name != migrations[version-1].name {
-			return 0, fmt.Errorf("database migration %d has an unexpected name", version)
+			return 0, withMigrationRecoveryHint(fmt.Errorf("database migration %d has an unexpected name", version))
 		}
 		applied = version
 		expected++
