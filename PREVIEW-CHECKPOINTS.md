@@ -1576,6 +1576,58 @@ Known limits: rate-limit windows are fixed, not adaptive; remote bootstrap
   tokens remain a non-feature (headless setup is flag/env based)
 ```
 
+
+## CP11R2 - Corrected subsystem evidence matrix
+
+Status: complete
+
+The CP11R subsystem matrix marked broad surfaces proven from unrelated or
+single-subsystem tests. This repair makes the evidence package-qualified,
+behavior-specific and gated, and corrects overclaims.
+
+### Application
+
+- Rewrite `docs/hardening/subsystem-matrix.json` (v2): every evidence item is
+  package + exact test + the exact behavior it establishes; broad surfaces are
+  split (file upload size vs JSON/API body limits) and downgraded where
+  evidence covers only one subsystem (JSON/API body limits and outbound timeout
+  behaviour are source-inspected; webhook redirect refusal remains
+  source-inspected because loopback delivery is blocked by the SSRF guard).
+- Add `TestFunctionTargetValidation`: function targets are validated to the
+  aws-lambda ARN shape and region pattern, giving the function containment
+  surface direct evidence.
+- Enhance `TestSlowConsumerDoesNotBlockOtherSubscribers` to apply bounded
+  pressure (40 committed events) and verify the healthy subscriber receives
+  every event in order while the stalled consumer blocks only its own
+  connection (per-connection goroutine, bounded 100-event batch reads).
+- Add `TestSubsystemMatrixEvidenceCrossCheck`: validates that proven surfaces
+  cite existing exact test functions with behaviors distinct from their names
+  and that source-inspected/limitation surfaces carry no evidence.
+- Add `scripts/test-subsystem-gate.sh`: runs every cited proven test and fails
+  on any failure or non-run (26 tests, all pass). Wired into CI syntax checks.
+- Preserve the honest external-service limitations (live HTTPS, S3, AWS, DNS
+  change).
+
+### Exit evidence
+
+- Subsystem cross-check and gate pass (26 cited tests); full suite and vet
+  green on both providers.
+
+Completion record:
+
+```text
+Status: complete (repair)
+Application commit: recorded by this commit
+Website output commit: n/a (no public documentation change)
+Website source commit: n/a (no public documentation change)
+Verified: subsystem cross-check and gate; full suite; vet
+Findings repaired: broad proven claims were backed by single-subsystem or
+  unrelated tests; evidence lacked package qualification; function containment
+  and slow-consumer pressure were under-evidenced
+Known limits: live external-service surfaces remain explicit limitations;
+  redirect refusal and body-limit behaviour stay source-inspected
+```
+
 ## Checkpoint roadmap
 
 - CP1 - PostgreSQL contract and baseline (this checkpoint)

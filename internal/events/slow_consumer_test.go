@@ -5,6 +5,7 @@ import (
 	"context"
 	"net/http"
 	"net/http/httptest"
+	"strconv"
 	"strings"
 	"sync"
 	"testing"
@@ -94,19 +95,24 @@ func TestSlowConsumerDoesNotBlockOtherSubscribers(t *testing.T) {
 				h.stream(slow, slowReq)
 			}()
 
-			// Commit an event; the healthy subscriber must receive it while the
-			// slow subscriber stays blocked.
-			emitOne(t, h, 1)
-			deadline := time.Now().Add(3 * time.Second)
-			received := false
-			for time.Now().Before(deadline) && !received {
-				if strings.Contains(healthy.String(), "record.created") {
-					received = true
-				}
+			// Apply bounded pressure: commit 40 events; the healthy subscriber
+			// must receive every one while the stalled subscriber stays blocked
+			// on its own connection (no shared buffer, no cross-connection
+			// backpressure).
+			const events = 40
+			for i := 0; i < events; i++ {
+				emitOne(t, h, i+1)
+			}
+			deadline := time.Now().Add(5 * time.Second)
+			lastID := "id: " + strconv.Itoa(events)
+			for time.Now().Before(deadline) && !strings.Contains(healthy.String(), lastID) {
 				time.Sleep(50 * time.Millisecond)
 			}
-			if !received {
-				t.Fatalf("healthy subscriber did not receive the committed event; buffer=%q", healthy.String())
+			if !strings.Contains(healthy.String(), lastID) {
+				t.Fatalf("healthy subscriber did not receive the last event (%s); buffer=%q", lastID, healthy.String())
+			}
+			if got := strings.Count(healthy.String(), "id: "); got != events {
+				t.Fatalf("healthy subscriber received %d of %d events; buffer=%q", got, events, healthy.String())
 			}
 
 			// The slow subscriber is still blocked (its goroutine is alive), and
