@@ -3,17 +3,25 @@ set -eu
 
 # Deterministic release packaging (CP15).
 #
-# Two runs from the same commit produce byte-identical archives and identical
-# SHA256SUMS:
+# Two runs from the same commit, in the same environment, produce byte-identical
+# archives and identical SHA256SUMS:
 #   - the embedded build date comes from TRESTLE_BUILD_DATE, else
 #     SOURCE_DATE_EPOCH, else the tagged/HEAD commit's committer timestamp
 #     (never the wall clock), so the binary is reproducible;
 #   - the build excludes Go's VCS stamping (-buildvcs=false); the commit is
 #     injected explicitly via ldflags;
-#   - tar archives use SOURCE_DATE_EPOCH (honored by GNU tar and bsdtar) with
-#     sorted, numeric-owner entries and no archive timestamp;
-#   - zip archives use -X (no extra fields) and honor SOURCE_DATE_EPOCH with
+#   - tar archives use SOURCE_DATE_EPOCH with sorted, numeric-owner entries and
+#     no archive timestamp;
+#   - zip archives use -X (no extra fields) with mtimes pinned to
+#     SOURCE_DATE_EPOCH (Info-ZIP does not honor the variable itself) and
 #     stable entry ordering.
+#
+# Scope: byte-identical output is guaranteed for the same source, inputs, Go
+# toolchain and packaging environment - the pinned Ubuntu release job with GNU
+# tar and Info-ZIP. It is NOT a claim of byte-identity across arbitrary Go,
+# tar, ZIP or operating-system versions. Packaging therefore fails closed when
+# the required GNU tar toolchain is unavailable; local macOS packaging is
+# unsupported rather than pretending to be reproducible.
 #
 # scripts/test-release-reproducible.sh runs packaging twice from the same
 # commit and requires byte-identical archives and identical SHA256SUMS.
@@ -22,6 +30,13 @@ set -eu
 version=${1:?usage: package-release.sh VERSION OUTPUT_DIR}
 output_dir=${2:?usage: package-release.sh VERSION OUTPUT_DIR}
 commit=${TRESTLE_COMMIT:-$(git rev-parse HEAD)}
+
+if ! tar --version 2>/dev/null | grep -q GNU; then
+  echo "deterministic release packaging requires GNU tar (the pinned Ubuntu release job)" >&2
+  echo "unsupported toolchain: local macOS packaging is not supported; use the release workflow or a GNU/Linux environment" >&2
+  exit 1
+fi
+command -v zip >/dev/null 2>&1 || { echo "Info-ZIP zip is required for the Windows archives" >&2; exit 1; }
 
 format_epoch() {
   # Portable UTC ISO8601 from an epoch value (GNU and BSD date).
@@ -73,12 +88,7 @@ for target in linux/amd64 linux/arm64 darwin/amd64 darwin/arm64 windows/amd64 wi
     normalize_mtimes "$stage"
     (cd "$work" && find "$name" -print | LC_ALL=C sort | zip -q -X -@ "$output_dir/$name.zip")
   else
-    if tar --version 2>/dev/null | grep -q GNU; then
-      tar -C "$work" --sort=name --numeric-owner --owner=0 --group=0 --mtime="@$SOURCE_DATE_EPOCH" --format=ustar -czf "$output_dir/$name.tar.gz" "$name"
-    else
-      # bsdtar honors SOURCE_DATE_EPOCH for entry mtimes; normalize ownership.
-      tar -C "$work" --numeric-owner --uid=0 --gid=0 -czf "$output_dir/$name.tar.gz" "$name"
-    fi
+    tar -C "$work" --sort=name --numeric-owner --owner=0 --group=0 --mtime="@$SOURCE_DATE_EPOCH" --format=ustar -czf "$output_dir/$name.tar.gz" "$name"
   fi
 done
 (cd "$output_dir" && sha256sum trestle_* > SHA256SUMS)

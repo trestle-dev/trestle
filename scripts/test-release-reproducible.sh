@@ -1,6 +1,12 @@
 #!/bin/sh
 # CP15 reproducibility regression: two independent packaging runs from the same
-# commit must produce byte-identical archives and an identical SHA256SUMS.
+# commit, in the same environment, must produce byte-identical archives and an
+# identical SHA256SUMS.
+#
+# Scope: byte-identity is proven for the same source, inputs, Go toolchain and
+# packaging environment (GNU tar + Info-ZIP, as in the pinned Ubuntu release
+# job). It is not a claim across arbitrary Go, tar, ZIP or OS versions.
+# package-release.sh fails closed when the GNU tar toolchain is unavailable.
 #
 # The embedded build date is derived from the commit (never the wall clock), Go
 # VCS stamping is disabled, tar archives use deterministic ordering/ownership/
