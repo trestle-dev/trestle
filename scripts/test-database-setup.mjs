@@ -190,6 +190,16 @@ for (const state of [vs("empty"), vs("error", {}), vs("retrying"), vs("dead"), v
   }
 }
 
+// 10. Realtime staleness rule (CP12R3): clock-controlled transitions.
+const stale = (last, now, paused) => machine.staleState(last, now, paused);
+const T = 1_700_000_000_000; // fixed clock
+field("inactive becomes stale", stale(T - 31000, T, false), true);
+field("active within window stays live", stale(T - 1000, T, false), false);
+field("continued events never stale", stale(T, T, false), false);
+// a new event resets lastActivity, clearing the stale state
+field("new event clears stale", stale(T, T, false), false);
+field("pause suppresses stale", stale(T - 40000, T, true), false);
+
 if (failures) {
   console.error(`database setup state machine: ${failures} failure(s)`);
   process.exit(1);

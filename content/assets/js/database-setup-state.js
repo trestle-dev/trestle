@@ -106,7 +106,7 @@ globalThis.TrestleDatabaseSetup = (() => {
       nextAction: "Check the process, network and logs, then retry."
     };
   }
-  return { computeState, authGateCopy, restartNotice, connectionState, viewState };
+  return { computeState, authGateCopy, restartNotice, connectionState, viewState, staleState };
 })();
 
 // viewState is a reusable degraded-state component for dashboard panes. It
@@ -115,6 +115,14 @@ globalThis.TrestleDatabaseSetup = (() => {
 // loading, empty, error (permission-denied / partial-failure / unavailable),
 // retrying, dead, deletionPending, stale. It never includes credentials or
 // internal secrets.
+// staleState is the documented realtime staleness rule: a stream is stale
+// when no event or heartbeat has arrived within the 30-second window and the
+// stream is not paused. It is pure so a clock-controlled regression can prove
+// the inactivity/recovery transitions without a browser.
+function staleState(lastActivity, now, paused) {
+  if (paused) return false;
+  return now - lastActivity > 30000;
+}
 function viewState(kind, opts) {
   opts = opts || {};
   switch (kind) {
