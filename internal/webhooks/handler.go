@@ -107,13 +107,11 @@ func (h *Handler) execute(ctx context.Context, raw json.RawMessage) error {
 	}
 	body, _ := json.Marshal(map[string]any{"version": "1", "id": d.DeliveryID, "topic": d.Topic, "collection": d.Collection, "recordId": d.RecordID, "payload": d.Payload})
 	stamp := strconvTime(h.now())
-	mac := hmac.New(sha256.New, secret)
-	mac.Write([]byte(stamp + "." + string(body)))
 	request, _ := http.NewRequestWithContext(ctx, http.MethodPost, endpoint, bytes.NewReader(body))
 	request.Header.Set("Content-Type", "application/json")
 	request.Header.Set("Trestle-Delivery", d.DeliveryID)
 	request.Header.Set("Trestle-Timestamp", stamp)
-	request.Header.Set("Trestle-Signature", "v1="+hex.EncodeToString(mac.Sum(nil)))
+	request.Header.Set("Trestle-Signature", signWebhook(secret, stamp, body))
 	response, err := h.client.Do(request)
 	if err != nil {
 		return err
@@ -267,4 +265,14 @@ func writeJSON(w http.ResponseWriter, status int, v any) {
 }
 func writeError(w http.ResponseWriter, status int, code, message string) {
 	writeJSON(w, status, httperr.New(code, message, w.Header().Get("X-Request-ID")))
+}
+
+// signWebhook signs a delivery body with the webhook secret using the
+// documented envelope scheme: SHA-256 HMAC over "timestamp.body", prefixed
+// with "v1=". Receivers verify the Trestle-Timestamp and Trestle-Signature
+// headers against the same scheme.
+func signWebhook(secret []byte, stamp string, body []byte) string {
+	mac := hmac.New(sha256.New, secret)
+	mac.Write([]byte(stamp + "." + string(body)))
+	return "v1=" + hex.EncodeToString(mac.Sum(nil))
 }

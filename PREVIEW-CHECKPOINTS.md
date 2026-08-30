@@ -1159,6 +1159,53 @@ Known limits: best-effort telemetry and worker-internal transitions are
   existing suites
 ```
 
+
+## CP11 - Subsystem and integration hardening
+
+Status: complete
+
+Adversarially exercised the major subsystems and added regressions for the
+gaps found. External side effects remain fail-closed and idempotent; the
+existing suites already covered file deletion fail-closed recovery, webhook
+SSRF/private-destination rejection and redirect refusal, snapshot consistency
+under concurrent writes, and startup recovery workers.
+
+### Application
+
+- Webhook signing: extract `signWebhook` (SHA-256 HMAC over `timestamp.body`,
+  `v1=` prefixed) and add `TestWebhookSignatureScheme` proving the value is
+  reproducible by a receiver and changes under any secret, body or timestamp
+  tampering.
+- Jobs: `TestJobRetryBackoffThenDeadLetter` drives a failing job through
+  retries with a future `available_at` (exponential backoff) to dead-letter
+  after `max_attempts`, retaining the failure message, on both providers.
+- Server: `TestGracefulShutdownDrainsInFlightRequest` proves Shutdown lets an
+  in-flight request complete and returns within the drain deadline.
+- Realtime: `TestSlowConsumerDoesNotBlockOtherSubscribers` proves a stalled SSE
+  consumer blocks only its own connection (per-connection goroutine, bounded
+  100-event batches); a healthy subscriber still receives committed events.
+
+### Exit evidence
+
+- New regression tests pass under race on SQLite and real PostgreSQL 18.6;
+  full suite and vet green.
+
+Completion record:
+
+```text
+Status: complete
+Application commit: recorded by this commit
+Website output commit: n/a (no public documentation change)
+Website source commit: n/a (no public documentation change)
+Verified: webhook signing, job retry/dead-letter, graceful shutdown and
+  slow-consumer tests on both providers; full suite and race; vet
+Findings repaired: no product defect found; added the missing adversarial
+  regressions and a testable webhook signing helper
+Known limits: live HTTPS webhook delivery requires a non-private endpoint (SSRF
+  guard) and is exercised only in real deployments; S3 object storage has no
+  local real-service evidence
+```
+
 ## Checkpoint roadmap
 
 - CP1 - PostgreSQL contract and baseline (this checkpoint)
