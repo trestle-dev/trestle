@@ -29,6 +29,15 @@ requireText(html, /id="auth-password"[^>]*minlength="7"/, "the seven-character p
 requireText(html, /id="database-apply"/, "the database test/apply button is missing from the auth gate");
 requireText(css, /button:disabled/, "disabled buttons have no visible disabled styling");
 requireText(css, /button:not\(:disabled\):hover/, "enabled buttons have no hover styling");
+// Degraded-state operator UX contract (CP12): the status card announces its
+// state (aria-live), carries a consequence and a next action, and distinguishes
+// ready from database-unavailable copy.
+requireText(html, /id="status-card"[^>]*aria-live="polite"/, "the status card does not announce state changes");
+requireText(html, /class="next-action"/, "the status card lacks a next-action line");
+requireText(css, /\.next-action/, "the next-action line has no styling");
+const js = await readFile(new URL("assets/js/script.js", root), "utf8");
+requireText(js, /database_unavailable/, "the dashboard does not distinguish database-unavailable readiness");
+requireText(js, /TrestleDatabaseSetup\.connectionState/, "the status card does not route through the connection-state machine");
 if (/<script(?![^>]+src=)|\sstyle=|\sonclick=/i.test(html)) failures.push("inline executable/style content violates the strict CSP");
 if (/<img(?![^>]+alt=)/i.test(html)) failures.push("an image is missing alt text");
 

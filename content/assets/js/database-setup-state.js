@@ -56,5 +56,55 @@ globalThis.TrestleDatabaseSetup = (() => {
       body: `PostgreSQL ${version} is configured. Stop and start Trestle, then reload this page to create the administrator account.`
     };
   }
-  return { computeState, authGateCopy, restartNotice };
+  // connectionState maps the process/database readiness probe to operator
+  // copy: a clear heading, a consequence, and a next action. States: connecting
+  // (initial), ready, starting (not_ready), databaseUnavailable (degraded) and
+  // unreachable (network/process). Recovery is the transition back to ready on
+  // a later successful probe.
+  function connectionState(phase, errorCode) {
+    if (phase === "connecting") {
+      return {
+        heading: "Connecting to Trestle",
+        description: "Checking process and database readiness.",
+        stateLabel: "Checking",
+        kind: "connecting",
+        nextAction: "This is a startup check. It resolves on its own."
+      };
+    }
+    if (phase === "ready") {
+      return {
+        heading: "Trestle is ready",
+        description: "The process and database are accepting work.",
+        stateLabel: "Ready",
+        kind: "ready",
+        nextAction: "Nothing to do."
+      };
+    }
+    if (phase === "databaseUnavailable") {
+      return {
+        heading: "Database unavailable",
+        description: "The process is up but the database connection failed.",
+        stateLabel: "Unavailable",
+        kind: "databaseUnavailable",
+        nextAction: "Check the database and the server logs, then retry."
+      };
+    }
+    if (phase === "starting") {
+      return {
+        heading: "Trestle is starting",
+        description: "Startup has not finished yet.",
+        stateLabel: "Starting",
+        kind: "starting",
+        nextAction: "Check back shortly."
+      };
+    }
+    return {
+      heading: "Trestle is unreachable",
+      description: "The server did not respond to the readiness probe.",
+      stateLabel: "Unreachable",
+      kind: "unreachable",
+      nextAction: "Check the process, network and logs, then retry."
+    };
+  }
+  return { computeState, authGateCopy, restartNotice, connectionState };
 })();

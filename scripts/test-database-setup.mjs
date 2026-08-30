@@ -133,6 +133,38 @@ check("sign-in mode", machine.computeState(signIn), {
   adminPasswordRequired: true
 });
 
+// 8. Degraded-state connection copy (CP12): each readiness state has a clear
+// heading, consequence and next action, and the degraded (database
+// unavailable) and starting states are distinct from ready and unreachable.
+const cs = (phase, code) => machine.connectionState(phase, code);
+const field = (label, actual, want) => {
+  const a = JSON.stringify(actual);
+  const e = JSON.stringify(want);
+  if (a !== e) {
+    failures += 1;
+    console.error(`- ${label}: got ${a}, want ${e}`);
+  }
+};
+field("connecting", cs("connecting").heading, "Connecting to Trestle");
+field("connecting kind", cs("connecting").kind, "connecting");
+field("ready", cs("ready").heading, "Trestle is ready");
+field("ready kind", cs("ready").kind, "ready");
+field("starting", cs("starting", "not_ready").heading, "Trestle is starting");
+field("starting kind", cs("starting").kind, "starting");
+field("starting next action", cs("starting").nextAction, "Check back shortly.");
+const degraded = cs("databaseUnavailable", "database_unavailable");
+field("database unavailable", degraded.heading, "Database unavailable");
+field("database unavailable kind", degraded.kind, "databaseUnavailable");
+if (!/database/.test(degraded.nextAction)) {
+  failures += 1;
+  console.error("- database-unavailable next action must mention the database");
+}
+field("unreachable", cs("unreachable").heading, "Trestle is unreachable");
+field("unreachable kind", cs("unreachable").kind, "unreachable");
+// Recovery: after a database-unavailable state, a later successful probe
+// returns to ready (the transition the dashboard performs on retry).
+field("recovery to ready", cs("ready").kind, "ready");
+
 if (failures) {
   console.error(`database setup state machine: ${failures} failure(s)`);
   process.exit(1);

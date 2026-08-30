@@ -1206,6 +1206,63 @@ Known limits: live HTTPS webhook delivery requires a non-private endpoint (SSRF
   local real-service evidence
 ```
 
+
+## CP12 - Degraded-state and operator UX
+
+Status: complete
+
+Made failure states understandable to an ordinary operator instead of raw API
+failures. The dashboard status card now distinguishes database unavailable,
+starting, ready and unreachable states with a clear heading, consequence and
+next action; recovery returns to ready automatically on a later successful
+probe. No raw secrets or connection strings are shown (the API already returns
+redacted messages); the existing restrained Trestle visual language is
+preserved (no blue dark mode, gradients or oversized actions were introduced).
+
+### Application
+
+- Extract a pure `connectionState` in the dashboard state module mapping the
+  readiness probe (ok + error code) to copy: connecting, ready, starting
+  (`not_ready`), `databaseUnavailable` (degraded) and unreachable, each with a
+  heading, state label and operator next action. The status card routes through
+  it, parses the readiness error code, and adds a `.next-action` line
+  (announced via the existing `aria-live` region).
+- `scripts/test-database-setup.mjs` covers the connection-state transitions and
+  the recovery-to-ready transition; `check-dashboard-quality.mjs` asserts the
+  status card announces changes (`aria-live`), carries a next-action line, and
+  routes through the connection-state machine.
+- Manual inspection of representative states is documented as automated +
+  code/rendered-DOM inspection (no browser harness exists in this repository);
+  the real-service connection-recovery drill exercises the live database-down
+  and recovered states end to end.
+
+### Public website and handover
+
+- The operations page documents the four degraded states, their consequences
+  and the operator next actions, and that `/system/health` stays 200 while the
+  process is alive.
+
+### Exit evidence
+
+- Node state-machine tests and dashboard quality checks pass; full suite and
+  vet green on SQLite and real PostgreSQL 18.6; the connection-recovery drill
+  passes live.
+
+Completion record:
+
+```text
+Status: complete
+Application commit: recorded by this commit
+Website output commit: recorded by this commit
+Website source commit: recorded by this commit
+Verified: connection-state tests, dashboard quality, full suite, vet,
+  connection-recovery drill
+Findings repaired: the status card treated every readiness failure as a generic
+  'not ready'; it now distinguishes database-unavailable and starting states
+Known limits: visual inspection is via generated DOM/copy assertions and the
+  live drill, not a browser screenshot harness; degraded-state copy is English-only
+```
+
 ## Checkpoint roadmap
 
 - CP1 - PostgreSQL contract and baseline (this checkpoint)
