@@ -174,8 +174,17 @@ func (h *Handler) list(w http.ResponseWriter, r *http.Request) {
 	items := []Job{}
 	for rows.Next() {
 		var j Job
-		rows.Scan(&j.ID, &j.Kind, &j.Payload, &j.Status, &j.Attempts, &j.MaxAttempts, &j.AvailableAt, &j.LeaseUntil, &j.LastError, &j.CreatedAt, &j.UpdatedAt)
+		var payload string
+		if err := rows.Scan(&j.ID, &j.Kind, &payload, &j.Status, &j.Attempts, &j.MaxAttempts, &j.AvailableAt, &j.LeaseUntil, &j.LastError, &j.CreatedAt, &j.UpdatedAt); err != nil {
+			http.Error(w, "query failed", 500)
+			return
+		}
+		j.Payload = json.RawMessage(payload)
 		items = append(items, j)
+	}
+	if err := rows.Err(); err != nil {
+		http.Error(w, "query failed", 500)
+		return
 	}
 	writeJSON(w, 200, map[string]any{"items": items})
 }

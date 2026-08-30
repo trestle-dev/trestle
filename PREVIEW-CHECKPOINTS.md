@@ -792,6 +792,61 @@ Known limits: recovery-time and operator-step SLAs are documented behaviour,
   not measured guarantees; pg_dump remains an operator responsibility
 ```
 
+
+## CP8 - Longevity and resource bounds
+
+Status: complete
+
+Ran a sustained workload with resource-growth tracking and packaged a longer
+reproducible soak for external execution. The soak is an instrument for
+regression and reproducibility, not a marketing benchmark: it asserts the
+product does not leak resources, lose realtime events or error under sustained
+load within the run, and reports numbers without claiming cross-machine
+portability.
+
+### Application
+
+- Add `scripts/soak.sh` (`SOAK_SECONDS`, default 60): sustained CRUD with
+  latency sampling, a realtime SSE subscriber counting delivered events, file
+  upload, webhook-job enqueue (one per record; a saturated 200-cap list proves
+  enqueue at scale while the Go claiming suite proves no duplication), online
+  backup, a mid-soak restart, and /proc resource sampling (VmRSS, fd count,
+  threads). Asserts zero API errors, realtime events delivered, no secrets in
+  logs, and bounded resources.
+- Defect repaired (found during the soak): the jobs-list API scanned
+  `payload_json` directly into `*json.RawMessage`, which `database/sql` cannot
+  do for a string driver value on this driver; every row's scan failed and the
+  ignored error lost every job field except id and kind. The list handler now
+  scans into a string and converts, checks scan errors, and
+  `TestJobListFieldsRoundTrip` locks the fix on both providers.
+- Evidence (this machine only): a 60s soak created 1,955 records with 0 API
+  errors, observed realtime events, produced a 967 KiB backup, recovered across
+  a restart, and showed stable resources (fd 9->9, threads 13->9, RSS falling
+  after GC).
+
+### Exit evidence
+
+- Bounded soak passes locally; the script is packaged for longer external runs.
+- Full suite and vet green on SQLite and real PostgreSQL 18.6.
+
+Completion record:
+
+```text
+Status: complete
+Application commit: recorded by this commit
+Website output commit: n/a (no public documentation change)
+Website source commit: n/a (no public documentation change)
+Verified: soak runs (20s and 60s) with 0 API errors and stable resources; full
+  suite and vet on both providers
+Findings repaired: jobs-list API lost every field except id/kind because the
+  scan into *json.RawMessage failed and the error was ignored
+Known limits: webhook delivery to a private/loopback destination is refused by
+  the SSRF guard, so the soak asserts webhook-job enqueue and relies on the Go
+  claiming suite for drain/no-duplication; live HTTPS delivery requires a
+  non-private endpoint and is exercised only in real deployments; resource
+  numbers are this-machine-only
+```
+
 ## Checkpoint roadmap
 
 - CP1 - PostgreSQL contract and baseline (this checkpoint)
