@@ -4,8 +4,9 @@ on:
   push:
     tags: ['v*']
 
-# Privilege is minimized: the build job runs read-only, the attestation job
-# holds only OIDC/attestation permissions, and only the publication job holds
+# Privilege is minimized: the build job runs read-only; the attestation job
+# holds exactly the provenance permission contract (contents: read,
+# id-token: write, attestations: write); and only the publication job holds
 # contents: write. Every action is pinned to a reviewed full commit SHA (with
 # the human-readable version in a trailing comment); the release-contract
 # regression (scripts/test-release-contract.sh) rejects any mutable tag here.
