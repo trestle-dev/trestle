@@ -2315,10 +2315,11 @@ Gaps repaired: release-notes body; human-controlled release runbook
 Remaining: tag + publication require a separate explicit review
 ```
 
-## Release-readiness repair (R1-R4)
+## Release-readiness repair (R1-R7)
 
-Review of the v0.1.0 release-readiness work found four required repairs. All
-are committed locally (not pushed; no tag, release, deploy or announcement).
+Review of the v0.1.0 release-readiness work found four required repairs; the
+follow-up review found three more. All are committed locally (not pushed; no
+tag, release, deploy or announcement).
 
 ### R1 - CP15 reproducible release artifacts
 
@@ -2377,10 +2378,43 @@ is deliberately created as a normal, non-prerelease release solely because it
 is the first publicly installable preview and `/releases/latest` selects normal
 releases. It is never described as a GitHub prerelease anywhere.
 
+### R5 - Scope the reproducibility claim to GNU/Linux
+
+The previous bsdtar fallback claimed determinism without evidence. Packaging
+now fails closed unless GNU tar is present (the pinned Ubuntu release job); the
+bsdtar fallback was removed, and both `package-release.sh` and
+`test-release-reproducible.sh` state the precise scope: byte-identity is proven
+for the same source, inputs, Go toolchain and packaging environment, not across
+arbitrary Go/tar/ZIP/OS versions. Local macOS packaging is documented as
+unsupported rather than presented as reproducible.
+
+### R6 - Corrected authoritative roadmap heads
+
+The status table now uses verified commit IDs: CP1 `04b6647`, CP2 `4c7534f`,
+CP3 `de37183`, CP4 `c8df51a`, CP12R5 `3e81aeb`, CP15 packaging `b8d029e` and
+complete local state `0291eb6`, CP16 accepted `e7a4972` / remote `509be7b`,
+CP19 website source `d9921ba` / output `4af2e41`, CP21 local state `0291eb6`.
+Every head column distinguishes accepted remote, local unpushed, historical
+section evidence, or inheritance from the original programme. CP15 no longer
+points at the pre-reproducibility commit `5f51043`.
+
+### R7 - Pin the privileged release workflow actions
+
+Every action in `.github/workflows/release.yml` is pinned to a full commit SHA
+resolved from the canonical upstream repositories, with the human-readable
+version in a trailing comment (checkout v7.0.1, setup-go v7.0.0,
+upload-artifact v7.0.1, download-artifact v8.0.1, attest-build-provenance
+v4.2.2, softprops/action-gh-release v3.0.3). The single release job is split
+into build (read-only) -> attest (id-token + attestations write only) ->
+publish (contents write only), so no job holds more than it needs.
+`scripts/test-release-contract.sh` records the pinned SHAs and fails on any
+mutable action tag or unexpected SHA.
+
 ```text
 Status: repaired locally; not pushed, tagged, published or announced
-Verified: two-build byte-identical packaging; release-contract regression;
-  public-script parity gate; staged script paths unchanged
+Verified: GNU/Linux-only two-build byte-identical packaging; release-contract
+  regression (pinned actions, job permissions); staged script paths;
+  roadmap heads cross-checked with git rev-parse
 Remaining: tag and publication require a separate explicit review
 ```
 
@@ -2393,25 +2427,25 @@ is a separate completed series and is not re-counted.
 
 | Checkpoint | Canonical scope | Status | Accepted / local head | Remaining evidence |
 | --- | --- | --- | --- | --- |
-| CP1 | PostgreSQL contract and baseline | Complete, accepted | CP1 section | none |
-| CP2 | First-run PostgreSQL setup (ordinary-user) | Complete, accepted | 04b6647 | none |
-| CP3 | Schema and migration integrity, lineage, upgrades | Complete, accepted | CP3/CP3R/CP3R2/CP3R3 sections | none |
-| CP4 | Transactional mutation and audit atomicity (incl. fail-closed deletion) | Complete, accepted | CP4/CP4R/CP4R2 sections | none |
-| CP5 | Concurrency, locking and conflict behaviour | Complete, accepted | CP5/CP5R/CP5R2 sections | none |
-| CP6 | Connection loss, restart and pool recovery | Complete, accepted | CP6 section | none |
-| CP7 | Backup, restore and disaster recovery | Complete, accepted | CP7 section | none |
-| CP8 | Longevity and resource bounds (soak) | Complete, accepted | CP8/CP8R sections | none |
-| CP9 | SQLite/PostgreSQL parity matrix, provider-isolated evidence | Complete, accepted | CP9/CP9R/CP9R2 sections | none |
-| CP10 | Authentication, authorization and session hardening | Complete, accepted | CP10/CP10R/CP10R2/CP10R3 sections | none |
-| CP11 | Files, realtime, webhooks, jobs and functions hardening | Complete, accepted | CP11/CP11R/CP11R2/CP11R3 sections | none |
-| CP12 | Degraded-state and operator UX (canonical scope corrected; the old roadmap title "import/export/deletion/upgrade compatibility" was not what CP12 delivered) | Complete, accepted | through CP12R5 (3e81aeb) | none |
+| CP1 | PostgreSQL contract and baseline | Complete, accepted | `04b6647` (historical commit) | none |
+| CP2 | First-run PostgreSQL setup (ordinary-user) | Complete, accepted | `4c7534f` (historical commit) | none |
+| CP3 | Schema and migration integrity, lineage, upgrades | Complete, accepted | `de37183` through CP3R3 (section evidence) | none |
+| CP4 | Transactional mutation and audit atomicity (incl. fail-closed deletion) | Complete, accepted | `c8df51a` through CP4R2 (section evidence) | none |
+| CP5 | Concurrency, locking and conflict behaviour | Complete, accepted | CP5/CP5R/CP5R2 sections (historical section evidence) | none |
+| CP6 | Connection loss, restart and pool recovery | Complete, accepted | CP6 section (historical section evidence) | none |
+| CP7 | Backup, restore and disaster recovery | Complete, accepted | CP7 section (historical section evidence) | none |
+| CP8 | Longevity and resource bounds (soak) | Complete, accepted | CP8/CP8R sections (historical section evidence) | none |
+| CP9 | SQLite/PostgreSQL parity matrix, provider-isolated evidence | Complete, accepted | CP9/CP9R/CP9R2 sections (historical section evidence) | none |
+| CP10 | Authentication, authorization and session hardening | Complete, accepted | CP10/CP10R/CP10R2/CP10R3 sections (historical section evidence) | none |
+| CP11 | Files, realtime, webhooks, jobs and functions hardening | Complete, accepted | CP11/CP11R/CP11R2/CP11R3 sections (historical section evidence) | none |
+| CP12 | Degraded-state and operator UX (canonical scope corrected; the old roadmap title "import/export/deletion/upgrade compatibility" was not what CP12 delivered) | Complete, accepted | through CP12R5 `3e81aeb` | none |
 | CP13 | Degraded-state and accessibility UX (old roadmap overlap with CP12) | Delivered within CP12; no separate preview checkpoint (reconciled, not double-counted) | n/a | none |
-| CP14 | Independent example-application dogfood | Covered by the original programme (CHECKPOINTS.md CP21, DOGFOOD.md); not re-run in the preview ledger | n/a | none for preview scope |
-| CP15 | Reproducible release artifacts | Complete (deterministic packaging + two-build regression) | 5f51043 (local, unpushed) | run the reproducible regression in CI |
-| CP16 | Verified download/install/update and checksum public scripts (canonical scope corrected; uninstall not implemented) | Complete, accepted | e7a4972 accepted; 509be7b remote (CI repair) | uninstall path deliberately out of scope |
-| CP17 | Container and service deployment | Deployment guidance from the original programme (CHECKPOINTS.md CP22, service/system docs); no official container image (documented) | n/a | container image remains a documented limitation |
+| CP14 | Independent example-application dogfood | Covered by the original programme (CHECKPOINTS.md CP21, DOGFOOD.md); not re-run in the preview ledger | n/a (inherited from the original programme) | none for preview scope |
+| CP15 | Reproducible release artifacts | Complete (deterministic packaging + two-build regression); current local unpushed head `0291eb6`, packaging implementation `b8d029e` | `b8d029e` / local head `0291eb6` (local, unpushed) | run the reproducible regression in CI |
+| CP16 | Verified download/install/update and checksum public scripts (canonical scope corrected; uninstall not implemented) | Complete, accepted | accepted `e7a4972`; remote `main` `509be7b` (incl. CI repair) | uninstall path deliberately out of scope |
+| CP17 | Container and service deployment | Deployment guidance from the original programme (CHECKPOINTS.md CP22, service/system docs); no official container image (documented) | n/a (inherited from the original programme) | container image remains a documented limitation |
 | CP18 | Domain, HTTPS and reverse-proxy deployment | CNAME and live config recorded; live DNS/HTTPS not executed (explicitly deferred) | n/a | live deployment and verification pending |
-| CP19 | Public-preview documentation and positioning | Website documentation complete; preview-status honesty maintained | website 0dda441 / 4af2e41 | final positioning review |
+| CP19 | Public-preview documentation and positioning | Website documentation complete; preview-status honesty maintained | website source `d9921ba` (accepted remote); generated output `4af2e41` (accepted remote) | final positioning review |
 | CP20 | Launch assets and publication draft | LAUNCH.md draft exists; not published | n/a | publication draft review |
-| CP21 | Clean-machine release rehearsal | Release-readiness prep complete (staged asset simulation + human runbook) | 5f51043 (local, unpushed) | actual clean-machine rehearsal requires tag authorization |
+| CP21 | Clean-machine release rehearsal | Release-readiness prep complete (staged asset simulation + human runbook); complete local release-readiness state | `0291eb6` (local, unpushed) | actual clean-machine rehearsal requires tag authorization |
 | CP22 | Publish/no-publish review | Not done | n/a | requires explicit human review |
