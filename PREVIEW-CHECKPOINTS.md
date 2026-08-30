@@ -1628,6 +1628,64 @@ Known limits: live external-service surfaces remain explicit limitations;
   redirect refusal and body-limit behaviour stay source-inspected
 ```
 
+
+## CP12R2 - Wire degraded states into the product and add browser evidence
+
+Status: complete (browser acceptance partial)
+
+CP12R defined states as JavaScript objects but wired only the records error
+path. This repair wires the states into the actual views, preserves structured
+error codes, and adds deterministic browser captures of the reachable
+rendered states. Browser acceptance is partial: reachable first-run states are
+captured; authenticated status-card states are exercised by the live drill and
+state-machine assertions but are not browser-screenshotted.
+
+### Application
+
+- `jsonRequest` now preserves the structured API error code and status on the
+  thrown error, so views can branch on `permissionDenied`,
+  `database_unavailable` and `deletion_pending`.
+- The records view passes the error code into `viewState` (so permission-denied
+  and database-unavailable branches are selectable) and renders a loading state
+  before fetching; its empty state already existed.
+- The jobs view maps `dead` and `pending`-with-attempts statuses through
+  `viewState` retrying/dead copy.
+- The files view shows the pending-deletion state when a delete returns
+  `deletion_pending`.
+- The realtime view detects a stale stream with a documented 30-second rule
+  and displays a stale state with a next action.
+- Expired-session handling now clears the rejected view behind the auth gate so
+  an error does not render behind it, and focuses the email field.
+- `renderViewState` sets `role="status"` and a negative tab index so the state
+  is announced and focusable.
+- Add `docs/visual/` deterministic headless-Chromium captures of the
+  reachable rendered states (first-run desktop 1280x800 and mobile 390x844)
+  with viewport/scenario/expected metadata; the model cannot render images, so
+  in-model visual inspection is not possible and the captures are artifacts for
+  human review. Authenticated status-card states are documented as not
+  browser-captured.
+
+### Exit evidence
+
+- State-machine, dashboard-quality and site checks pass; full suite and vet
+  green on both providers.
+
+Completion record:
+
+```text
+Status: complete (repair); browser acceptance partial
+Application commit: recorded by this commit
+Website output commit: n/a (no public documentation change)
+Website source commit: n/a (no public documentation change)
+Verified: wiring in records/jobs/files/realtime views; role=status focus;
+  headless Chromium captures at two viewports; full suite; vet
+Findings repaired: degraded states were unreachable factory objects; error
+  codes were not preserved; session-expired left errors behind the gate
+Known limits: authenticated status-card degraded states are exercised via the
+  live drill and assertions, not browser screenshots (interactive session
+  needed); in-model image inspection is not possible
+```
+
 ## Checkpoint roadmap
 
 - CP1 - PostgreSQL contract and baseline (this checkpoint)
