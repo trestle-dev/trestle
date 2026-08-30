@@ -1525,6 +1525,57 @@ Findings repaired: gate inherited the PG URL into the SQLite leg and accepted
 Known limits: none retained
 ```
 
+
+## CP10R2 - Genuinely adversarial authorization matrix
+
+Status: complete
+
+The CP10R route test treated any non-2xx as a rejection (so 400/404/500 would
+pass) and used empty bodies; this repair asserts exact permitted statuses with
+valid bodies, verifies no durable mutation, and broadens fail-closed and proxy
+coverage.
+
+### Application
+
+- `TestUnauthenticatedRoutesAreRejected` now supplies valid request bodies and
+  content types, asserts the exact unauthenticated status per route and method
+  (401 for read access on admin-auth handlers, 403 for mutations and on the
+  403-style handlers), verifies no durable collection or credential was
+  created, and covers every protected route with its relevant method.
+- Add `TestAdminCookieSecureOverHttps` and `TestAdminCookieNotSecureOverHttp`
+  (single-store each, avoiding the shared PG advisory lock): the admin cookie
+  is Secure over HTTPS and not over plain HTTP, in addition to HttpOnly and
+  SameSite=Strict.
+- Add `TestAppTokenVsAdminRoutes`: a scoped application credential is rejected
+  on administrator routes (401 on admin GET) while the administrator session
+  succeeds; the two identity classes are distinct.
+- Add `TestProxyRateLimitAddressHandling`: behind a trusted proxy the rate
+  limiter keys on the forwarded client address (two forwarded clients keep
+  separate windows); behind an untrusted proxy the forwarded header is ignored
+  and all requests share the socket address, so the 11th is throttled.
+- Extend begin/commit failure injection to the transactional rules-update path
+  in addition to app-user disable: begin and commit failures return 500 and
+  leave the prior rules intact.
+
+### Exit evidence
+
+- Adversarial matrix passes on SQLite and real PostgreSQL 18.6; full suite and
+  vet green.
+
+Completion record:
+
+```text
+Status: complete (repair)
+Application commit: recorded by this commit
+Website output commit: n/a (no public documentation change)
+Website source commit: n/a (no public documentation change)
+Verified: adversarial matrix on both providers; full suite; vet
+Findings repaired: route test accepted non-exact rejections; service-token vs
+  admin-session distinction and proxy rate-limit address handling were untested
+Known limits: rate-limit windows are fixed, not adaptive; remote bootstrap
+  tokens remain a non-feature (headless setup is flag/env based)
+```
+
 ## Checkpoint roadmap
 
 - CP1 - PostgreSQL contract and baseline (this checkpoint)
