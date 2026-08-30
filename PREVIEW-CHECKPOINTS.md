@@ -632,6 +632,59 @@ Known limits: the recovery worker interval is a fixed 5 minutes; conflicts
   remain pending until the live reference is resolved
 ```
 
+
+## CP5 - Concurrency, locking and conflict behaviour
+
+Status: complete
+
+Ran real PostgreSQL concurrency tests for the mutation races the plan lists
+alongside race-enabled Go tests on both providers, and added the missing
+executable corpus. Existing coverage already proved job claiming (eight workers,
+one execution each), first-administrator single-winner, concurrent refresh and
+logins with independent revocation, and concurrent-startup migration
+serialization; this checkpoint adds the record, schema, import and revocation
+races that had no persistent provider-parameterized tests.
+
+### Application
+
+- records: `TestConcurrentCreateUniqueFieldOneWinner` (simultaneous creation
+  with a unique field resolves to exactly one winner), `TestConcurrentEditOptimisticVersionOneWinner`
+  (optimistic-version update, exactly one winner, committed value is one of the
+  two), `TestDeleteUpdateRaceResolvesConsistently` (delete-vs-update commits
+  deterministically: update winner leaves the record at v2 with the delete
+  rejected; delete winner leaves no record with the update rejected as 404/409/412),
+  `TestSchemaChangeDuringRecordAccess` (a schema change racing record writes
+  leaves a non-torn field set and never loses a 201-committed record; a clean
+  retryable rejection is accepted as deterministic semantics).
+- backup: `TestConcurrentImportSingleWinner` (two concurrent imports into an
+  empty initialized destination: at most one succeeds and the destination is
+  either the full archive or unchanged; no partial merge).
+- appauth: `TestRevocationDuringInFlightRequests` (in-flight authenticated
+  requests observe only pre- or post-revocation state, never torn, and every
+  request after logout returns is rejected).
+- Full race-enabled suite runs green on SQLite and real PostgreSQL.
+
+### Exit evidence
+
+- Concurrency corpus passes on SQLite and real PostgreSQL 18.6; full Go and
+  full race suites green on both providers.
+
+Completion record:
+
+```text
+Status: complete
+Application commit: recorded by this commit
+Website output commit: n/a (no public documentation change)
+Website source commit: n/a (no public documentation change)
+Verified: concurrency corpus on SQLite and real PostgreSQL 18.6; full suite and
+  full race suite on both providers
+Findings repaired: none (races resolved deterministically by optimistic
+  concurrency and transaction isolation); added the missing executable corpus
+Known limits: schema-change-during-access may reject cleanly (422/retryable) as
+  a documented, deterministic outcome; lock-ordering behaviour across arbitrary
+  topologies is not exhaustively exercised
+```
+
 ## Checkpoint roadmap
 
 - CP1 - PostgreSQL contract and baseline (this checkpoint)
