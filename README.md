@@ -95,12 +95,41 @@ filesystem operation is not supported.
 
 ## Install a release
 
-The installer defaults to the current user's `~/.local/bin` and does not use
-root privileges:
+Two verified download paths are available. Both fetch the exact release archive
+and its `SHA256SUMS`, verify the archive before writing anything, and never
+execute the downloaded binary.
+
+### Install on this user account
+
+Writes to `~/.local/bin` (machine-wide `--system` installations are explicit):
 
 ```sh
 curl -fsSL https://trestle.cv/install.sh | sh
 ```
+
+### Download into this directory
+
+Writes only `./trestle` in the current directory and changes nothing else -
+suitable for portable folders, testing, manually operated servers, and users
+who want to inspect exactly where the binary lives:
+
+```sh
+curl -fsSL https://trestle.cv/download.sh | sh
+./trestle
+```
+
+`download.sh` supports a pinned version, an explicit output path, and `--force`
+to overwrite an existing file:
+
+```sh
+curl -fsSL https://trestle.cv/download.sh | sh -s -- --version v0.1.0
+curl -fsSL https://trestle.cv/download.sh | sh -s -- --output ./some-name
+```
+
+It refuses to overwrite an existing file, directory or symlink unless `--force`
+is passed. Downloading never requires root.
+
+### Update
 
 Update the installed binary without changing instance data or configuration:
 
@@ -108,17 +137,18 @@ Update the installed binary without changing instance data or configuration:
 curl -fsSL https://trestle.cv/update.sh | sh
 ```
 
-The updater supports `--dry-run`, `--version vX.Y.Z`, and `--rollback`.
-System installations pass `--system` through `sudo` for install and update.
-
-For an explicit machine-wide install:
+The updater supports `--dry-run`, `--version vX.Y.Z`, and `--rollback`, verifies
+the selected archive with the same portable checksum check, and retains
+`trestle.previous` for rollback. System installations pass `--system` through
+`sudo` for install and update:
 
 ```sh
 curl -fsSL https://trestle.cv/install.sh | sudo sh -s -- --system
 ```
 
-Tagged releases contain Linux, macOS, and Windows archives for amd64 and arm64,
-plus checksums and build provenance.
+All three public scripts verify archives with `sha256sum` where available and
+fall back to `shasum -a 256` on macOS. Tagged releases contain Linux, macOS,
+and Windows archives for amd64 and arm64, plus checksums and build provenance.
 
 ## Configuration
 

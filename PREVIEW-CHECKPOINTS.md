@@ -2046,6 +2046,115 @@ Known limits: pending file deletion, database-unavailable and backup-progress
   hook rather than server fault injection; browser acceptance is partial
 ```
 
+## CP16 - Portable current-directory download and verified public scripts
+
+Status: complete (pre-release; public URLs not yet tested against a stable release)
+
+Adds `download.sh` (portable current-directory download) alongside `install.sh`,
+repairs checksum verification everywhere, and makes the public scripts
+deterministic and drift-free.
+
+### Application
+
+- `download.sh`: downloads a checksum-verified Trestle executable into the
+  current directory (default `./trestle`, or `--output`) and changes nothing
+  else. Resolves the latest GitHub release by default or a pinned `--version`;
+  supports Linux/macOS amd64/arm64; downloads the exact archive and
+  `SHA256SUMS`; selects the exact checksum entry; verifies before extraction;
+  uses `sha256sum` with a `shasum -a 256` fallback; extracts the exact expected
+  executable path (never an arbitrary recursive find); stages in the destination
+  directory and publishes atomically with mode 0755; refuses to overwrite an
+  existing file, directory or symlink unless `--force`; cleans staging on
+  success/error/SIGINT/SIGTERM; prints the resolved version, platform and final
+  path and finishes with `Run ./trestle`. It never modifies PATH, shell startup
+  files, `~/.local/bin`, `/usr/local/bin`, services, configuration or Trestle
+  data, never requires root, and never executes the downloaded binary.
+- Checksum repair: `install.sh` previously downloaded and extracted without
+  verifying `SHA256SUMS`. All three scripts now verify through one portable
+  helper (`scripts/checksum.sh`) that fails closed when SHA256SUMS is
+  unavailable, the archive has no exact entry, the entry is malformed, the
+  archive is corrupted, or neither `sha256sum` nor `shasum` exists.
+  `update.sh` now uses the same portable verification (it previously called
+  `sha256sum` directly, which is not portable to macOS).
+- Canonical source + deterministic parity: `scripts/checksum.sh` is the single
+  shared helper; repository `install.sh`/`download.sh`/`update.sh` source it;
+  `scripts/build-public-scripts.sh` deterministically inlines it into the
+  standalone copies at `scripts/public/*.sh` that the website serves (public
+  piped scripts never depend on a local file). `scripts/test-public-scripts.sh`
+  fails on any drift between the regenerated output, the committed public
+  copies, the website source copies and the generated website-root copies, and
+  runs the deterministic download/install/update regressions.
+
+### Deterministic tests (local fake release assets, no network)
+
+`scripts/test-download.sh` covers latest-version resolution, explicit version,
+all four platform mappings (fake uname), `sha256sum` and `shasum -a 256`
+verification, missing checksum file, missing exact entry, malformed entry,
+corrupted archive, archive missing the expected binary, existing destination
+file/directory/symlink refusal, explicit `--force`, custom `--output`,
+destination paths with spaces, failed/interrupted operations leaving no partial
+destination or staging directory, no PATH/home/service/config/data mutation,
+and a packaged test release downloaded into a clean directory and run as
+`./trestle version`. `test-installer.sh` and `test-update.sh` now prove
+verify-before-install, fail-closed unverifiable releases, the portable
+`shasum` update path and atomic rollback. These run in CI
+(`.github/workflows/ci.yml`) and the release-candidate gate.
+
+### Website
+
+Install and Quickstart pages present two clear choices - install on this user
+account (`~/.local/bin`) and download into this directory (`./trestle`) - with
+system-wide installation kept explicit (`sudo sh -s -- --system`); the homepage
+gains a "Get the binary" action and a verified-download line; releases,
+updating, rollback and security pages describe the automatic verification; the
+website serves `install.sh`, `download.sh` and `update.sh` from the root. All
+stale `trestle.dev` public-domain examples (including the security contact
+email) were replaced with `trestle.cv`.
+
+### Commands run
+
+- `./scripts/build-public-scripts.sh` regenerated `scripts/public/*.sh`.
+- `./scripts/test-download.sh`, `./scripts/test-installer.sh`,
+  `./scripts/test-update.sh`, `./scripts/test-public-scripts.sh`,
+  `./scripts/test-release.sh`, `./scripts/test-quickstart.sh` passed.
+- `sh -n` passed on every public script and the helper.
+- `go test ./...` (24 packages) and `go vet ./...` passed.
+- `nift build` and `nift status` clean in the website repository;
+  `scripts/check-site.mjs` checked 87 HTML pages and 93 files.
+
+### Honesty
+
+- All download/install/update tests use local fake release assets or the
+  locally built release-candidate artifact; none depend on GitHub availability.
+- The public `https://trestle.cv/*.sh` URLs have not been tested against a
+  published stable release (none exists yet). The `curl | sh` flows were
+  exercised via a local standalone copy (the exact bytes served at the website
+  root, proven by the parity gate), not by hitting the public domain.
+- Remaining pre-release limitations: no stable release published; the public
+  URLs should be smoke-tested after the first tagged release is deployed;
+  `download.sh` cannot be executed-by-name through a pipe (documented use is
+  `curl ... | sh`).
+
+Completion record:
+
+```text
+Status: complete (pre-release); browser acceptance unchanged
+Application commit: recorded by this commit
+Website output commit: recorded by the website-output commit
+Website source commit: recorded by the website-source commit
+Verified: download.sh regression (23 cases); installer/update regressions;
+  public-script parity gate (syntax, regeneration, website copies); release
+  packaging; quickstart; go test/vet; nift build/status; site checker
+Local simulations: all download/install/update tests (local fake releases)
+Public URLs tested: no (no stable release exists; standalone served bytes
+  exercised locally and proven byte-identical by the parity gate)
+Findings repaired: install.sh did not verify SHA256SUMS; update.sh was not
+  portable to macOS; website update.sh was a GitHub-raw loader drift; stale
+  trestle.dev examples
+Known limits: public curl commands not yet validated against a published
+  stable release; browser acceptance partial as before
+```
+
 ## Checkpoint roadmap
 
 - CP1 - PostgreSQL contract and baseline (this checkpoint)

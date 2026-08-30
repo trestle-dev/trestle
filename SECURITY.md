@@ -103,7 +103,7 @@ Go race tests and bounded load tests before a stable release.
 
 ## Reporting and supported versions
 
-Report suspected vulnerabilities privately to `security@trestle.dev`. Do not
+Report suspected vulnerabilities privately to `security@trestle.cv`. Do not
 open a public issue until maintainers have coordinated disclosure. Include the
 affected version, deployment shape, reproduction, impact, and logs after
 removing secrets and personal data.

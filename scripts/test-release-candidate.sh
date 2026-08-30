@@ -21,5 +21,7 @@ TRESTLE_FUZZ_TIME=2s ./scripts/fuzz-boundaries.sh
 ./scripts/test-release.sh
 ./scripts/test-installer.sh
 ./scripts/test-update.sh
+./scripts/test-download.sh
+./scripts/test-public-scripts.sh
 ./scripts/test-quickstart.sh
 echo "release-candidate matrix passed"
