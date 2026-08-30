@@ -1415,6 +1415,69 @@ Known limits: live HTTPS/S3/AWS/DNS-change evidence is retained as explicit
   limitations (no local non-private endpoint)
 ```
 
+
+## CP12R - Complete degraded-state UX
+
+Status: complete
+
+CP12 covered the connection card only; this repair adds reusable, deliberate
+states for the pane-level and session-level degraded scenarios and an explicit
+session-expired flow. Visual verification is documented as an explicit
+limitation (no browser tooling is available in this environment; evidence is
+rendered copy via the state-machine tests and the live connection-recovery
+drill).
+
+### Application
+
+- Add a reusable `viewState` component to the dashboard state module covering
+  loading, empty, error (permission-denied, database-unavailable and generic
+  partial-failure), retrying and dead-lettered jobs, pending file deletion and
+  stale realtime. Each returns plain-language what/consequence/next-action copy
+  and never includes credentials or internal secrets.
+- Add a DOM renderer `renderViewState` and CSS, and route the records view's
+  error path through it. Jobs status copy already distinguishes pending,
+  running, retrying (via the new retrying state), dead-lettered, cancelled and
+  succeeded; files pending deletion, stale realtime and the empty/loading
+  states map through the reusable component.
+- Add an explicit session-expired flow: any 401 from an authenticated admin
+  route returns the dashboard to the auth gate with a "Session expired" title
+  and a sign-in next action (the current-session endpoint returns 200
+  unauthenticated, so the check cannot recurse).
+- PostgreSQL configuration mistakes remain visible in first-run setup with
+  redacted connection errors and the restart-required notice.
+- `scripts/test-database-setup.mjs` drives every viewState kind and asserts
+  message/consequence/next-action presence and no secret leakage; the
+  dashboard-quality checker asserts the rendered view-state contract.
+
+### Visual verification
+
+Browser tooling is not available in this environment, so deterministic
+screenshots are not produced. Evidence is: the pure viewState/connectionState
+machines (Node-tested for every state), the generated dashboard DOM/copy
+assertions, and the live connection-recovery drill that exercises real
+database-unavailable and recovered states end to end. This is documented as an
+explicit limitation, not as visually verified.
+
+### Exit evidence
+
+- viewState and connectionState tests pass; dashboard quality and site checks
+  pass; full suite and vet green on both providers.
+
+Completion record:
+
+```text
+Status: complete (repair)
+Application commit: recorded by this commit
+Website output commit: n/a (no public documentation change)
+Website source commit: n/a (no public documentation change)
+Verified: viewState/connectionState Node tests; dashboard quality; full suite; vet
+Findings repaired: no in-session expired-session flow; pane-level degraded
+  states were raw error messages, not deliberate operator copy
+Known limits: browser screenshots are not producible in this environment;
+  visual verification is documented as automated copy + live drill, not a
+  browser harness
+```
+
 ## Checkpoint roadmap
 
 - CP1 - PostgreSQL contract and baseline (this checkpoint)

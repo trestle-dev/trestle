@@ -165,6 +165,31 @@ field("unreachable kind", cs("unreachable").kind, "unreachable");
 // returns to ready (the transition the dashboard performs on retry).
 field("recovery to ready", cs("ready").kind, "ready");
 
+// 9. Reusable degraded-view state component (CP12R): each kind has plain
+// language, a consequence and a next action, and never includes secrets.
+const vs = (kind, opts) => machine.viewState(kind, opts);
+field("loading", vs("loading").title, "Loading");
+field("empty", vs("empty").title, "Nothing here yet");
+field("empty next", vs("empty").nextAction, "Create the first item to see it here.");
+field("permission denied", vs("error", {code: "permissionDenied"}).title, "Permission denied");
+field("db unavailable", vs("error", {code: "database_unavailable"}).title, "Database unavailable");
+const generic = vs("error", {message: "The request could not be completed."});
+field("generic consequence", generic.consequence, "The requested operation did not finish.");
+field("retrying", vs("retrying").title, "Job is retrying");
+field("dead", vs("dead").title, "Job failed permanently");
+field("deletion pending", vs("deletionPending").title, "File deletion is pending");
+field("stale", vs("stale").title, "Realtime connection is stale");
+for (const state of [vs("empty"), vs("error", {}), vs("retrying"), vs("dead"), vs("deletionPending"), vs("stale"), vs("loading")]) {
+  if (JSON.stringify(state).match(/password|secret|token|Bearer/i)) {
+    failures += 1;
+    console.error(`- viewState ${state.kind} leaked a secret: ${JSON.stringify(state)}`);
+  }
+  if (!state.message || !state.consequence || !state.nextAction) {
+    failures += 1;
+    console.error(`- viewState ${state.kind} is missing message/consequence/nextAction`);
+  }
+}
+
 if (failures) {
   console.error(`database setup state machine: ${failures} failure(s)`);
   process.exit(1);

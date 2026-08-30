@@ -106,5 +106,40 @@ globalThis.TrestleDatabaseSetup = (() => {
       nextAction: "Check the process, network and logs, then retry."
     };
   }
-  return { computeState, authGateCopy, restartNotice, connectionState };
+  return { computeState, authGateCopy, restartNotice, connectionState, viewState };
 })();
+
+// viewState is a reusable degraded-state component for dashboard panes. It
+// maps a state kind and optional detail to plain-language operator copy: what
+// happened, the operational consequence, and a specific next action. Kinds:
+// loading, empty, error (permission-denied / partial-failure / unavailable),
+// retrying, dead, deletionPending, stale. It never includes credentials or
+// internal secrets.
+function viewState(kind, opts) {
+  opts = opts || {};
+  switch (kind) {
+    case "loading":
+      return { kind, title: "Loading", message: "Loading this view.", consequence: "No data is shown yet.", nextAction: "This resolves on its own." };
+    case "empty":
+      return { kind, title: "Nothing here yet", message: opts.message || "This view has no data yet.", consequence: "Nothing to show.", nextAction: "Create the first item to see it here." };
+    case "error":
+      const code = opts.code || "";
+      if (code === "permissionDenied" || code === "authorization_denied") {
+        return { kind, title: "Permission denied", message: "You do not have permission to view or change this.", consequence: "The action was not applied.", nextAction: "Ask an administrator for the required access." };
+      }
+      if (code === "database_unavailable") {
+        return { kind, title: "Database unavailable", message: "The database connection failed.", consequence: "This view cannot load data right now.", nextAction: "Check the database and server logs, then retry." };
+      }
+      return { kind, title: "Could not load this view", message: opts.message || "The request could not be completed.", consequence: "The requested operation did not finish.", nextAction: "Check server logs, then retry." };
+    case "retrying":
+      return { kind, title: "Job is retrying", message: opts.message || "The job failed and is scheduled to retry.", consequence: "It is not complete yet.", nextAction: "You can wait for the retry or cancel the job." };
+    case "dead":
+      return { kind, title: "Job failed permanently", message: opts.message || "The job exhausted its retries.", consequence: "It will not run again automatically.", nextAction: "Retry the job or investigate the last error." };
+    case "deletionPending":
+      return { kind, title: "File deletion is pending", message: "The file is marked for deletion and is unavailable.", consequence: "The stored object has not been removed yet.", nextAction: "Trestle retries automatically; you can also trigger cleanup." };
+    case "stale":
+      return { kind, title: "Realtime connection is stale", message: "The live event stream has not delivered recently.", consequence: "Events may be delayed.", nextAction: "Check the connection and re-open the stream." };
+    default:
+      return { kind: "error", title: "Could not load this view", message: "The request could not be completed.", consequence: "The requested operation did not finish.", nextAction: "Check server logs, then retry." };
+  }
+}
