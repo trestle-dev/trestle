@@ -1,5 +1,65 @@
+// First-run database selection state machine (pure, no DOM access).
+// The dashboard DOM layer maps computeState()'s result onto hidden/disabled
+// attributes; the Node regression suite drives computeState() through every
+// transition without a browser. State contracts:
+//
+//   mode        "first-run" | "sign-in"
+//   selectable  whether the provider may still be chosen (false after a
+//               connection is persisted or when startup fixed the provider)
+//   provider    "sqlite" | "postgres"
+//   url         the PostgreSQL URL field value
+//
+// Invariants covered by the regression suite:
+//   - an empty PostgreSQL URL leaves the test button disabled;
+//   - a non-empty URL enables it;
+//   - the first-administrator form is never shown together with the
+//     PostgreSQL configuration form;
+//   - after the connection is persisted (selectable=false) the interface
+//     returns to administrator creation, never to a sign-in form, because the
+//     auth gate copy is single-sourced and mutually exclusive.
+globalThis.TrestleDatabaseSetup = (() => {
+  function computeState(state) {
+    const firstRun = state.mode === "first-run";
+    const pendingPostgres = firstRun && state.selectable && state.provider === "postgres";
+    const urlNonEmpty = Boolean(state.url && state.url.trim());
+    return {
+      previewVisible: firstRun,
+      postgresConfigVisible: pendingPostgres,
+      applyVisible: pendingPostgres,
+      applyEnabled: pendingPostgres && urlNonEmpty,
+      adminFormVisible: !pendingPostgres,
+      adminEmailRequired: !pendingPostgres,
+      adminPasswordRequired: !pendingPostgres
+    };
+  }
+  function authGateCopy(setupRequired) {
+    return setupRequired
+      ? {
+          kicker: "First-run setup",
+          title: "Create the administrator account",
+          description:
+            "This deployment has no administrator yet. The account you create grants access to every administration surface.",
+          submitLabel: "Create administrator",
+          autocomplete: "new-password"
+        }
+      : {
+          kicker: "Secure administration",
+          title: "Sign in to Trestle",
+          description: "Use an administrator account for this deployment.",
+          submitLabel: "Sign in",
+          autocomplete: "current-password"
+        };
+  }
+  function restartNotice(version) {
+    return {
+      heading: "Restart required",
+      body: `PostgreSQL ${version} is configured. Stop and start Trestle, then reload this page to create the administrator account.`
+    };
+  }
+  return { computeState, authGateCopy, restartNotice };
+})();
 const statusCard=document.querySelector("#status-card");const databaseState=document.querySelector("#database-state");const databaseProvider=document.querySelector("#database-provider");const connection=document.querySelector("#connection");const retry=document.querySelector("#retry");async function check(){statusCard.className="status-card";statusCard.querySelector("h2").textContent="Connecting to Trestle";statusCard.querySelector("p").textContent="Checking process and database readiness.";databaseState.textContent="Checking";retry.disabled=true;try{const response=await fetch("/system/ready",{headers:{Accept:"application/json"}});if(response.ok){statusCard.classList.add("ready");statusCard.querySelector("h2").textContent="Trestle is ready";statusCard.querySelector("p").textContent="The process and database are accepting work.";databaseState.textContent="Ready";databaseProvider.textContent=window.trestleProvider||"Configured";connection.className="connection ready";connection.querySelector("span").textContent="Ready"}else{throw new Error("not ready")}}catch{statusCard.classList.add("error");statusCard.querySelector("h2").textContent="Trestle is not ready";statusCard.querySelector("p").textContent="Check server logs and database initialization, then retry.";databaseState.textContent="Unavailable";connection.className="connection error";connection.querySelector("span").textContent="Unavailable"}finally{retry.disabled=false}}retry.addEventListener("click",check);const mobile=document.querySelector(".mobile-nav");const rail=document.querySelector("#primary-nav");mobile.addEventListener("click",()=>{const open=mobile.getAttribute("aria-expanded")==="true";mobile.setAttribute("aria-expanded",String(!open));rail.classList.toggle("open",!open)});document.addEventListener("keydown",event=>{if(event.key==="Escape"&&rail.classList.contains("open")){rail.classList.remove("open");mobile.setAttribute("aria-expanded","false");mobile.focus()}});document.querySelectorAll("[data-route]").forEach(link=>link.addEventListener("click",event=>{event.preventDefault();selectDashboardRoute(link.dataset.route,link.textContent);history.replaceState(null,"",link.getAttribute("href"));document.querySelector(".workspace").focus()}));check();
-const authGate=document.querySelector("#auth-gate");const authForm=document.querySelector("#auth-form");const authTitle=document.querySelector("#auth-title");const authDescription=document.querySelector("#auth-description");const authKicker=document.querySelector("#auth-kicker");const authEmail=document.querySelector("#auth-email");const authPassword=document.querySelector("#auth-password");const authError=document.querySelector("#auth-error");let setupRequired=false;let csrfToken="";async function jsonRequest(url,options={}){const response=await fetch(url,{...options,headers:{Accept:"application/json","Content-Type":"application/json",...(options.headers||{})}});const body=response.status===204?null:await response.json();if(!response.ok){throw new Error(body?.error?.message||"The request could not be completed.")}return body}async function initializeAuth(){try{const session=await jsonRequest("/admin/v1/session");window.trestleProvider=session.provider||"";if(session.authenticated){authGate.classList.add("hidden");check();window.dispatchEvent(new Event("trestle:authenticated"));return}const setup=await jsonRequest("/admin/v1/setup/status");setupRequired=setup.setupRequired;authForm.classList.toggle("first-run",setupRequired);authKicker.textContent=setupRequired?"First-run setup":"Secure administration";authTitle.hidden=false;authDescription.hidden=false;if(setupRequired){authTitle.textContent="Create the administrator account";authDescription.textContent="This deployment has no administrator yet. The account you create grants access to every administration surface."}else{authTitle.textContent="Sign in to Trestle";authDescription.textContent="Use an administrator account for this deployment."}authPassword.autocomplete=setupRequired?"new-password":"current-password";authForm.querySelector("#auth-submit").textContent=setupRequired?"Create administrator":"Sign in";syncDatabaseFields();authEmail.focus()}catch{authTitle.textContent="Trestle is unavailable";authDescription.textContent="Check the server and database, then reload this page.";authForm.querySelector("button").disabled=true}}authForm.addEventListener("submit",async event=>{event.preventDefault();authError.textContent="";if(setupRequired&&databaseSelectable&&selectedDatabase()==="postgres"){authError.textContent="Test and save the PostgreSQL connection before creating the administrator.";databasePreview.querySelector('[name="database-url"]').focus();return}const button=authForm.querySelector("#auth-submit");button.disabled=true;try{const session=await jsonRequest(setupRequired?"/admin/v1/setup":"/admin/v1/session",{method:"POST",body:JSON.stringify({email:authEmail.value,password:authPassword.value})});csrfToken=session.csrfToken||"";authPassword.value="";authGate.classList.add("hidden");check();window.dispatchEvent(new Event("trestle:authenticated"))}catch(error){authError.textContent=error.message;authPassword.focus();authPassword.select()}finally{button.disabled=false}});initializeAuth();
+const authGate=document.querySelector("#auth-gate");const authForm=document.querySelector("#auth-form");const authTitle=document.querySelector("#auth-title");const authDescription=document.querySelector("#auth-description");const authKicker=document.querySelector("#auth-kicker");const authEmail=document.querySelector("#auth-email");const authPassword=document.querySelector("#auth-password");const authError=document.querySelector("#auth-error");let setupRequired=false;let csrfToken="";async function jsonRequest(url,options={}){const response=await fetch(url,{...options,headers:{Accept:"application/json","Content-Type":"application/json",...(options.headers||{})}});const body=response.status===204?null:await response.json();if(!response.ok){throw new Error(body?.error?.message||"The request could not be completed.")}return body}async function initializeAuth(){try{const session=await jsonRequest("/admin/v1/session");window.trestleProvider=session.provider||"";if(session.authenticated){authGate.classList.add("hidden");check();window.dispatchEvent(new Event("trestle:authenticated"));return}const setup=await jsonRequest("/admin/v1/setup/status");setupRequired=setup.setupRequired;authForm.classList.toggle("first-run",setupRequired);const copy=TrestleDatabaseSetup.authGateCopy(setupRequired);authKicker.textContent=copy.kicker;authTitle.hidden=false;authDescription.hidden=false;authTitle.textContent=copy.title;authDescription.textContent=copy.description;authPassword.autocomplete=copy.autocomplete;authForm.querySelector("#auth-submit").textContent=copy.submitLabel;syncDatabaseFields();authEmail.focus()}catch{authTitle.textContent="Trestle is unavailable";authDescription.textContent="Check the server and database, then reload this page.";authForm.querySelector("button").disabled=true}}authForm.addEventListener("submit",async event=>{event.preventDefault();authError.textContent="";if(setupRequired&&databaseSelectable&&selectedDatabase()==="postgres"){authError.textContent="Test and save the PostgreSQL connection before creating the administrator.";databasePreview.querySelector('[name="database-url"]').focus();return}const button=authForm.querySelector("#auth-submit");button.disabled=true;try{const session=await jsonRequest(setupRequired?"/admin/v1/setup":"/admin/v1/session",{method:"POST",body:JSON.stringify({email:authEmail.value,password:authPassword.value})});csrfToken=session.csrfToken||"";authPassword.value="";authGate.classList.add("hidden");check();window.dispatchEvent(new Event("trestle:authenticated"))}catch(error){authError.textContent=error.message;authPassword.focus();authPassword.select()}finally{button.disabled=false}});initializeAuth();
 const collectionDraftKey="trestle-collection-draft";
 const fieldTypeOptions=["text","number","boolean","datetime","json","select","relation","email","url"].map(type=>`<option value="${type}">${type}</option>`).join("");
 function collectionFieldRow(values={}){const row=document.createElement("div");row.className="collection-field-row";row.innerHTML=`<label>Field name<input name="field" pattern="[a-z][a-z0-9_]{0,62}" placeholder="title" value="${escapeHTML(values.name||"")}" required></label><label>Type<select name="type">${fieldTypeOptions}</select></label><div class="field-options"><label class="check"><input name="required" type="checkbox"> <span>Required</span></label><label class="check"><input name="unique" type="checkbox"> <span>Unique</span></label></div><button type="button" data-remove-field aria-label="Remove field">Remove</button>`;row.querySelector("select").value=values.type||"text";row.querySelector('[name="required"]').checked=Boolean(values.required);row.querySelector('[name="unique"]').checked=Boolean(values.unique);row.querySelector("[data-remove-field]").addEventListener("click",()=>{if(row.parentElement.children.length>1){const form=row.closest("form");row.remove();saveCollectionDraft(form)}});return row}
@@ -17,11 +77,13 @@ const databaseUrlInput=databasePreview.querySelector('[name="database-url"]');
 function selectedDatabase(){return databasePreview.querySelector('[name="database-provider"]:checked').value}
 const administratorFields=document.querySelector("#administrator-fields");
 let databaseSelectable=false;
-function syncDatabaseFields(){const firstRun=authForm.classList.contains("first-run");const pendingPostgres=firstRun&&databaseSelectable&&selectedDatabase()==="postgres";databasePreview.hidden=!firstRun;postgresConfiguration.hidden=!pendingPostgres;databaseApply.hidden=!pendingPostgres;administratorFields.hidden=pendingPostgres;authEmail.required=!pendingPostgres;authPassword.required=!pendingPostgres;if(!pendingPostgres){databaseResult.textContent="";databaseResult.className=""}else{syncDatabaseApply()}}function syncDatabaseApply(){databaseApply.disabled=!databaseUrlInput.value.trim()}
+function databaseSetupState(){return TrestleDatabaseSetup.computeState({mode:authForm.classList.contains("first-run")?"first-run":"sign-in",selectable:databaseSelectable,provider:selectedDatabase(),url:databaseUrlInput.value})}
+function syncDatabaseFields(){const state=databaseSetupState();databasePreview.hidden=!state.previewVisible;postgresConfiguration.hidden=!state.postgresConfigVisible;databaseApply.hidden=!state.applyVisible;databaseApply.disabled=!state.applyEnabled;administratorFields.hidden=!state.adminFormVisible;authEmail.required=state.adminEmailRequired;authPassword.required=state.adminPasswordRequired;if(!state.postgresConfigVisible){databaseResult.textContent="";databaseResult.className=""}}
+function syncDatabaseApply(){databaseApply.disabled=!databaseSetupState().applyEnabled}
 new MutationObserver(syncDatabaseFields).observe(authForm,{attributes:true,attributeFilter:["class"]});
 databaseUrlInput.addEventListener("input",syncDatabaseApply);
 databasePreview.addEventListener("change",syncDatabaseFields);
-databaseApply.addEventListener("click",async()=>{databaseResult.textContent="Testing PostgreSQL…";databaseResult.className="";databaseApply.disabled=true;try{const result=await jsonRequest("/admin/v1/database/setup",{method:"POST",body:JSON.stringify({provider:"postgres",url:databaseUrlInput.value})});databaseSelectable=false;databasePreview.disabled=true;databaseResult.className="restart-notice";databaseResult.innerHTML=`<strong>Restart required</strong><span>PostgreSQL ${escapeHTML(result.version)} is configured. Stop and start Trestle, then reload this page to create the administrator account.</span>`;administratorFields.hidden=true;postgresConfiguration.hidden=true}catch(error){databaseResult.textContent=error.message;databaseResult.className=""}finally{syncDatabaseApply()}});
+databaseApply.addEventListener("click",async()=>{databaseResult.textContent="Testing PostgreSQL…";databaseResult.className="";databaseApply.disabled=true;try{const result=await jsonRequest("/admin/v1/database/setup",{method:"POST",body:JSON.stringify({provider:"postgres",url:databaseUrlInput.value})});databaseSelectable=false;databasePreview.disabled=true;const notice=TrestleDatabaseSetup.restartNotice(result.version);databaseResult.className="restart-notice";databaseResult.innerHTML=`<strong>${escapeHTML(notice.heading)}</strong><span>${escapeHTML(notice.body)}</span>`;administratorFields.hidden=true;postgresConfiguration.hidden=true}catch(error){databaseResult.textContent=error.message;databaseResult.className=""}finally{syncDatabaseApply()}});
 async function loadDatabaseSetup(){try{const result=await jsonRequest("/admin/v1/database/setup");databaseSelectable=Boolean(result.selectable);const radio=databasePreview.querySelector(`[value="${result.provider}"]`);if(radio)radio.checked=true;databasePreview.disabled=!databaseSelectable;syncDatabaseFields()}catch{}}
 loadDatabaseSetup();syncDatabaseFields();
 async function refreshCSRF(){try{const session=await jsonRequest("/admin/v1/session");if(session.csrfToken)csrfToken=session.csrfToken}catch{}}refreshCSRF();

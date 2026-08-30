@@ -262,6 +262,71 @@ Findings repaired: readiness contract was prose-only; no single reproducible Pos
 Known limits: local evidence covers PostgreSQL 18; 16/17 rest on the historical CI matrix
 ```
 
+## CP2 - Repair first-run PostgreSQL setup (ordinary-user workflow)
+
+Status: complete
+
+The full ordinary-user workflow was exercised against real PostgreSQL 18.6
+(fresh instance -> choose PostgreSQL -> test connection -> persist configuration
+-> prominent restart instructions -> restart -> create the first administrator
+-> sign in) both as a real-process shell drill and as a provider-parameterized
+Go workflow test. No product defect was found in the workflow itself; the
+checkpoint therefore adds the executable state-machine regression coverage the
+contract requires and locks the transitions.
+
+### Application
+
+- Extract the first-run database-selection state machine into a pure, DOM-free
+  module (`content/assets/js/database-setup-state.js`) and route
+  `database-setup.js` and the auth-gate copy through it, so every transition is
+  testable without a browser. Behavior is unchanged:
+  - an empty PostgreSQL URL leaves the test/apply button visibly and
+    functionally disabled (CSS `button:disabled` opacity/cursor, asserted by the
+    dashboard quality gate);
+  - a non-empty URL enables it, with enabled hover styling applied only to
+    enabled buttons;
+  - invalid URLs produce useful, non-secret-leaking errors (TLS, unreachable,
+    timeout envelopes);
+  - a successful test shows a prominent "Restart required" notice;
+  - after restart the interface says the user is creating the first
+    administrator (single-sourced copy), never a sign-in form, and the two are
+    never shown simultaneously (single auth form);
+  - the seven-character password minimum is enforced (HTML `minlength="7"` and
+    `adminauth.MinPasswordLength`).
+- Add `scripts/test-database-setup.mjs`, a Node state-machine regression test
+  covering every transition, wired into the browser-quality gate.
+- Strengthen `scripts/check-dashboard-quality.mjs` with the structural contract
+  (one auth form, one submit button, password minimum, present apply button,
+  disabled vs enabled hover styling).
+- Add `internal/databasesetup/workflow_test.go`, a provider-parameterized
+  first-run lifecycle test (SQLite always, real PostgreSQL when configured):
+  fresh selectability, persistence with 0600 permissions and atomic publication
+  (no temporary file left), fixed provider after restart, password minimum,
+  setup closure after the first administrator, and no connection-material
+  leakage in any response.
+
+### Exit evidence
+
+- State-machine and workflow tests pass on SQLite and real PostgreSQL 18.6.
+- The real-process shell drill (selection, persist, restart, first admin,
+  sign-in) completes; logs contain no connection material.
+
+Completion record:
+
+```text
+Status: complete
+Application commit: 4c7534f
+Website output commit: n/a (no public documentation change)
+Website source commit: n/a (no public documentation change)
+Verified: go test ./... (sqlite + real PostgreSQL 18.6); browser-quality gate
+  including the new state-machine test; go vet; gofmt
+Findings repaired: none (workflow already correct); added missing executable
+  regression coverage for every first-run transition
+Known limits: browser-level coverage is via the pure state machine and DOM
+  structural checks, not a full browser harness; real-process drill is a shell
+  simulation of the browser transitions
+```
+
 ## Checkpoint roadmap
 
 - CP1 - PostgreSQL contract and baseline (this checkpoint)

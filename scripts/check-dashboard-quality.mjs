@@ -17,6 +17,18 @@ requireText(css, /:focus-visible/, "visible keyboard focus styling is missing");
 requireText(css, /prefers-reduced-motion:reduce/, "reduced-motion handling is missing");
 requireText(css, /@media\(max-width:800px\)/, "mobile drawer breakpoint is missing");
 requireText(css, /overflow-wrap:anywhere|word-break:break-word/, "long unbroken values are not bounded");
+// First-run database-selection structural contract (CP2): exactly one auth
+// form that switches between first-administrator creation and sign-in, a
+// seven-character password minimum, a present database test/apply button, and
+// distinct disabled vs enabled hover styling so an enabled button looks
+// interactive.
+requireText(html, /<form[^>]*id="auth-form"/, "the auth gate has no single first-run/sign-in form");
+if ((html.match(/id="auth-form"/g) || []).length !== 1) failures.push("more than one auth form exists (first-run and sign-in must never both render)");
+if ((html.match(/id="auth-submit"/g) || []).length !== 1) failures.push("the auth form must have exactly one submit button");
+requireText(html, /id="auth-password"[^>]*minlength="7"/, "the seven-character password minimum is missing from the auth gate");
+requireText(html, /id="database-apply"/, "the database test/apply button is missing from the auth gate");
+requireText(css, /button:disabled/, "disabled buttons have no visible disabled styling");
+requireText(css, /button:not\(:disabled\):hover/, "enabled buttons have no hover styling");
 if (/<script(?![^>]+src=)|\sstyle=|\sonclick=/i.test(html)) failures.push("inline executable/style content violates the strict CSP");
 if (/<img(?![^>]+alt=)/i.test(html)) failures.push("an image is missing alt text");
 
