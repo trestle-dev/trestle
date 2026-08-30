@@ -13,9 +13,9 @@
 # Bounds (generous, explicit, documented):
 #   fd growth      <= 25 file descriptors
 #   thread growth  <= 20 threads
-#   settled RSS growth <= 96 MiB (98304 KiB); the bound is generous to absorb
-#   Go GC heap-retention variance across runs, while fd and thread growth stay
-#   tight - a genuine leak over a sustained soak exceeds it
+#   settled RSS growth <= 50 MiB (51200 KiB); heap-live retention is measured
+#   separately via GODEBUG=gctrace so a leak is distinguished from RSS-level
+#   allocator retention
 #
 # Usage: SOAK_SECONDS=120 ./scripts/soak.sh    (default 60)
 set -eu
@@ -31,7 +31,7 @@ go build -o "$work/trestle" ./cmd/trestle
 port=$((28400 + ($$ % 20000)))
 base="http://127.0.0.1:$port"
 
-"$work/trestle" --listen "127.0.0.1:$port" --data-dir "$work/data" >"$work/server.log" 2>&1 &
+GODEBUG=gctrace=1 "$work/trestle" --listen "127.0.0.1:$port" --data-dir "$work/data" >"$work/server.log" 2>&1 &
 pid=$!
 i=0
 until curl -fsS "$base/system/health" >/dev/null 2>&1; do
@@ -63,6 +63,20 @@ sample() {
   thr=$(awk '/Threads:/{print $2}' "/proc/$pid/status" 2>/dev/null || echo 0)
   printf '%s %s %s' "$vms" "$fds" "$thr"
 }
+# heapSample parses the most recent Go GC line from the server log
+# (GODEBUG=gctrace) into "gc_count heap_live_MB elapsed_s".
+heap_sample() {
+  line=$(grep -oE 'gc [0-9]+ @[0-9.]+s' "$work/server.log" 2>/dev/null | tail -1)
+  gccount=0; elapsed=0
+  if [ -n "$line" ]; then
+    set -- $line
+    gccount=${2:-0}
+    elapsed=$(printf '%s' "$3" | tr -d '@s')
+  fi
+  live=$(grep -oE '[0-9.]+->[0-9.]+->[0-9.]+ MB' "$work/server.log" 2>/dev/null | tail -1 | sed -E 's/.*->([0-9.]+) MB/\1/')
+  [ -z "$live" ] && live=0
+  printf '%s %s %s' "$gccount" "$live" "$elapsed"
+}
 
 # Warm the process so the baseline is the settled steady state, not startup
 # peak (startup loads the runtime and embedded assets).
@@ -74,6 +88,7 @@ for n in $(seq 1 "$warm"); do
 done
 sleep 1
 before=$(sample "$pid")
+heap_before=$(heap_sample)
 
 # Sustained CRUD with latency sampling on the same process.
 created=0; errors=0
@@ -146,6 +161,7 @@ after="$settled_rss $settled_fds $settled_thr"
 read -r after_rss after_fds after_thr <<EOF
 $after
 EOF
+heap_after=$(heap_sample)
 
 # Resource bounds against the SAME process (final settled vs warm baseline).
 fd_growth=$((after_fds - $(echo "$before" | awk '{print $2}')))
@@ -157,8 +173,24 @@ fi
 if [ "$thr_growth" -gt 20 ]; then
   echo "thread growth $thr_growth exceeds bound 20" >&2; exit 1
 fi
-if [ "$rss_growth" -gt 98304 ]; then
-  echo "settled RSS growth ${rss_growth} KiB exceeds bound 98304 KiB" >&2; exit 1
+heap_before_live=$(echo "$heap_before" | awk '{print $2}')
+heap_after_live=$(echo "$heap_after" | awk '{print $2}')
+heap_live_growth=$((heap_after_live - heap_before_live))
+# The authoritative leak signal is live heap growth (from gctrace): live memory
+# must not grow with the workload. Observed across the duration series
+# (828/1690/3280 records) heap-live stayed 64/6/16 MB, i.e. bounded and not
+# growing with records. RSS growth on short runs can transiently exceed the
+# 50 MiB bound because the settled sample catches the heap mid-expansion before
+# a GC returns memory; at 60s+ the settled RSS is at or below baseline.
+if [ "$heap_live_growth" -gt 128 ]; then
+  echo "live heap growth ${heap_live_growth} MB exceeds bound 128 MB (leak signal)" >&2
+  exit 1
+fi
+if [ "$rss_growth" -gt 51200 ]; then
+  echo "settled RSS growth ${rss_growth} KiB exceeds bound 51200 KiB" >&2
+  echo "diagnostics: baseline[$before] peak[$peak_rss $peak_fds $peak_thr] settled[$after] heap_before[$heap_before] heap_after[$heap_after] heap_live_growth=${heap_live_growth}MB records=$created" >&2
+  grep -oE 'gc [0-9]+ @[0-9.]+s .* MB' "$work/server.log" 2>/dev/null | tail -3 >&2
+  exit 1
 fi
 
 # Webhook jobs: the 200-item newest-first list saturated with webhook jobs
@@ -187,7 +219,8 @@ echo "  backup archive: $(stat -c %s "$work/soak-archive.zip") bytes"
 echo "  baseline (VmRSS KB, fds, threads): $before"
 echo "  peak    (VmRSS KB, fds, threads): $peak_rss $peak_fds $peak_thr"
 echo "  final   (VmRSS KB, fds, threads): $after"
-echo "  growth: fd ${fd_growth} (<=25) thread ${thr_growth} (<=20) settled RSS ${rss_growth} KiB (<=98304)"
+echo "  growth: fd ${fd_growth} (<=25) thread ${thr_growth} (<=20) settled RSS ${rss_growth} KiB (<=51200)"
+echo "  heap (gctrace): before [$heap_before] after [$heap_after] (gc_count heap_live_MB elapsed_s)"
 if [ "$samples" -gt 0 ]; then
   echo "  create latency avg: $((total_ms / samples)) ms  max: ${max_ms} ms  samples: $samples"
 fi
