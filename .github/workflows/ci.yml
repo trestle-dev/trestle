@@ -87,11 +87,13 @@ jobs:
           done
       - name: Release packaging and installer syntax
         run: |
-          sh -n install.sh download.sh update.sh scripts/checksum.sh scripts/package-release.sh scripts/test-release.sh scripts/test-installer.sh scripts/test-update.sh scripts/test-download.sh scripts/test-public-scripts.sh scripts/build-public-scripts.sh scripts/test-postgres-gate.sh scripts/test-connection-recovery.sh scripts/test-restore-drill.sh scripts/soak.sh scripts/test-parity-gate.sh scripts/test-subsystem-gate.sh
+          sh -n install.sh download.sh update.sh scripts/checksum.sh scripts/package-release.sh scripts/test-release.sh scripts/test-release-reproducible.sh scripts/test-release-contract.sh scripts/test-installer.sh scripts/test-update.sh scripts/test-download.sh scripts/test-public-scripts.sh scripts/build-public-scripts.sh scripts/test-postgres-gate.sh scripts/test-connection-recovery.sh scripts/test-restore-drill.sh scripts/soak.sh scripts/test-parity-gate.sh scripts/test-subsystem-gate.sh
           ./scripts/test-installer.sh
           ./scripts/test-update.sh
           ./scripts/test-download.sh
           ./scripts/test-public-scripts.sh
           ./scripts/test-release.sh
+          ./scripts/test-release-contract.sh
+          ./scripts/test-release-reproducible.sh
       - name: Real Caddy and nginx TLS smoke tests
         run: ./scripts/test-proxies.sh
