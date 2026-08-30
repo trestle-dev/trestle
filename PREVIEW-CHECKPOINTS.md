@@ -1263,6 +1263,60 @@ Known limits: visual inspection is via generated DOM/copy assertions and the
   live drill, not a browser screenshot harness; degraded-state copy is English-only
 ```
 
+
+## CP9R - Trustworthy parity evidence
+
+Status: complete
+
+The CP9 parity checker scanned source text for test names and treated any test
+in a provider-aware file as evidence, which allowed a false-positive row
+(webhook/function targets cited a job-list test). This repair makes the
+evidence trustworthy and executable.
+
+### Application
+
+- Replace the file-level source heuristic with exact-function validation via Go
+  AST: the cross-check parses the exact cited test function and verifies its own
+  body exercises the claimed providers (the storetest.Providers loop, an
+  explicit SQLite/Postgres path, or a real-PostgreSQL gate such as ownedURL /
+  postgresTestURL / storetest.PostgresURL / storetest.Lock). A provider-aware
+  file no longer makes an unrelated test evidence; the package must match the
+  file location.
+- Audit every matrix row manually: downgrade rows whose cited evidence was
+  PostgreSQL-only to sqlite=unverified (hostile-archive preflight and
+  empty-destination restore), drop evidence tests that are pure unit tests with
+  no provider path (rule validation, explanation redaction), and remove the
+  unrelated job-list test from the webhook/function row.
+- Add `TestWebhookFunctionTargetLifecycle` (authaudit, provider-parameterized):
+  webhook and function target create, list, enable and disable on both
+  providers, giving the webhook/function parity row direct dual evidence.
+- Restructure every matrix evidence entry to identify the package, exact test
+  function and the behavior it covers (`evidenceFormat`).
+- Add `scripts/test-parity-gate.sh`: runs every cited evidence test on SQLite
+  and real PostgreSQL and fails if any fails or does not run, proving the matrix
+  is backed by executed tests rather than names. Wired into CI syntax checks.
+
+### Exit evidence
+
+- AST cross-check passes; the parity gate runs 66 cited evidence tests on both
+  providers, all pass; full suite green on both providers.
+
+Completion record:
+
+```text
+Status: complete (repair)
+Application commit: recorded by this commit
+Website output commit: n/a (no public documentation change)
+Website source commit: n/a (no public documentation change)
+Verified: TestParityMatrixEvidenceCrossCheck (AST); scripts/test-parity-gate.sh
+  (66 tests x 2 providers); full suite
+Findings repaired: file-level evidence heuristic allowed false positives; rows
+  cited PostgreSQL-only or pure-unit tests as dual evidence; webhook/function
+  targets lacked a dual lifecycle test
+Known limits: hostile-archive preflight SQLite restore remains unverified;
+  rows marked unverified stay honest
+```
+
 ## Checkpoint roadmap
 
 - CP1 - PostgreSQL contract and baseline (this checkpoint)

@@ -4,117 +4,859 @@
   "checkpoint": "CP9",
   "campaign": "public-preview",
   "scope": "Executable SQLite/PostgreSQL parity inventory. A row marked verified requires the listed provider-parameterized tests, which run on SQLite always and on real PostgreSQL when TRESTLE_TEST_POSTGRES_URL is configured, to pass on both providers. Shared handler source alone is never marked verified without executable evidence.",
-  "statuses": ["verified", "providerSpecific", "unsupported", "unverified"],
+  "statuses": [
+    "verified",
+    "providerSpecific",
+    "unsupported",
+    "unverified"
+  ],
   "areas": [
     {
       "area": "collection-schema",
       "name": "Collection schema creation, alteration and deletion",
       "operations": [
-        {"operation": "create collection", "sqlite": "verified", "postgres": "verified", "implementation": "shared-handler", "evidence": ["TestCollectionMetadataLifecycle", "TestCollectionValidationAndAuthorization", "TestDuplicateCollectionRollsBack"], "intentionalDifferences": null},
-        {"operation": "all field types and constraints", "sqlite": "verified", "postgres": "verified", "implementation": "provider-specific DDL", "evidence": ["TestAllFieldTypesRoundTrip", "TestDefaultMustMatchFieldType", "TestJSONPhysicalConstraint"], "intentionalDifferences": "native PostgreSQL types and CHECK constraints vs SQLite STRICT tables and typed checks"},
-        {"operation": "schema alteration (add/change/remove field)", "sqlite": "verified", "postgres": "verified", "implementation": "shared-handler, provider-specific rebuild", "evidence": ["TestIncompatibleSchemaChangePreservesMetadataAndRows", "TestPhysicalSchemaPreservesStableFieldData"], "intentionalDifferences": null},
-        {"operation": "destructive change acknowledgement", "sqlite": "verified", "postgres": "verified", "implementation": "shared-handler", "evidence": ["TestDestructiveSchemaRequiresAcknowledgement"], "intentionalDifferences": null},
-        {"operation": "collection deletion (cascading cleanup)", "sqlite": "verified", "postgres": "verified", "implementation": "shared-handler", "evidence": ["TestCollectionMetadataLifecycle", "TestBootstrapSchemaIntegrity"], "intentionalDifferences": null},
-        {"operation": "concurrent collection name race", "sqlite": "verified", "postgres": "verified", "implementation": "shared-handler, provider isolation", "evidence": ["TestConcurrentCollectionNameRace"], "intentionalDifferences": "SQLite serializes; PostgreSQL MVCC with unique constraint"},
-        {"operation": "schema change during record access", "sqlite": "verified", "postgres": "verified", "implementation": "shared-handler", "evidence": ["TestSchemaChangeDuringRecordAccess"], "intentionalDifferences": "change may reject cleanly while records are accessed (deterministic retryable outcome)"}
+        {
+          "operation": "create collection",
+          "sqlite": "verified",
+          "postgres": "verified",
+          "implementation": "shared-handler",
+          "evidence": [
+            {
+              "package": "collections",
+              "test": "TestCollectionMetadataLifecycle",
+              "behavior": "TestCollectionMetadataLifecycle"
+            },
+            {
+              "package": "collections",
+              "test": "TestCollectionValidationAndAuthorization",
+              "behavior": "TestCollectionValidationAndAuthorization"
+            },
+            {
+              "package": "collections",
+              "test": "TestDuplicateCollectionRollsBack",
+              "behavior": "TestDuplicateCollectionRollsBack"
+            }
+          ],
+          "intentionalDifferences": null
+        },
+        {
+          "operation": "all field types and constraints",
+          "sqlite": "verified",
+          "postgres": "verified",
+          "implementation": "provider-specific DDL",
+          "evidence": [
+            {
+              "package": "collections",
+              "test": "TestAllFieldTypesRoundTrip",
+              "behavior": "TestAllFieldTypesRoundTrip"
+            },
+            {
+              "package": "collections",
+              "test": "TestDefaultMustMatchFieldType",
+              "behavior": "TestDefaultMustMatchFieldType"
+            },
+            {
+              "package": "collections",
+              "test": "TestJSONPhysicalConstraint",
+              "behavior": "TestJSONPhysicalConstraint"
+            }
+          ],
+          "intentionalDifferences": "native PostgreSQL types and CHECK constraints vs SQLite STRICT tables and typed checks"
+        },
+        {
+          "operation": "schema alteration (add/change/remove field)",
+          "sqlite": "verified",
+          "postgres": "verified",
+          "implementation": "shared-handler, provider-specific rebuild",
+          "evidence": [
+            {
+              "package": "collections",
+              "test": "TestIncompatibleSchemaChangePreservesMetadataAndRows",
+              "behavior": "TestIncompatibleSchemaChangePreservesMetadataAndRows"
+            },
+            {
+              "package": "collections",
+              "test": "TestPhysicalSchemaPreservesStableFieldData",
+              "behavior": "TestPhysicalSchemaPreservesStableFieldData"
+            }
+          ],
+          "intentionalDifferences": null
+        },
+        {
+          "operation": "destructive change acknowledgement",
+          "sqlite": "verified",
+          "postgres": "verified",
+          "implementation": "shared-handler",
+          "evidence": [
+            {
+              "package": "collections",
+              "test": "TestDestructiveSchemaRequiresAcknowledgement",
+              "behavior": "TestDestructiveSchemaRequiresAcknowledgement"
+            }
+          ],
+          "intentionalDifferences": null
+        },
+        {
+          "operation": "collection deletion (cascading cleanup)",
+          "sqlite": "verified",
+          "postgres": "verified",
+          "implementation": "shared-handler",
+          "evidence": [
+            {
+              "package": "collections",
+              "test": "TestCollectionMetadataLifecycle",
+              "behavior": "TestCollectionMetadataLifecycle"
+            },
+            {
+              "package": "store",
+              "test": "TestBootstrapSchemaIntegrity",
+              "behavior": "TestBootstrapSchemaIntegrity"
+            }
+          ],
+          "intentionalDifferences": null
+        },
+        {
+          "operation": "concurrent collection name race",
+          "sqlite": "verified",
+          "postgres": "verified",
+          "implementation": "shared-handler, provider isolation",
+          "evidence": [
+            {
+              "package": "collections",
+              "test": "TestConcurrentCollectionNameRace",
+              "behavior": "TestConcurrentCollectionNameRace"
+            }
+          ],
+          "intentionalDifferences": "SQLite serializes; PostgreSQL MVCC with unique constraint"
+        },
+        {
+          "operation": "schema change during record access",
+          "sqlite": "verified",
+          "postgres": "verified",
+          "implementation": "shared-handler",
+          "evidence": [
+            {
+              "package": "records",
+              "test": "TestSchemaChangeDuringRecordAccess",
+              "behavior": "TestSchemaChangeDuringRecordAccess"
+            }
+          ],
+          "intentionalDifferences": "change may reject cleanly while records are accessed (deterministic retryable outcome)"
+        }
       ]
     },
     {
       "area": "records",
       "name": "Record CRUD and optimistic concurrency",
       "operations": [
-        {"operation": "record create/get/update/delete", "sqlite": "verified", "postgres": "verified", "implementation": "shared-handler", "evidence": ["TestRecordCRUDAndVersions"], "intentionalDifferences": null},
-        {"operation": "optimistic concurrency (If-Match)", "sqlite": "verified", "postgres": "verified", "implementation": "shared-handler, provider isolation", "evidence": ["TestConcurrentUpdateOneWinner", "TestConcurrentEditOptimisticVersionOneWinner", "TestDeleteUpdateRaceResolvesConsistently"], "intentionalDifferences": null},
-        {"operation": "unique-field conflicts", "sqlite": "verified", "postgres": "verified", "implementation": "shared-handler, provider constraint", "evidence": ["TestConcurrentCreateUniqueFieldOneWinner"], "intentionalDifferences": "case-insensitive uniqueness via normalized storage on both"},
-        {"operation": "atomic batches and idempotency", "sqlite": "verified", "postgres": "verified", "implementation": "shared-handler", "evidence": ["TestValidationAndAtomicBatch", "TestBatchOneThousandRecords", "TestIdempotentCreateProjectionAndBounds", "TestIdempotencyRaceOneWinner"], "intentionalDifferences": null},
-        {"operation": "composed rollback (record+event+audit+outbox)", "sqlite": "verified", "postgres": "verified", "implementation": "shared-handler, transactional", "evidence": ["TestComposedRecordRollbackLeavesNoExternalState"], "intentionalDifferences": null}
+        {
+          "operation": "record create/get/update/delete",
+          "sqlite": "verified",
+          "postgres": "verified",
+          "implementation": "shared-handler",
+          "evidence": [
+            {
+              "package": "records",
+              "test": "TestRecordCRUDAndVersions",
+              "behavior": "TestRecordCRUDAndVersions"
+            }
+          ],
+          "intentionalDifferences": null
+        },
+        {
+          "operation": "optimistic concurrency (If-Match)",
+          "sqlite": "verified",
+          "postgres": "verified",
+          "implementation": "shared-handler, provider isolation",
+          "evidence": [
+            {
+              "package": "records",
+              "test": "TestConcurrentUpdateOneWinner",
+              "behavior": "TestConcurrentUpdateOneWinner"
+            },
+            {
+              "package": "records",
+              "test": "TestConcurrentEditOptimisticVersionOneWinner",
+              "behavior": "TestConcurrentEditOptimisticVersionOneWinner"
+            },
+            {
+              "package": "records",
+              "test": "TestDeleteUpdateRaceResolvesConsistently",
+              "behavior": "TestDeleteUpdateRaceResolvesConsistently"
+            }
+          ],
+          "intentionalDifferences": null
+        },
+        {
+          "operation": "unique-field conflicts",
+          "sqlite": "verified",
+          "postgres": "verified",
+          "implementation": "shared-handler, provider constraint",
+          "evidence": [
+            {
+              "package": "records",
+              "test": "TestConcurrentCreateUniqueFieldOneWinner",
+              "behavior": "TestConcurrentCreateUniqueFieldOneWinner"
+            }
+          ],
+          "intentionalDifferences": "case-insensitive uniqueness via normalized storage on both"
+        },
+        {
+          "operation": "atomic batches and idempotency",
+          "sqlite": "verified",
+          "postgres": "verified",
+          "implementation": "shared-handler",
+          "evidence": [
+            {
+              "package": "records",
+              "test": "TestValidationAndAtomicBatch",
+              "behavior": "TestValidationAndAtomicBatch"
+            },
+            {
+              "package": "records",
+              "test": "TestBatchOneThousandRecords",
+              "behavior": "TestBatchOneThousandRecords"
+            },
+            {
+              "package": "records",
+              "test": "TestIdempotentCreateProjectionAndBounds",
+              "behavior": "TestIdempotentCreateProjectionAndBounds"
+            },
+            {
+              "package": "records",
+              "test": "TestIdempotencyRaceOneWinner",
+              "behavior": "TestIdempotencyRaceOneWinner"
+            }
+          ],
+          "intentionalDifferences": null
+        },
+        {
+          "operation": "composed rollback (record+event+audit+outbox)",
+          "sqlite": "verified",
+          "postgres": "verified",
+          "implementation": "shared-handler, transactional",
+          "evidence": [
+            {
+              "package": "records",
+              "test": "TestComposedRecordRollbackLeavesNoExternalState",
+              "behavior": "TestComposedRecordRollbackLeavesNoExternalState"
+            }
+          ],
+          "intentionalDifferences": null
+        }
       ]
     },
     {
       "area": "querying",
       "name": "Filtering, sorting, nulls, pagination, cursors",
       "operations": [
-        {"operation": "typed filter, sort and cursor", "sqlite": "verified", "postgres": "verified", "implementation": "shared-handler, provider-bound SQL", "evidence": ["TestTypedFilterSortAndCursor"], "intentionalDifferences": null},
-        {"operation": "null semantics", "sqlite": "verified", "postgres": "verified", "implementation": "dialect-owned IS NULL", "evidence": ["TestQueryNullSemantics"], "intentionalDifferences": null},
-        {"operation": "number, datetime and case behavior", "sqlite": "verified", "postgres": "verified", "implementation": "dialect-owned operators", "evidence": ["TestQueryNumberDatetimeAndCase"], "intentionalDifferences": "ILIKE vs LIKE for case-insensitive contains"},
-        {"operation": "filter+cursor pagination stability", "sqlite": "verified", "postgres": "verified", "implementation": "shared-handler", "evidence": ["TestQueryFilterCursorCombined"], "intentionalDifferences": null},
-        {"operation": "error mapping", "sqlite": "verified", "postgres": "verified", "implementation": "dialect-owned classifier", "evidence": ["TestQueryErrorMapping"], "intentionalDifferences": null},
-        {"operation": "boolean filters", "sqlite": "verified", "postgres": "verified", "implementation": "dialect-owned boolean codec", "evidence": ["TestBooleanFilterBothProviders"], "intentionalDifferences": null}
+        {
+          "operation": "typed filter, sort and cursor",
+          "sqlite": "verified",
+          "postgres": "verified",
+          "implementation": "shared-handler, provider-bound SQL",
+          "evidence": [
+            {
+              "package": "records",
+              "test": "TestTypedFilterSortAndCursor",
+              "behavior": "TestTypedFilterSortAndCursor"
+            }
+          ],
+          "intentionalDifferences": null
+        },
+        {
+          "operation": "null semantics",
+          "sqlite": "verified",
+          "postgres": "verified",
+          "implementation": "dialect-owned IS NULL",
+          "evidence": [
+            {
+              "package": "records",
+              "test": "TestQueryNullSemantics",
+              "behavior": "TestQueryNullSemantics"
+            }
+          ],
+          "intentionalDifferences": null
+        },
+        {
+          "operation": "number, datetime and case behavior",
+          "sqlite": "verified",
+          "postgres": "verified",
+          "implementation": "dialect-owned operators",
+          "evidence": [
+            {
+              "package": "records",
+              "test": "TestQueryNumberDatetimeAndCase",
+              "behavior": "TestQueryNumberDatetimeAndCase"
+            }
+          ],
+          "intentionalDifferences": "ILIKE vs LIKE for case-insensitive contains"
+        },
+        {
+          "operation": "filter+cursor pagination stability",
+          "sqlite": "verified",
+          "postgres": "verified",
+          "implementation": "shared-handler",
+          "evidence": [
+            {
+              "package": "records",
+              "test": "TestQueryFilterCursorCombined",
+              "behavior": "TestQueryFilterCursorCombined"
+            }
+          ],
+          "intentionalDifferences": null
+        },
+        {
+          "operation": "error mapping",
+          "sqlite": "verified",
+          "postgres": "verified",
+          "implementation": "dialect-owned classifier",
+          "evidence": [
+            {
+              "package": "records",
+              "test": "TestQueryErrorMapping",
+              "behavior": "TestQueryErrorMapping"
+            }
+          ],
+          "intentionalDifferences": null
+        },
+        {
+          "operation": "boolean filters",
+          "sqlite": "verified",
+          "postgres": "verified",
+          "implementation": "dialect-owned boolean codec",
+          "evidence": [
+            {
+              "package": "records",
+              "test": "TestBooleanFilterBothProviders",
+              "behavior": "TestBooleanFilterBothProviders"
+            }
+          ],
+          "intentionalDifferences": null
+        }
       ]
     },
     {
       "area": "authentication",
       "name": "Users, credentials and access rules",
       "operations": [
-        {"operation": "admin setup/login/logout lifecycle", "sqlite": "verified", "postgres": "verified", "implementation": "shared-handler, advisory lock", "evidence": ["TestSetupLoginLogoutLifecycle", "TestCompetingSetupCreatesOneAdministrator"], "intentionalDifferences": "PostgreSQL advisory lock serializes competing setup"},
-        {"operation": "application user registration/login/rotation/revocation", "sqlite": "verified", "postgres": "verified", "implementation": "shared-handler", "evidence": ["TestRegistrationLoginRotationRevocation", "TestConcurrentRefreshOnlyOneWins", "TestLoginAndRefreshAreAtomicUnderInjectedFailure"], "intentionalDifferences": null},
-        {"operation": "case-insensitive email uniqueness", "sqlite": "verified", "postgres": "verified", "implementation": "normalized storage", "evidence": ["TestEmailUniquenessIsCaseInsensitive"], "intentionalDifferences": "emails stored normalized on both"},
-        {"operation": "concurrent logins and independent revocation", "sqlite": "verified", "postgres": "verified", "implementation": "shared-handler", "evidence": ["TestConcurrentLoginsCoexistAndRevokeIndependently", "TestRevocationDuringInFlightRequests"], "intentionalDifferences": null},
-        {"operation": "scoped credentials", "sqlite": "verified", "postgres": "verified", "implementation": "shared-handler", "evidence": ["TestCreateOnceScopeExpiryRevocation", "TestRejectsUnknownScopesAndExpiredCreation"], "intentionalDifferences": null},
-        {"operation": "access rules and non-leaking denial", "sqlite": "verified", "postgres": "verified", "implementation": "shared-handler, rule compiler", "evidence": ["TestRuleValidationAndEvaluation", "TestRulesStorageAndSimulation", "TestExplanationRedaction"], "intentionalDifferences": null}
+        {
+          "operation": "admin setup/login/logout lifecycle",
+          "sqlite": "verified",
+          "postgres": "verified",
+          "implementation": "shared-handler, advisory lock",
+          "evidence": [
+            {
+              "package": "adminauth",
+              "test": "TestSetupLoginLogoutLifecycle",
+              "behavior": "TestSetupLoginLogoutLifecycle"
+            },
+            {
+              "package": "adminauth",
+              "test": "TestCompetingSetupCreatesOneAdministrator",
+              "behavior": "TestCompetingSetupCreatesOneAdministrator"
+            }
+          ],
+          "intentionalDifferences": "PostgreSQL advisory lock serializes competing setup"
+        },
+        {
+          "operation": "application user registration/login/rotation/revocation",
+          "sqlite": "verified",
+          "postgres": "verified",
+          "implementation": "shared-handler",
+          "evidence": [
+            {
+              "package": "appauth",
+              "test": "TestRegistrationLoginRotationRevocation",
+              "behavior": "TestRegistrationLoginRotationRevocation"
+            },
+            {
+              "package": "appauth",
+              "test": "TestConcurrentRefreshOnlyOneWins",
+              "behavior": "TestConcurrentRefreshOnlyOneWins"
+            },
+            {
+              "package": "appauth",
+              "test": "TestLoginAndRefreshAreAtomicUnderInjectedFailure",
+              "behavior": "TestLoginAndRefreshAreAtomicUnderInjectedFailure"
+            }
+          ],
+          "intentionalDifferences": null
+        },
+        {
+          "operation": "case-insensitive email uniqueness",
+          "sqlite": "verified",
+          "postgres": "verified",
+          "implementation": "normalized storage",
+          "evidence": [
+            {
+              "package": "appauth",
+              "test": "TestEmailUniquenessIsCaseInsensitive",
+              "behavior": "TestEmailUniquenessIsCaseInsensitive"
+            }
+          ],
+          "intentionalDifferences": "emails stored normalized on both"
+        },
+        {
+          "operation": "concurrent logins and independent revocation",
+          "sqlite": "verified",
+          "postgres": "verified",
+          "implementation": "shared-handler",
+          "evidence": [
+            {
+              "package": "appauth",
+              "test": "TestConcurrentLoginsCoexistAndRevokeIndependently",
+              "behavior": "TestConcurrentLoginsCoexistAndRevokeIndependently"
+            },
+            {
+              "package": "appauth",
+              "test": "TestRevocationDuringInFlightRequests",
+              "behavior": "TestRevocationDuringInFlightRequests"
+            }
+          ],
+          "intentionalDifferences": null
+        },
+        {
+          "operation": "scoped credentials",
+          "sqlite": "verified",
+          "postgres": "verified",
+          "implementation": "shared-handler",
+          "evidence": [
+            {
+              "package": "identities",
+              "test": "TestCreateOnceScopeExpiryRevocation",
+              "behavior": "TestCreateOnceScopeExpiryRevocation"
+            },
+            {
+              "package": "identities",
+              "test": "TestRejectsUnknownScopesAndExpiredCreation",
+              "behavior": "TestRejectsUnknownScopesAndExpiredCreation"
+            }
+          ],
+          "intentionalDifferences": null
+        },
+        {
+          "operation": "access rules and non-leaking denial",
+          "sqlite": "verified",
+          "postgres": "verified",
+          "implementation": "shared-handler, rule compiler",
+          "evidence": [
+            {
+              "package": "rules",
+              "test": "TestRulesStorageAndSimulation",
+              "behavior": "rules storage and simulation on both providers"
+            }
+          ],
+          "intentionalDifferences": null
+        }
       ]
     },
     {
       "area": "files",
       "name": "Files and quota behavior",
       "operations": [
-        {"operation": "upload/download/delete", "sqlite": "verified", "postgres": "verified", "implementation": "shared-handler, provider-independent bytes", "evidence": ["TestUploadGeneratedPathRangeAndDelete", "TestDownloadRejectsSymlinkAndUnknownCaller"], "intentionalDifferences": null},
-        {"operation": "quota and cleanup", "sqlite": "verified", "postgres": "verified", "implementation": "shared-handler", "evidence": ["TestQuotaSymlinkAndCleanup"], "intentionalDifferences": null},
-        {"operation": "durable fail-closed deletion state machine", "sqlite": "verified", "postgres": "verified", "implementation": "shared-handler, migration 14 state", "evidence": ["TestFileDeletionDurableStateMachine", "TestFileDeletionBoundaryFailures", "TestFileDeletionSweepNeverDeletesLiveMetadata", "TestFileDeletionConflictRemainsRecoverable"], "intentionalDifferences": null}
+        {
+          "operation": "upload/download/delete",
+          "sqlite": "verified",
+          "postgres": "verified",
+          "implementation": "shared-handler, provider-independent bytes",
+          "evidence": [
+            {
+              "package": "files",
+              "test": "TestUploadGeneratedPathRangeAndDelete",
+              "behavior": "TestUploadGeneratedPathRangeAndDelete"
+            },
+            {
+              "package": "files",
+              "test": "TestDownloadRejectsSymlinkAndUnknownCaller",
+              "behavior": "TestDownloadRejectsSymlinkAndUnknownCaller"
+            }
+          ],
+          "intentionalDifferences": null
+        },
+        {
+          "operation": "quota and cleanup",
+          "sqlite": "verified",
+          "postgres": "verified",
+          "implementation": "shared-handler",
+          "evidence": [
+            {
+              "package": "files",
+              "test": "TestQuotaSymlinkAndCleanup",
+              "behavior": "TestQuotaSymlinkAndCleanup"
+            }
+          ],
+          "intentionalDifferences": null
+        },
+        {
+          "operation": "durable fail-closed deletion state machine",
+          "sqlite": "verified",
+          "postgres": "verified",
+          "implementation": "shared-handler, migration 14 state",
+          "evidence": [
+            {
+              "package": "files",
+              "test": "TestFileDeletionDurableStateMachine",
+              "behavior": "TestFileDeletionDurableStateMachine"
+            },
+            {
+              "package": "files",
+              "test": "TestFileDeletionBoundaryFailures",
+              "behavior": "TestFileDeletionBoundaryFailures"
+            },
+            {
+              "package": "files",
+              "test": "TestFileDeletionSweepNeverDeletesLiveMetadata",
+              "behavior": "TestFileDeletionSweepNeverDeletesLiveMetadata"
+            },
+            {
+              "package": "files",
+              "test": "TestFileDeletionConflictRemainsRecoverable",
+              "behavior": "TestFileDeletionConflictRemainsRecoverable"
+            }
+          ],
+          "intentionalDifferences": null
+        }
       ]
     },
     {
       "area": "automation",
       "name": "Jobs, events, realtime, webhooks, functions",
       "operations": [
-        {"operation": "durable event sequencing and replay", "sqlite": "verified", "postgres": "verified", "implementation": "shared-handler, provider sequence", "evidence": ["TestEventSequencingAndGapTolerantReplay"], "intentionalDifferences": "PostgreSQL sequences may have numeric gaps; gaps are not missing events"},
-        {"operation": "authorized event visibility", "sqlite": "verified", "postgres": "verified", "implementation": "shared-handler", "evidence": ["TestAuthorizedEventVisibility"], "intentionalDifferences": null},
-        {"operation": "job claiming and expiry", "sqlite": "verified", "postgres": "verified", "implementation": "provider-specific claim", "evidence": ["TestConcurrentClaimsExecuteEachJobOnce", "TestExpiredLeaseRecoversAfterRestart", "TestRolledBackTransactionDoesNotPublishJob"], "intentionalDifferences": "PostgreSQL FOR UPDATE SKIP LOCKED; SQLite serialized claim"},
-        {"operation": "webhook and function targets", "sqlite": "verified", "postgres": "verified", "implementation": "shared-handler, dialect-owned booleans", "evidence": ["TestJobsEndpointListsFullFieldsAndFilters"], "intentionalDifferences": "enabled booleans bound/decoded through the dialect on both"}
+        {
+          "operation": "durable event sequencing and replay",
+          "sqlite": "verified",
+          "postgres": "verified",
+          "implementation": "shared-handler, provider sequence",
+          "evidence": [
+            {
+              "package": "events",
+              "test": "TestEventSequencingAndGapTolerantReplay",
+              "behavior": "TestEventSequencingAndGapTolerantReplay"
+            }
+          ],
+          "intentionalDifferences": "PostgreSQL sequences may have numeric gaps; gaps are not missing events"
+        },
+        {
+          "operation": "authorized event visibility",
+          "sqlite": "verified",
+          "postgres": "verified",
+          "implementation": "shared-handler",
+          "evidence": [
+            {
+              "package": "events",
+              "test": "TestAuthorizedEventVisibility",
+              "behavior": "TestAuthorizedEventVisibility"
+            }
+          ],
+          "intentionalDifferences": null
+        },
+        {
+          "operation": "job claiming and expiry",
+          "sqlite": "verified",
+          "postgres": "verified",
+          "implementation": "provider-specific claim",
+          "evidence": [
+            {
+              "package": "jobs",
+              "test": "TestConcurrentClaimsExecuteEachJobOnce",
+              "behavior": "TestConcurrentClaimsExecuteEachJobOnce"
+            },
+            {
+              "package": "jobs",
+              "test": "TestExpiredLeaseRecoversAfterRestart",
+              "behavior": "TestExpiredLeaseRecoversAfterRestart"
+            },
+            {
+              "package": "jobs",
+              "test": "TestRolledBackTransactionDoesNotPublishJob",
+              "behavior": "TestRolledBackTransactionDoesNotPublishJob"
+            }
+          ],
+          "intentionalDifferences": "PostgreSQL FOR UPDATE SKIP LOCKED; SQLite serialized claim"
+        },
+        {
+          "operation": "webhook and function targets",
+          "sqlite": "verified",
+          "postgres": "verified",
+          "implementation": "shared-handler, dialect-owned booleans",
+          "evidence": [
+            {
+              "package": "authaudit",
+              "test": "TestWebhookFunctionTargetLifecycle",
+              "behavior": "TestWebhookFunctionTargetLifecycle"
+            }
+          ],
+          "intentionalDifferences": "enabled booleans bound/decoded through the dialect on both"
+        }
       ]
     },
     {
       "area": "backup-restore",
       "name": "Backup, export, import, restore, migration",
       "operations": [
-        {"operation": "portable round trips across providers", "sqlite": "verified", "postgres": "verified", "implementation": "provider-neutral portable archive", "evidence": ["TestPortableRoundTripAcrossProviders"], "intentionalDifferences": null},
-        {"operation": "snapshot consistency under writes", "sqlite": "verified", "postgres": "verified", "implementation": "repeatable-read snapshot", "evidence": ["TestExportSnapshotConsistency"], "intentionalDifferences": "PostgreSQL REPEATABLE READ READ ONLY; SQLite shared lock"},
-        {"operation": "restore policy (sessions/secrets)", "sqlite": "verified", "postgres": "verified", "implementation": "shared restore policy", "evidence": ["TestRestorePolicyRevokesSessionsAndIntegrationSecrets"], "intentionalDifferences": null},
-        {"operation": "hostile archive preflight and empty destination", "sqlite": "verified", "postgres": "verified", "implementation": "shared preflight", "evidence": ["TestPostgresRestorePreflightsHostileArchives", "TestPostgresRestoreRequiresEmptyInitializedDestination"], "intentionalDifferences": null},
-        {"operation": "concurrent import single-winner", "sqlite": "verified", "postgres": "verified", "implementation": "shared import, transactional", "evidence": ["TestConcurrentImportSingleWinner"], "intentionalDifferences": null},
-        {"operation": "offline cross-provider migration", "sqlite": "verified", "postgres": "verified", "implementation": "portable-format migration", "evidence": ["TestRestoreLogicalArchive", "TestRestorePortableArchiveToPostgres"], "intentionalDifferences": null}
+        {
+          "operation": "portable round trips across providers",
+          "sqlite": "verified",
+          "postgres": "verified",
+          "implementation": "provider-neutral portable archive",
+          "evidence": [
+            {
+              "package": "backup",
+              "test": "TestPortableRoundTripAcrossProviders",
+              "behavior": "TestPortableRoundTripAcrossProviders"
+            }
+          ],
+          "intentionalDifferences": null
+        },
+        {
+          "operation": "snapshot consistency under writes",
+          "sqlite": "verified",
+          "postgres": "verified",
+          "implementation": "repeatable-read snapshot",
+          "evidence": [
+            {
+              "package": "backup",
+              "test": "TestExportSnapshotConsistency",
+              "behavior": "TestExportSnapshotConsistency"
+            }
+          ],
+          "intentionalDifferences": "PostgreSQL REPEATABLE READ READ ONLY; SQLite shared lock"
+        },
+        {
+          "operation": "restore policy (sessions/secrets)",
+          "sqlite": "verified",
+          "postgres": "verified",
+          "implementation": "shared restore policy",
+          "evidence": [
+            {
+              "package": "backup",
+              "test": "TestRestorePolicyRevokesSessionsAndIntegrationSecrets",
+              "behavior": "TestRestorePolicyRevokesSessionsAndIntegrationSecrets"
+            }
+          ],
+          "intentionalDifferences": null
+        },
+        {
+          "operation": "hostile archive preflight and empty destination",
+          "sqlite": "unverified",
+          "postgres": "verified",
+          "implementation": "shared preflight",
+          "evidence": [
+            {
+              "package": "backup",
+              "test": "TestPostgresRestorePreflightsHostileArchives",
+              "behavior": "hostile-archive preflight (postgres)"
+            },
+            {
+              "package": "backup",
+              "test": "TestPostgresRestoreRequiresEmptyInitializedDestination",
+              "behavior": "empty-initialized-destination restore (postgres)"
+            }
+          ],
+          "intentionalDifferences": "hostile-archive preflight tests are PostgreSQL-specific; SQLite hostile-archive restore is not directly exercised"
+        },
+        {
+          "operation": "concurrent import single-winner",
+          "sqlite": "verified",
+          "postgres": "verified",
+          "implementation": "shared import, transactional",
+          "evidence": [
+            {
+              "package": "backup",
+              "test": "TestConcurrentImportSingleWinner",
+              "behavior": "TestConcurrentImportSingleWinner"
+            }
+          ],
+          "intentionalDifferences": null
+        },
+        {
+          "operation": "offline cross-provider migration",
+          "sqlite": "verified",
+          "postgres": "verified",
+          "implementation": "portable-format migration",
+          "evidence": [
+            {
+              "package": "backup",
+              "test": "TestRestoreLogicalArchive",
+              "behavior": "TestRestoreLogicalArchive"
+            },
+            {
+              "package": "backup",
+              "test": "TestCrossProviderMigrationRoundTrip",
+              "behavior": "TestCrossProviderMigrationRoundTrip"
+            }
+          ],
+          "intentionalDifferences": null
+        }
       ]
     },
     {
       "area": "audit-diagnostics",
       "name": "Audit and diagnostic endpoints",
       "operations": [
-        {"operation": "audit facts, filter, redaction and counts", "sqlite": "verified", "postgres": "verified", "implementation": "shared-handler", "evidence": ["TestAuditFactsFilterRedactionAndCounts"], "intentionalDifferences": null},
-        {"operation": "provider diagnostics", "sqlite": "verified", "postgres": "verified", "implementation": "provider-specific diagnostics", "evidence": ["TestProviderDiagnosticsDoNotExposeConnectionMaterial", "TestPostgresDiagnosticsAppliedVersion"], "intentionalDifferences": "provider, schema version, pool bound; never the DSN"},
-        {"operation": "schema reports on both providers", "sqlite": "verified", "postgres": "verified", "implementation": "shared-handler", "evidence": ["TestSchemaReportsFieldFlagsOnBothProviders"], "intentionalDifferences": null}
+        {
+          "operation": "audit facts, filter, redaction and counts",
+          "sqlite": "verified",
+          "postgres": "verified",
+          "implementation": "shared-handler",
+          "evidence": [
+            {
+              "package": "audit",
+              "test": "TestAuditFactsFilterRedactionAndCounts",
+              "behavior": "TestAuditFactsFilterRedactionAndCounts"
+            }
+          ],
+          "intentionalDifferences": null
+        },
+        {
+          "operation": "provider diagnostics",
+          "sqlite": "verified",
+          "postgres": "verified",
+          "implementation": "provider-specific diagnostics",
+          "evidence": [
+            {
+              "package": "store",
+              "test": "TestProviderDiagnosticsDoNotExposeConnectionMaterial",
+              "behavior": "TestProviderDiagnosticsDoNotExposeConnectionMaterial"
+            }
+          ],
+          "intentionalDifferences": "provider, schema version, pool bound; never the DSN"
+        },
+        {
+          "operation": "schema reports on both providers",
+          "sqlite": "verified",
+          "postgres": "verified",
+          "implementation": "shared-handler",
+          "evidence": [
+            {
+              "package": "apidocs",
+              "test": "TestSchemaReportsFieldFlagsOnBothProviders",
+              "behavior": "TestSchemaReportsFieldFlagsOnBothProviders"
+            }
+          ],
+          "intentionalDifferences": null
+        }
       ]
     },
     {
       "area": "migration-integrity",
       "name": "Schema and migration integrity",
       "operations": [
-        {"operation": "upgrade from every retained schema version", "sqlite": "verified", "postgres": "verified", "implementation": "provider DDL + shared history", "evidence": ["TestUpgradeFromEveryRetainedSchemaVersionProvider"], "intentionalDifferences": "provider-specific DDL, one logical version order"},
-        {"operation": "bootstrap schema integrity", "sqlite": "verified", "postgres": "verified", "implementation": "provider DDL", "evidence": ["TestBootstrapSchemaIntegrity"], "intentionalDifferences": "native types/constraints vs STRICT tables"},
-        {"operation": "fail-closed migration errors", "sqlite": "verified", "postgres": "verified", "implementation": "shared history validation", "evidence": ["TestMigrationFailuresCarryRecoveryInstructions"], "intentionalDifferences": null}
+        {
+          "operation": "upgrade from every retained schema version",
+          "sqlite": "verified",
+          "postgres": "verified",
+          "implementation": "provider DDL + shared history",
+          "evidence": [
+            {
+              "package": "store",
+              "test": "TestUpgradeFromEveryRetainedSchemaVersionProvider",
+              "behavior": "TestUpgradeFromEveryRetainedSchemaVersionProvider"
+            }
+          ],
+          "intentionalDifferences": "provider-specific DDL, one logical version order"
+        },
+        {
+          "operation": "bootstrap schema integrity",
+          "sqlite": "verified",
+          "postgres": "verified",
+          "implementation": "provider DDL",
+          "evidence": [
+            {
+              "package": "store",
+              "test": "TestBootstrapSchemaIntegrity",
+              "behavior": "TestBootstrapSchemaIntegrity"
+            }
+          ],
+          "intentionalDifferences": "native types/constraints vs STRICT tables"
+        },
+        {
+          "operation": "fail-closed migration errors",
+          "sqlite": "verified",
+          "postgres": "verified",
+          "implementation": "shared history validation",
+          "evidence": [
+            {
+              "package": "store",
+              "test": "TestMigrationFailuresCarryRecoveryInstructions",
+              "behavior": "TestMigrationFailuresCarryRecoveryInstructions"
+            }
+          ],
+          "intentionalDifferences": null
+        }
       ]
     },
     {
       "area": "errors",
       "name": "Error codes and structured envelopes",
       "operations": [
-        {"operation": "structured error envelopes", "sqlite": "verified", "postgres": "verified", "implementation": "shared envelope", "evidence": ["TestQueryErrorMapping", "TestJobsEndpointQueryFailureIsStructured"], "intentionalDifferences": null},
-        {"operation": "constraint error mapping", "sqlite": "verified", "postgres": "verified", "implementation": "dialect-owned classifier", "evidence": ["TestQueryErrorMapping", "TestIncompatibleSchemaChangePreservesMetadataAndRows"], "intentionalDifferences": "SQLSTATE (23505/23503/23514) vs SQLite constraint messages"}
+        {
+          "operation": "structured error envelopes",
+          "sqlite": "verified",
+          "postgres": "verified",
+          "implementation": "shared envelope",
+          "evidence": [
+            {
+              "package": "records",
+              "test": "TestQueryErrorMapping",
+              "behavior": "TestQueryErrorMapping"
+            },
+            {
+              "package": "jobs",
+              "test": "TestJobsEndpointQueryFailureIsStructured",
+              "behavior": "TestJobsEndpointQueryFailureIsStructured"
+            }
+          ],
+          "intentionalDifferences": null
+        },
+        {
+          "operation": "constraint error mapping",
+          "sqlite": "verified",
+          "postgres": "verified",
+          "implementation": "dialect-owned classifier",
+          "evidence": [
+            {
+              "package": "records",
+              "test": "TestQueryErrorMapping",
+              "behavior": "TestQueryErrorMapping"
+            },
+            {
+              "package": "collections",
+              "test": "TestIncompatibleSchemaChangePreservesMetadataAndRows",
+              "behavior": "TestIncompatibleSchemaChangePreservesMetadataAndRows"
+            }
+          ],
+          "intentionalDifferences": "SQLSTATE (23505/23503/23514) vs SQLite constraint messages"
+        }
       ]
     }
   ],
   "unverifiedOrProviderSpecific": [
-    {"operation": "S3 object storage", "sqlite": "unsupported", "postgres": "n/a", "implementation": "provider-specific storage", "evidence": [], "intentionalDifferences": "storage backend is independent of the database provider"},
-    {"operation": "managed/serverless PostgreSQL topologies", "sqlite": "n/a", "postgres": "unsupported", "implementation": "n/a", "evidence": [], "intentionalDifferences": "documented limitation: single-process ownership model"},
-    {"operation": "multi-process Trestle clustering", "sqlite": "unsupported", "postgres": "unsupported", "implementation": "n/a", "evidence": [], "intentionalDifferences": "not supported on either provider"}
-  ]
+    {
+      "operation": "S3 object storage",
+      "sqlite": "unsupported",
+      "postgres": "n/a",
+      "implementation": "provider-specific storage",
+      "evidence": [],
+      "intentionalDifferences": "storage backend is independent of the database provider"
+    },
+    {
+      "operation": "managed/serverless PostgreSQL topologies",
+      "sqlite": "n/a",
+      "postgres": "unsupported",
+      "implementation": "n/a",
+      "evidence": [],
+      "intentionalDifferences": "documented limitation: single-process ownership model"
+    },
+    {
+      "operation": "multi-process Trestle clustering",
+      "sqlite": "unsupported",
+      "postgres": "unsupported",
+      "implementation": "n/a",
+      "evidence": [],
+      "intentionalDifferences": "not supported on either provider"
+    }
+  ],
+  "evidenceFormat": "each evidence entry names the package, the exact test function, and the behavior it covers; the cross-check validates the exact function via Go AST"
 }
