@@ -26,10 +26,13 @@ jobs:
           node scripts/check-web.mjs internal/web/public
       - name: Package six targets
         run: ./scripts/package-release.sh "${GITHUB_REF_NAME#v}" dist
+      - name: Write release notes
+        run: sed "s/{{VERSION}}/${GITHUB_REF_NAME#v}/" docs/release-notes-template.md > release-body.md
       - uses: actions/attest-build-provenance@v2
         with:
           subject-path: 'dist/*'
       - uses: softprops/action-gh-release@v2
         with:
           files: dist/*
+          body_path: release-body.md
           generate_release_notes: true

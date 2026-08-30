@@ -2278,6 +2278,43 @@ Findings repaired: nil-pointer panic in TestWrongCredentialsRejected under
   password authentication (test-scoping bug; product Probe behaviour was correct)
 ```
 
+## Release-readiness review (v0.1.0, no tag created)
+
+Readiness review performed without creating the tag, publishing assets,
+altering DNS or announcing anything. Findings and repairs:
+
+- Asset contract verified end-to-end: `package-release.sh 0.1.0` produces all
+  six platform archives plus `SHA256SUMS` (one line per archive: 64 lowercase
+  hex, two spaces, exact filename), matching what `install.sh`, `download.sh`
+  and `update.sh` require; the release workflow uploads `dist/*` under the tag
+  path and creates a normal (non-draft, non-prerelease) release, so
+  `/releases/latest` will select v0.1.0.
+- Local staged simulation with the exact packaged assets: `download.sh`
+  (latest and `--version v0.1.0`), `install.sh` and `update.sh` (with rollback)
+  all succeeded against `file://` staging; the downloaded binary reports
+  version 0.1.0.
+- Website honesty confirmed: the site consistently states no stable release is
+  published yet and labels Trestle a release candidate.
+- Gaps repaired (application repository, commits not pushed): the release
+  workflow previously published auto-generated notes only. Added
+  `docs/release-notes-template.md` (preview status, supported PostgreSQL 16-18,
+  SQLite/PostgreSQL boundaries, TLS/operator responsibilities,
+  backup-before-upgrade, known limitations, verified installation) wired into
+  `release.yml` as the release body via `body_path` (with `{{VERSION}}`
+  substitution), and `docs/release-runbook.md` documenting the exact
+  human-controlled sequence: preconditions, tag, Actions completion, asset
+  inspection, hosted-script byte-compare, real-URL smoke, rollback and stop
+  conditions.
+
+```text
+Status: go/no-go prepared; v0.1.0 NOT tagged or published
+Repair commits: local only (not pushed)
+Verified: asset-name contract, six archives + SHA256SUMS format, latest
+  resolution semantics, staged simulation of all three scripts, website honesty
+Gaps repaired: release-notes body; human-controlled release runbook
+Remaining: tag + publication require a separate explicit review
+```
+
 ## Checkpoint roadmap
 
 - CP1 - PostgreSQL contract and baseline (this checkpoint)
