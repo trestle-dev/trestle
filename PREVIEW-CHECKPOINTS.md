@@ -2390,13 +2390,13 @@ unsupported rather than presented as reproducible.
 
 ### R6 - Corrected authoritative roadmap heads
 
-The status table now uses verified commit IDs: CP1 `04b6647`, CP2 `4c7534f`,
-CP3 `de37183`, CP4 `c8df51a`, CP12R5 `3e81aeb`, CP15 packaging `b8d029e` and
-complete local state `0291eb6`, CP16 accepted `e7a4972` / remote `509be7b`,
-CP19 website source `d9921ba` / output `4af2e41`, CP21 local state `0291eb6`.
-Every head column distinguishes accepted remote, local unpushed, historical
-section evidence, or inheritance from the original programme. CP15 no longer
-points at the pre-reproducibility commit `5f51043`.
+The status table now records immutable evidence commits only: CP1 `04b6647`,
+CP2 `4c7534f`, CP3 `de37183`, CP4 `c8df51a`, CP12R5 `3e81aeb`, CP15 packaging
+`b8d029e` (+ `a812642`, `c698682`), CP16 accepted `e7a4972` / remote `509be7b`,
+CP19 website source `d9921ba` / output `4af2e41`, CP21 preparation `5f51043`,
+`42a8c08`, `0291eb6`. Per the table model (R9), no row labels any commit as
+the "current" head; exact current local/remote heads are reported in the
+external handover at review time.
 
 ### R7 - Pin the privileged release workflow actions
 
@@ -2410,11 +2410,41 @@ publish (contents write only), so no job holds more than it needs.
 `scripts/test-release-contract.sh` records the pinned SHAs and fails on any
 mutable action tag or unexpected SHA.
 
+### R8 - Preserve contents: read in the attestation job
+
+The attestation job previously overrode permissions with only
+`id-token: write` and `attestations: write`, which drops the workflow-level
+`contents: read` (job-level permissions do not inherit unspecified values).
+The documented build-provenance contract requires
+`contents: read`, `id-token: write` and `attestations: write`. The job now sets
+exactly those three, and `test-release-contract.sh` requires exactly that set
+and rejects any additional write permission. The build job stays
+`contents: read`; the publish job stays limited to `contents: write`.
+
+### R9 - Stop embedding a moving current head in the roadmap
+
+The table's evidence column previously labelled earlier commits as the
+"current local unpushed head", which went stale within the same commit series.
+The model now records only immutable implementation/acceptance commits and
+never names a "current" head; the repository state containing the ledger is
+described as "this ledger commit and its ancestors", and the exact current
+local/remote heads are reported in the external handover report at review time.
+CP15 evidence: `b8d029e` (deterministic packaging), `a812642` (supported
+environment constraint, scoped claim), `c698682` (pinned and separated release
+workflow). CP21 preparation evidence: `5f51043` (release notes and runbook),
+`42a8c08` (release-contract validation), `0291eb6` (rollback and tag-binding
+corrections), plus this ledger's later repair sections. The R6 note and all
+rows were audited for the same mistake.
+
+### Hygiene
+
+`scripts/package-release.sh` now has a terminating newline.
+
 ```text
 Status: repaired locally; not pushed, tagged, published or announced
-Verified: GNU/Linux-only two-build byte-identical packaging; release-contract
-  regression (pinned actions, job permissions); staged script paths;
-  roadmap heads cross-checked with git rev-parse
+Verified: release-contract regression (attestation permission set);
+  workflow YAML; reproducibility; test-release.sh; parity; GNU-tar fail-closed;
+  roadmap commit-resolution audit
 Remaining: tag and publication require a separate explicit review
 ```
 
@@ -2425,7 +2455,14 @@ the earlier roadmap. Scopes that were previously double-counted or mislabelled
 are corrected here; the original programme numbering (CHECKPOINTS.md CP00-CP23)
 is a separate completed series and is not re-counted.
 
-| Checkpoint | Canonical scope | Status | Accepted / local head | Remaining evidence |
+Model: the "evidence" column records only immutable implementation or
+acceptance commits - never a "current local head", because a committed document
+cannot reliably contain its own ever-changing future head. The exact current
+local and remote heads are reported in the external handover report at review
+time, not embedded here; the repository state containing this ledger is simply
+"this ledger commit and its ancestors".
+
+| Checkpoint | Canonical scope | Status | Evidence (immutable commits) | Remaining evidence |
 | --- | --- | --- | --- | --- |
 | CP1 | PostgreSQL contract and baseline | Complete, accepted | `04b6647` (historical commit) | none |
 | CP2 | First-run PostgreSQL setup (ordinary-user) | Complete, accepted | `4c7534f` (historical commit) | none |
@@ -2441,11 +2478,11 @@ is a separate completed series and is not re-counted.
 | CP12 | Degraded-state and operator UX (canonical scope corrected; the old roadmap title "import/export/deletion/upgrade compatibility" was not what CP12 delivered) | Complete, accepted | through CP12R5 `3e81aeb` | none |
 | CP13 | Degraded-state and accessibility UX (old roadmap overlap with CP12) | Delivered within CP12; no separate preview checkpoint (reconciled, not double-counted) | n/a | none |
 | CP14 | Independent example-application dogfood | Covered by the original programme (CHECKPOINTS.md CP21, DOGFOOD.md); not re-run in the preview ledger | n/a (inherited from the original programme) | none for preview scope |
-| CP15 | Reproducible release artifacts | Complete (deterministic packaging + two-build regression); current local unpushed head `0291eb6`, packaging implementation `b8d029e` | `b8d029e` / local head `0291eb6` (local, unpushed) | run the reproducible regression in CI |
+| CP15 | Reproducible release artifacts | Complete (deterministic packaging + two-build regression) | `b8d029e` (deterministic packaging), `a812642` (supported-environment constraint, scoped claim), `c698682` (pinned and separated release workflow) | run the reproducible regression in CI |
 | CP16 | Verified download/install/update and checksum public scripts (canonical scope corrected; uninstall not implemented) | Complete, accepted | accepted `e7a4972`; remote `main` `509be7b` (incl. CI repair) | uninstall path deliberately out of scope |
 | CP17 | Container and service deployment | Deployment guidance from the original programme (CHECKPOINTS.md CP22, service/system docs); no official container image (documented) | n/a (inherited from the original programme) | container image remains a documented limitation |
 | CP18 | Domain, HTTPS and reverse-proxy deployment | CNAME and live config recorded; live DNS/HTTPS not executed (explicitly deferred) | n/a | live deployment and verification pending |
 | CP19 | Public-preview documentation and positioning | Website documentation complete; preview-status honesty maintained | website source `d9921ba` (accepted remote); generated output `4af2e41` (accepted remote) | final positioning review |
 | CP20 | Launch assets and publication draft | LAUNCH.md draft exists; not published | n/a | publication draft review |
-| CP21 | Clean-machine release rehearsal | Release-readiness prep complete (staged asset simulation + human runbook); complete local release-readiness state | `0291eb6` (local, unpushed) | actual clean-machine rehearsal requires tag authorization |
+| CP21 | Clean-machine release rehearsal | Release-readiness prep complete (staged asset simulation + human runbook) | `5f51043` (release notes and runbook), `42a8c08` (release-contract validation), `0291eb6` (rollback and tag-binding corrections), plus this ledger's later repair sections | actual clean-machine rehearsal requires tag authorization |
 | CP22 | Publish/no-publish review | Not done | n/a | requires explicit human review |
