@@ -1044,6 +1044,63 @@ Known limits: in-flight requests may complete on either side of the committed
   revocation; only the guaranteed post-logout rejection is asserted
 ```
 
+
+## CP9 - SQLite/PostgreSQL parity matrix
+
+Status: complete
+
+Built a durable, machine-readable parity inventory covering every supported
+public and administrative API operation area. Parity is never marked from
+shared handler source alone: a row is verified only when it names
+provider-parameterized tests that run on SQLite always and on real PostgreSQL
+when configured.
+
+### Application
+
+- Add `docs/postgres/parity-matrix.json`: a machine-readable inventory with
+  statuses (verified / providerSpecific / unsupported / unverified), the
+  implementation kind (shared handler vs provider-specific), provider-
+  parameterized test evidence, and documented intentional differences across:
+  collection schema creation/alteration/deletion and every field type and
+  constraint; record CRUD and optimistic concurrency; filtering, sorting,
+  nulls, pagination and cursor stability; batches and idempotency; users,
+  credentials and access rules; files and quota; jobs, events and realtime;
+  webhooks and functions; backup/export/import/restore/migration; audit and
+  diagnostics; error codes and structured envelopes. Unsupported or deferred
+  rows are listed explicitly (S3 storage is storage-provider-specific, managed/
+  serverless PostgreSQL and multi-process clustering are unsupported).
+- Add `TestParityMatrixEvidenceCrossCheck`: validates the inventory (name,
+  version, statuses) and proves every verified row names at least one test that
+  exists and whose file is provider-parameterized (iterates `storetest.Providers`
+  or is gated on real PostgreSQL via `postgresTestURL`/`ownedURL`), so parity
+  rows are always backed by executable evidence.
+- Parameterize `TestProviderDiagnosticsDoNotExposeConnectionMaterial` across
+  SQLite and real PostgreSQL so the diagnostics parity row has dual-provider
+  evidence.
+
+### Public website and handover
+
+- Database support page notes the machine-readable parity matrix and the rule
+  that verified parity requires provider-parameterized test evidence.
+
+### Exit evidence
+
+- Parity cross-check passes; the full provider-parameterized suite (the
+  executable gate) is green on SQLite and real PostgreSQL 18.6.
+
+Completion record:
+
+```text
+Status: complete
+Application commit: recorded by this commit
+Website output commit: recorded by this commit
+Website source commit: recorded by this commit
+Verified: TestParityMatrixEvidenceCrossCheck; full suite on both providers
+Findings repaired: provider diagnostics evidence was SQLite-only; now dual-provider
+Known limits: rows marked unsupported/unverified are explicit; the matrix is
+  evidence-linked, not a claim of engine-internal identity
+```
+
 ## Checkpoint roadmap
 
 - CP1 - PostgreSQL contract and baseline (this checkpoint)

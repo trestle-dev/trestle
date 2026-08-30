@@ -2,19 +2,42 @@ package store
 
 import (
 	"context"
+	"database/sql"
+	"os"
 	"strings"
 	"testing"
+	"time"
+
+	_ "github.com/lib/pq"
 )
 
 func TestProviderDiagnosticsDoNotExposeConnectionMaterial(t *testing.T) {
-	s, err := Open(context.Background(), t.TempDir())
+	// SQLite leg.
+	sqlite, err := Open(context.Background(), t.TempDir())
 	if err != nil {
 		t.Fatal(err)
 	}
-	defer s.Close()
-	d := s.Diagnostics()
-	if d.Provider != SQLite || d.SchemaVersion != CurrentVersion || d.MaxOpen != 1 {
-		t.Fatalf("unexpected diagnostics: %#v", d)
+	defer sqlite.Close()
+	if d := sqlite.Diagnostics(); d.Provider != SQLite || d.SchemaVersion != CurrentVersion || d.MaxOpen != 1 {
+		t.Fatalf("sqlite diagnostics: %#v", d)
+	}
+	// Real PostgreSQL leg (skips without TRESTLE_TEST_POSTGRES_URL).
+	if os.Getenv("TRESTLE_TEST_POSTGRES_URL") != "" {
+		url := ownedURL(t)
+		raw, openErr := sql.Open("postgres", url)
+		if openErr != nil {
+			t.Fatal(openErr)
+		}
+		resetPostgres(t, raw)
+		raw.Close()
+		pg, openErr := OpenWith(context.Background(), Options{DataDir: t.TempDir(), Provider: Postgres, URL: url, MaxOpen: 8, MaxIdle: 2, ConnectTimeout: 5 * time.Second})
+		if openErr != nil {
+			t.Fatal(openErr)
+		}
+		defer pg.Close()
+		if d := pg.Diagnostics(); d.Provider != Postgres || d.SchemaVersion != CurrentVersion || d.MaxOpen != 8 {
+			t.Fatalf("postgres diagnostics: %#v", d)
+		}
 	}
 }
 
