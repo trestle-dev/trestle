@@ -111,14 +111,29 @@ func TestMigrationLineageFrozen(t *testing.T) {
 // appendOnlyUpdate validates an existing manifest against the compiled
 // migrations and returns it with entries appended only for versions after the
 // existing finalVersion. It refuses to write anything when a retained version,
-// name or digest differs, or when the manifest is truncated, gapped, reordered
-// or already ahead of the compiled version.
+// name or digest differs, when the manifest is truncated, gapped, reordered,
+// inconsistent or already ahead of the compiled version, or when the manifest
+// metadata (lineage version, normalization contract) is unsupported. The
+// manifest metadata is validated before the no-op branch, and a no-op is only
+// possible for a complete, internally consistent manifest.
 func appendOnlyUpdate(existing MigrationLineageManifest, current []migration, pg map[int]string, currentVersion int) (MigrationLineageManifest, error) {
 	if existing.LineageName != "trestle-migration-lineage" {
 		return existing, errors.New("manifest is not the trestle migration lineage")
 	}
+	if existing.LineageVersion != 1 {
+		return existing, fmt.Errorf("unsupported manifest lineage version %d", existing.LineageVersion)
+	}
+	if existing.Normalization != migrationLineageNormalization {
+		return existing, errors.New("manifest normalization contract changed")
+	}
+	if len(existing.Migrations) != existing.FinalVersion {
+		return existing, fmt.Errorf("manifest has %d migrations but finalVersion %d (truncated or inconsistent)", len(existing.Migrations), existing.FinalVersion)
+	}
 	if len(existing.Migrations) > len(current) {
 		return existing, fmt.Errorf("manifest has %d migrations, compiled has %d (truncation of compiled history)", len(existing.Migrations), len(current))
+	}
+	if len(existing.Migrations) > 0 && existing.Migrations[existing.FinalVersion-1].Version != existing.FinalVersion {
+		return existing, fmt.Errorf("manifest finalVersion %d does not match its last entry version %d", existing.FinalVersion, existing.Migrations[existing.FinalVersion-1].Version)
 	}
 	for i, entry := range existing.Migrations {
 		wantVersion := i + 1
@@ -141,13 +156,10 @@ func appendOnlyUpdate(existing MigrationLineageManifest, current []migration, pg
 		}
 	}
 	if existing.FinalVersion == currentVersion {
-		return existing, nil // no new migration: no-op
+		return existing, nil // genuine no-op only after full metadata and entry validation
 	}
 	if existing.FinalVersion > currentVersion {
 		return existing, fmt.Errorf("manifest finalVersion %d is ahead of compiled CurrentVersion %d", existing.FinalVersion, currentVersion)
-	}
-	if last := existing.Migrations[len(existing.Migrations)-1].Version; last != existing.FinalVersion {
-		return existing, fmt.Errorf("manifest finalVersion %d does not match its last entry %d", existing.FinalVersion, last)
 	}
 	for v := existing.FinalVersion + 1; v <= currentVersion; v++ {
 		pgDDL := pg[v]
@@ -306,4 +318,143 @@ func TestAppendOnlyUpdateRefusesHistoricalChanges(t *testing.T) {
 			t.Fatal("no-op run changed an existing entry")
 		}
 	}
+}
+
+// TestAppendOnlyUpdateManifestEdgeCases closes the truncated-manifest edge
+// case: the updater must validate manifest metadata and internal consistency
+// before the no-op branch, refuse inconsistent manifests, and handle the empty
+// manifest without indexing past it.
+func TestAppendOnlyUpdateManifestEdgeCases(t *testing.T) {
+	mkMig := func(version int, name, sql string) migration {
+		return migration{version: version, name: name, sql: sql}
+	}
+	current := []migration{
+		mkMig(1, "alpha", "CREATE TABLE alpha"),
+		mkMig(2, "beta", "CREATE TABLE beta"),
+		mkMig(3, "gamma", "CREATE TABLE gamma"),
+	}
+	pg := map[int]string{1: "CREATE TABLE alpha", 2: "CREATE TABLE beta", 3: "CREATE TABLE gamma"}
+	entry := func(version int, name string) struct {
+		Version        int    `json:"version"`
+		Name           string `json:"name"`
+		SQLiteSHA256   string `json:"sqliteSha256"`
+		PostgresSHA256 string `json:"postgresSha256"`
+	} {
+		return struct {
+			Version        int    `json:"version"`
+			Name           string `json:"name"`
+			SQLiteSHA256   string `json:"sqliteSha256"`
+			PostgresSHA256 string `json:"postgresSha256"`
+		}{Version: version, Name: name, SQLiteSHA256: sha256Hex(normalizeDDL(current[version-1].sql)), PostgresSHA256: sha256Hex(normalizeDDL(pg[version]))}
+	}
+	build := func(entries []struct {
+		Version        int    `json:"version"`
+		Name           string `json:"name"`
+		SQLiteSHA256   string `json:"sqliteSha256"`
+		PostgresSHA256 string `json:"postgresSha256"`
+	}, finalVersion int) MigrationLineageManifest {
+		return MigrationLineageManifest{
+			LineageName:    "trestle-migration-lineage",
+			LineageVersion: 1,
+			Normalization:  migrationLineageNormalization,
+			FinalVersion:   finalVersion,
+			Migrations:     entries,
+		}
+	}
+
+	t.Run("missing final entry with finalVersion==CurrentVersion is not a no-op", func(t *testing.T) {
+		m := build([]struct {
+			Version        int    `json:"version"`
+			Name           string `json:"name"`
+			SQLiteSHA256   string `json:"sqliteSha256"`
+			PostgresSHA256 string `json:"postgresSha256"`
+		}{entry(1, "alpha"), entry(2, "beta")}, 3)
+		if _, err := appendOnlyUpdate(m, current, pg, 3); err == nil || !strings.Contains(err.Error(), "truncated or inconsistent") {
+			t.Fatalf("err=%v, want truncated-manifest refusal", err)
+		}
+	})
+
+	t.Run("finalVersion below the last entry", func(t *testing.T) {
+		m := build([]struct {
+			Version        int    `json:"version"`
+			Name           string `json:"name"`
+			SQLiteSHA256   string `json:"sqliteSha256"`
+			PostgresSHA256 string `json:"postgresSha256"`
+		}{entry(1, "alpha"), entry(2, "beta"), entry(3, "gamma")}, 2)
+		if _, err := appendOnlyUpdate(m, current, pg, 3); err == nil || !strings.Contains(err.Error(), "truncated or inconsistent") {
+			t.Fatalf("err=%v", err)
+		}
+	})
+
+	t.Run("finalVersion above the last entry", func(t *testing.T) {
+		m := build([]struct {
+			Version        int    `json:"version"`
+			Name           string `json:"name"`
+			SQLiteSHA256   string `json:"sqliteSha256"`
+			PostgresSHA256 string `json:"postgresSha256"`
+		}{entry(1, "alpha"), entry(2, "beta"), entry(3, "gamma")}, 4)
+		if _, err := appendOnlyUpdate(m, current, pg, 4); err == nil || !strings.Contains(err.Error(), "truncated or inconsistent") {
+			t.Fatalf("err=%v", err)
+		}
+	})
+
+	t.Run("empty manifest appends from scratch", func(t *testing.T) {
+		m := build(nil, 0)
+		updated, err := appendOnlyUpdate(m, current, pg, 3)
+		if err != nil {
+			t.Fatal(err)
+		}
+		if len(updated.Migrations) != 3 || updated.FinalVersion != 3 {
+			t.Fatalf("empty manifest append produced %d entries finalVersion=%d", len(updated.Migrations), updated.FinalVersion)
+		}
+	})
+
+	t.Run("empty manifest with nonzero finalVersion is refused", func(t *testing.T) {
+		m := build(nil, 3)
+		if _, err := appendOnlyUpdate(m, current, pg, 3); err == nil || !strings.Contains(err.Error(), "truncated or inconsistent") {
+			t.Fatalf("err=%v", err)
+		}
+	})
+
+	t.Run("unsupported lineage version", func(t *testing.T) {
+		m := build([]struct {
+			Version        int    `json:"version"`
+			Name           string `json:"name"`
+			SQLiteSHA256   string `json:"sqliteSha256"`
+			PostgresSHA256 string `json:"postgresSha256"`
+		}{entry(1, "alpha"), entry(2, "beta"), entry(3, "gamma")}, 3)
+		m.LineageVersion = 2
+		if _, err := appendOnlyUpdate(m, current, pg, 3); err == nil || !strings.Contains(err.Error(), "unsupported manifest lineage version") {
+			t.Fatalf("err=%v", err)
+		}
+	})
+
+	t.Run("changed normalization metadata", func(t *testing.T) {
+		m := build([]struct {
+			Version        int    `json:"version"`
+			Name           string `json:"name"`
+			SQLiteSHA256   string `json:"sqliteSha256"`
+			PostgresSHA256 string `json:"postgresSha256"`
+		}{entry(1, "alpha"), entry(2, "beta"), entry(3, "gamma")}, 3)
+		m.Normalization = "different"
+		if _, err := appendOnlyUpdate(m, current, pg, 3); err == nil || !strings.Contains(err.Error(), "normalization contract changed") {
+			t.Fatalf("err=%v", err)
+		}
+	})
+
+	t.Run("genuine no-op with a complete valid manifest", func(t *testing.T) {
+		m := build([]struct {
+			Version        int    `json:"version"`
+			Name           string `json:"name"`
+			SQLiteSHA256   string `json:"sqliteSha256"`
+			PostgresSHA256 string `json:"postgresSha256"`
+		}{entry(1, "alpha"), entry(2, "beta"), entry(3, "gamma")}, 3)
+		updated, err := appendOnlyUpdate(m, current, pg, 3)
+		if err != nil {
+			t.Fatal(err)
+		}
+		if len(updated.Migrations) != 3 || updated.FinalVersion != 3 {
+			t.Fatal("no-op changed the manifest")
+		}
+	})
 }

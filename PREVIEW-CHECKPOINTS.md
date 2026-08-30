@@ -847,6 +847,52 @@ Known limits: webhook delivery to a private/loopback destination is refused by
   numbers are this-machine-only
 ```
 
+
+## CP3R3 - Close the truncated-manifest updater edge case
+
+Status: complete
+
+CP3R2's `appendOnlyUpdate` returned a no-op when
+`existing.FinalVersion == currentVersion` before confirming the manifest was
+internally consistent, so a truncated manifest (fewer entries than
+`finalVersion`) paired with a matching `CurrentVersion` was treated as a no-op.
+This repair validates manifest metadata and internal consistency before the
+no-op branch.
+
+### Application
+
+- `appendOnlyUpdate` now validates, before any no-op: the lineage name and a
+  supported `lineageVersion`; the recorded normalization contract; and
+  `len(Migrations) == FinalVersion` with the last entry's version equal to
+  `FinalVersion` (guarded so an empty manifest never indexes `[-1]`). Only a
+  complete, internally consistent manifest at `CurrentVersion` is a genuine
+  no-op; truncation, inconsistency, an empty manifest with a nonzero
+  `finalVersion`, unsupported lineage versions and changed normalization
+  metadata are all refused.
+- `TestAppendOnlyUpdateManifestEdgeCases` covers: missing final entry with
+  `finalVersion == CurrentVersion` is not a no-op; `finalVersion` below and
+  above the last entry; empty manifest appending from scratch; empty manifest
+  with nonzero `finalVersion` refused; unsupported lineage version; changed
+  normalization; and a genuine no-op with a complete valid manifest.
+
+### Exit evidence
+
+- All append-only updater tests and the frozen-lineage gate pass; the updater
+  run against the current manifest is a genuine no-op.
+
+Completion record:
+
+```text
+Status: complete (repair)
+Application commit: recorded by this commit
+Website output commit: n/a (no public documentation change)
+Website source commit: n/a (no public documentation change)
+Verified: TestAppendOnlyUpdateManifestEdgeCases, TestMigrationLineageFrozen and
+  the no-op updater run pass
+Findings repaired: a truncated manifest could be mistaken for a no-op
+Known limits: none retained
+```
+
 ## Checkpoint roadmap
 
 - CP1 - PostgreSQL contract and baseline (this checkpoint)
