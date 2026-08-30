@@ -1,0 +1,87 @@
+{
+  "lineageName": "trestle-migration-lineage",
+  "lineageVersion": 1,
+  "description": "Frozen pre-preview migration lineage. Append-only: retained versions must never be edited; new migrations may only be appended and the manifest regenerated.",
+  "normalization": "strip CR; split into lines; trim each line; drop blank lines; join with a single newline; append a trailing newline",
+  "finalVersion": 13,
+  "migrations": [
+    {
+      "version": 1,
+      "name": "system foundation",
+      "sqliteSha256": "049e966363da3622e2c551b2176ec5585ffbcdfe79f3e9d4118a6811bdc12b8a",
+      "postgresSha256": "70f4fa1ba01b46dce7eb98ecea89f93e38473513ef46cdabf22095e3a537762b"
+    },
+    {
+      "version": 2,
+      "name": "administrator identity",
+      "sqliteSha256": "20db7fc6c9054fdfdcbd0a8aac8472a10c0b796a0d7c366a410878b131b4da66",
+      "postgresSha256": "d79f98d938fc70f783470278f1b9b5c12ecf575f753234953fdccacfed65efe4"
+    },
+    {
+      "version": 3,
+      "name": "collection metadata",
+      "sqliteSha256": "2341057d1d9e2e2244401479ad483f35e6d4e61210ab17241fa105d6ea2812ef",
+      "postgresSha256": "2542f69faeaf42d0a98da5493555a367ba992672e915d90b84b6e2a9cc889e85"
+    },
+    {
+      "version": 4,
+      "name": "record idempotency",
+      "sqliteSha256": "75ff52c692938edd1e6a84709c649204cbb0a713f7466df47612658b48ac95a8",
+      "postgresSha256": "b0cedde527b865c38c76b1f62ae6686ac78c8db8f651135da9ce15cf7897c036"
+    },
+    {
+      "version": 5,
+      "name": "application user identity",
+      "sqliteSha256": "b3019d082b5bd938038e54995859fcb2d028457b94def5fbc34677c733e5aa19",
+      "postgresSha256": "bc65bfe5b50202582925cd23dacb20b0e8db8ebead7032399ecc2e366d98a722"
+    },
+    {
+      "version": 6,
+      "name": "scoped backend credentials",
+      "sqliteSha256": "561c7fa1d4315d5f8b74d70489671220c687e752bf7648cda1810941eb132902",
+      "postgresSha256": "41c42a38c587f5f15d4a4908402f303e0288a371e45c0cab7737d14a7651495c"
+    },
+    {
+      "version": 7,
+      "name": "collection access rules",
+      "sqliteSha256": "08e6326fe1c9c07c5b92981894d34bac6b58bda72409d80c67ed70e38424e501",
+      "postgresSha256": "eb909aa8e92bb407799c283c12117adee0e7269b9421c34139cec06ba72c59e1"
+    },
+    {
+      "version": 8,
+      "name": "local file storage",
+      "sqliteSha256": "41ea9a0b6cae2f4e3a1589e07f6c7b4ba8faa8a98795040d60b1292559a7d3ff",
+      "postgresSha256": "a6e093f0243d9cfdb4ed1fe912e679a715611aba2731a215139fdc630f3bdcb3"
+    },
+    {
+      "version": 9,
+      "name": "durable event journal",
+      "sqliteSha256": "81784a2fb8e987b7c3818f97c612fce1a9bd658424e0866c297d5ef8ff5dff72",
+      "postgresSha256": "224bb35753deeabc952d0942acf3e3601819eb8916626d8457a2cf0eb19c19b1"
+    },
+    {
+      "version": 10,
+      "name": "audit administration",
+      "sqliteSha256": "ab7e70fc36467d598e8880d44d9c05619dfb689a7543eeb9e2ecf528d8ce211c",
+      "postgresSha256": "ab7e70fc36467d598e8880d44d9c05619dfb689a7543eeb9e2ecf528d8ce211c"
+    },
+    {
+      "version": 11,
+      "name": "durable jobs",
+      "sqliteSha256": "24133e0780627a611d914e15c77ffb182241b0ed02cc4b79d0d8d62590da961e",
+      "postgresSha256": "f08d48fa37141b553ff4528b998c69db6f1213d66e456f20726118d030d1e676"
+    },
+    {
+      "version": 12,
+      "name": "signed webhooks",
+      "sqliteSha256": "88ba51f786808e7193ac19c91fee23c365ce0aa3a31facc3149adf4e0283e9b1",
+      "postgresSha256": "d77228f3a03b009222ea7d1d16c272c23c3ae62865cf97ff4431f51752e579b1"
+    },
+    {
+      "version": 13,
+      "name": "function targets",
+      "sqliteSha256": "111374a4f5eba9e7ff11e024512221cadb9ec57478ba0250367eeaadad5472e3",
+      "postgresSha256": "8e81363ba9d7d017443a63ffea084dfb2b2fc00dab33ae7fc94e09dc21a62aa1"
+    }
+  ]
+}

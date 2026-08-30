@@ -373,7 +373,7 @@ Completion record:
 
 ```text
 Status: complete
-Application commit: a29d135
+Application commit: de37183
 Website output commit: c11608e
 Website source commit: 50bc788
 Verified: store suite, full go test ./... and go vet on SQLite and real
@@ -383,6 +383,52 @@ Findings repaired: PostgreSQL had no persistent upgrade-from-every-version
   keys/uniqueness; fail-closed migration errors lacked an operator recovery step
 Known limits: fixtures model each retained logical version with the current
   authoritative DDL; historical DDL as first written is not retained separately
+```
+
+## CP3R - Freeze the retained migration lineage
+
+Status: complete
+
+CP3's upgrade fixtures were generated from the same current migration
+definitions being validated, so a later edit to an old migration could silently
+redefine what historical schema version vN means. This repair freezes the
+retained lineage independently before public preview.
+
+### Application
+
+- Add an append-only migration lineage manifest
+  (`internal/store/migrations_manifest.json`) with, for every retained version:
+  version, migration name, SHA-256 of the normalized SQLite DDL, and SHA-256 of
+  the normalized PostgreSQL DDL. The normalization (strip CR, trim lines, drop
+  blanks, join with single newline) is recorded in the manifest so the digest is
+  reproducible.
+- Add `TestMigrationLineageFrozen`: requires versions contiguous 1..CurrentVersion,
+  names and digests match the compiled migrations (editing or removing a
+  retained migration fails), both SQLite and PostgreSQL definitions exist for
+  every version, and `CurrentVersion` equals the manifest final version.
+- Add `TestWriteMigrationLineageManifest` (generator, gated by
+  `TRESTLE_LINEAGE_WRITE=1`) so appending a new migration can deliberately
+  regenerate and extend the frozen baseline.
+
+The lineage is described accurately as the frozen pre-preview migration
+lineage, not as production upgrade fixtures from publicly released versions.
+
+### Exit evidence
+
+- Manifest generated at `CurrentVersion` 13; the frozen gate passes.
+
+Completion record:
+
+```text
+Status: complete (repair)
+Application commit: recorded by this commit
+Website output commit: n/a (no public documentation change)
+Website source commit: n/a (no public documentation change)
+Verified: TestMigrationLineageFrozen passes; manifest lists 13 retained
+  migrations with both digests
+Findings repaired: old migrations could be edited after use without detection
+Known limits: appending migration 14 (CP4R) will exercise the append-only path
+  and regenerate the manifest
 ```
 
 ## CP4 - Transactional mutation and audit atomicity
