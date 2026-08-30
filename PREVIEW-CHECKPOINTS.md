@@ -939,6 +939,66 @@ Findings repaired: revocation test raced its own assertion; import race proved
 Known limits: none retained
 ```
 
+
+## CP8R - Soak resource bounds and jobs-endpoint regression
+
+Status: complete
+
+CP8's soak sampled resources but never enforced a bound and compared a warm
+baseline against a different restarted process, so it could not demonstrate
+absence of growth; and the jobs-list regression test replayed the corrected
+query manually instead of driving the real endpoint.
+
+### Application
+
+- `scripts/soak.sh` restructured:
+  - warms the process before taking the baseline;
+  - samples the SAME process throughout the sustained workload (baseline,
+    periodic 5s samples, peak, final settled after a GC pause);
+  - defines and enforces documented bounds: fd growth <= 25, thread growth
+    <= 20, settled RSS growth <= 50 MiB, failing the script when exceeded;
+  - moves restart recovery to a separate phase that verifies representative
+    records, file metadata, backup visibility and persisted-session behavior,
+    and is NOT used in the leak comparison;
+  - narrows the webhook claim to enqueue activity only (a 200-item newest-first
+    list saturated with webhook jobs), relying on the provider-parameterized Go
+    jobs suite for claim/drain/no-duplication, and removes stale comments about
+    stale sessions, duplicate deliveries and queue drainage.
+- The jobs-list regression now drives the real authenticated `/admin/v1/jobs`
+  endpoint: `TestJobsEndpointListsFullFieldsAndFilters` verifies valid JSON with
+  payload, status, attempts, max attempts, timestamps and error/lease fields,
+  multiple rows and status filtering on both providers;
+  `TestJobsEndpointQueryFailureIsStructured` proves a list query/scan failure
+  returns the normal structured API error envelope rather than a plain-text
+  `http.Error` (the `list` handler now emits the structured envelope).
+- Observed (this machine only, 60s default): fd growth 0, thread growth 1,
+  settled RSS growth negative (GC returned memory) - all within the documented
+  bounds.
+
+### Exit evidence
+
+- Soak passes with periodic sampling and enforced bounds at 25s and 60s; the
+  jobs endpoint tests pass on SQLite and real PostgreSQL 18.6; full suite and
+  race green; vet/gofmt clean.
+
+Completion record:
+
+```text
+Status: complete (repair)
+Application commit: recorded by this commit
+Website output commit: n/a (no public documentation change)
+Website source commit: n/a (no public documentation change)
+Verified: soak at 25s and 60s with enforced bounds; jobs endpoint tests on both
+  providers; full suite and race; release-candidate matrix; PostgreSQL gate;
+  connection-recovery and restore drills
+Findings repaired: soak did not enforce resource bounds and compared a warm
+  baseline against a restarted process; jobs-list regression did not drive the
+  real endpoint; jobs-list failures returned plain-text http.Error
+Known limits: webhook delivery to a private destination is refused by the SSRF
+  guard, so the soak asserts enqueue activity and the Go jobs suite covers
+  claim/drain/no-duplication; resource numbers are this-machine-only
+```
+
 ## Checkpoint roadmap
 
 - CP1 - PostgreSQL contract and baseline (this checkpoint)

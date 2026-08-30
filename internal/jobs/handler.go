@@ -7,6 +7,7 @@ import (
 	"encoding/json"
 	"errors"
 	"github.com/trestle-dev/trestle/internal/adminauth"
+	"github.com/trestle-dev/trestle/internal/httperr"
 	"github.com/trestle-dev/trestle/internal/store"
 	"net/http"
 	"strings"
@@ -167,7 +168,7 @@ func (h *Handler) list(w http.ResponseWriter, r *http.Request) {
 	query += " ORDER BY created_at DESC LIMIT 200"
 	rows, err := h.db.QueryContext(r.Context(), query, args...)
 	if err != nil {
-		http.Error(w, "query failed", 500)
+		writeError(w, 500, "internal_error", "The request could not be completed.")
 		return
 	}
 	defer rows.Close()
@@ -176,14 +177,14 @@ func (h *Handler) list(w http.ResponseWriter, r *http.Request) {
 		var j Job
 		var payload string
 		if err := rows.Scan(&j.ID, &j.Kind, &payload, &j.Status, &j.Attempts, &j.MaxAttempts, &j.AvailableAt, &j.LeaseUntil, &j.LastError, &j.CreatedAt, &j.UpdatedAt); err != nil {
-			http.Error(w, "query failed", 500)
+			writeError(w, 500, "internal_error", "The request could not be completed.")
 			return
 		}
 		j.Payload = json.RawMessage(payload)
 		items = append(items, j)
 	}
 	if err := rows.Err(); err != nil {
-		http.Error(w, "query failed", 500)
+		writeError(w, 500, "internal_error", "The request could not be completed.")
 		return
 	}
 	writeJSON(w, 200, map[string]any{"items": items})
@@ -225,5 +226,8 @@ func min(a, b int) int {
 func writeJSON(w http.ResponseWriter, status int, v any) {
 	w.Header().Set("Content-Type", "application/json")
 	w.WriteHeader(status)
-	json.NewEncoder(w).Encode(v)
+	_ = json.NewEncoder(w).Encode(v)
+}
+func writeError(w http.ResponseWriter, status int, code, message string) {
+	writeJSON(w, status, httperr.New(code, message, w.Header().Get("X-Request-ID")))
 }
