@@ -28,6 +28,15 @@ jobs:
         run: ./scripts/package-release.sh "${GITHUB_REF_NAME#v}" dist
       - name: Write release notes
         run: sed "s/{{VERSION}}/${GITHUB_REF_NAME#v}/" docs/release-notes-template.md > release-body.md
+      - name: Validate release notes
+        run: |
+          version="${GITHUB_REF_NAME#v}"
+          [ -s release-body.md ] || { echo "release body is empty" >&2; exit 1; }
+          grep -q "{{VERSION}}" release-body.md && { echo "unresolved {{VERSION}} placeholder" >&2; exit 1; } || true
+          echo "$version" | grep -q . && grep -q "$version" release-body.md || { echo "expected version missing" >&2; exit 1; }
+          for heading in "preview / release candidate" PostgreSQL SQLite "Operator responsibilities" "Back up before upgrading" "Known limitations" "Verified installation"; do
+            grep -qi "$heading" release-body.md || { echo "release body lacks: $heading" >&2; exit 1; }
+          done
       - uses: actions/attest-build-provenance@v2
         with:
           subject-path: 'dist/*'
