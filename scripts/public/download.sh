@@ -9,9 +9,18 @@
 # verify_archive fails closed on every deviation:
 #   - SHA256SUMS is unavailable;
 #   - the selected archive has no exact checksum entry;
+#   - more than one exact checksum entry matches;
 #   - the entry is malformed;
 #   - the archive bytes do not match its checksum;
 #   - neither sha256sum nor shasum -a 256 is available.
+#
+# The exact entry is found by STRUCTURAL parsing, never by interpolating the
+# archive filename into a regular expression. Every line is split on its first
+# space; the entry is valid only when the hash field is exactly 64 lowercase
+# hexadecimal characters, the separator is exactly two spaces, and the
+# remaining text is byte-for-byte the expected bare filename with nothing
+# after it. Dots and other regex metacharacters in version names can therefore
+# never act as wildcards.
 #
 # Tool selection is portable: sha256sum when present, otherwise shasum -a 256.
 # TRESTLE_CHECKSUM_TOOL forces a choice (auto | sha256sum | shasum | none) for
@@ -32,22 +41,33 @@ verify_archive() {
     return 1
   fi
 
-  # The exact checksum entry for this archive: 64 lowercase hex, two spaces,
-  # then the archive filename and nothing else.
-  _line=$(grep -E "^[0-9a-f]{64}  ${_name}$" "$_sums" || true)
-  if [ -z "$_line" ]; then
-    if grep -q "${_name}$" "$_sums" 2>/dev/null; then
+  _found=0
+  _expected=
+  while IFS= read -r _line; do
+    _hash=${_line%% *}
+    if printf '%s\n' "$_hash" | grep -E '^[0-9a-f]{64}$' >/dev/null 2>&1; then
+      _rest=${_line#"$_hash"}
+      # _rest must be exactly two spaces followed by the literal bare filename
+      # and nothing else; the quoted expansion compares literally, so no regex
+      # metacharacter in _name can match more than itself.
+      case "$_rest" in
+        "  $_name") _found=$((_found + 1)); _expected=$_hash ;;
+      esac
+    fi
+  done < "$_sums"
+
+  if [ "$_found" -eq 0 ]; then
+    if grep -qF "$_name" "$_sums" 2>/dev/null; then
       echo "malformed checksum entry for $_name in SHA256SUMS" >&2
     else
       echo "no exact checksum entry for $_name in SHA256SUMS" >&2
     fi
     return 1
   fi
-  _expected=${_line%% *}
-  case "$_expected" in
-    [0-9a-f][0-9a-f]*) ;;
-    *) echo "malformed checksum entry for $_name in SHA256SUMS" >&2; return 1 ;;
-  esac
+  if [ "$_found" -gt 1 ]; then
+    echo "multiple matching checksum entries for $_name in SHA256SUMS" >&2
+    return 1
+  fi
 
   _tool=${TRESTLE_CHECKSUM_TOOL:-auto}
   case "$_tool" in

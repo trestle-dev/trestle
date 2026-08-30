@@ -134,6 +134,35 @@ if (cd "$dest" && TRESTLE_RELEASE_BASE="file://$rel/nobin" sh "$download" --vers
   fail "archive missing the expected executable did not fail closed"
 fi
 
+# --- 13b. Exact checksum entry matching is literal, not a regex ----------------
+# The archive filename (trestle_0.0.0-test_linux_amd64.tar.gz) contains dots; a
+# structural parser must reject near matches, prefixes, suffixes and duplicates.
+real_hash=$(awk '{print $1}' "$rel_dir/SHA256SUMS" | head -1)
+mkvariant() { # mkvariant NAME SHA256SUMS_CONTENT
+  mkdir -p "$rel/$1/$ver"
+  cp "$rel_dir/trestle_0.0.0-test_linux_amd64.tar.gz" "$rel/$1/$ver/"
+  printf '%s\n' "$2" > "$rel/$1/$ver/SHA256SUMS"
+}
+expect_fail() { # expect_fail LABEL VARIANT
+  new_dest
+  if (cd "$dest" && TRESTLE_RELEASE_BASE="file://$rel/$2" sh "$download" --version "$ver" >/dev/null 2>&1); then
+    fail "$1: near/duplicate/malformed entry did not fail closed"
+  fi
+}
+mkvariant wildcards "$real_hash  trestle_0x0x0-test_linux_amd64XtarZgz"
+expect_fail "dots in the version name acting as wildcards" wildcards
+mkvariant near-match "$real_hash  trestle_0-0-0-test_linux_amd64-tar-gz"
+expect_fail "regex near-match filename" near-match
+mkvariant prefix "$real_hash  xtrestle_0.0.0-test_linux_amd64.tar.gz"
+expect_fail "prefix variant" prefix
+mkvariant suffix "$real_hash  trestle_0.0.0-test_linux_amd64.tar.gzx"
+expect_fail "suffix variant" suffix
+mkvariant duplicate "$real_hash  trestle_0.0.0-test_linux_amd64.tar.gz
+$real_hash  trestle_0.0.0-test_linux_amd64.tar.gz"
+expect_fail "duplicate exact entries" duplicate
+mkvariant malformed "zzz  trestle_0.0.0-test_linux_amd64.tar.gz"
+expect_fail "malformed exact-name entry" malformed
+
 # --- 14. Existing destination file refusal ------------------------------------
 new_dest
 printf 'keep me\n' > "$dest/trestle"

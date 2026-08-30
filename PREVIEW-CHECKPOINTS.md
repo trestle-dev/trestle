@@ -2155,6 +2155,96 @@ Known limits: public curl commands not yet validated against a published
   stable release; browser acceptance partial as before
 ```
 
+## CP16R - Exact checksum-entry matching without regex interpolation
+
+Status: complete (pre-release; public URLs not yet tested against a stable release)
+
+Review found the exact-entry promise was not exact: `verify_archive` in
+`scripts/checksum.sh` interpolated the archive filename into a `grep -E`
+expression, so the dots in a version name matched arbitrary characters and a
+near-match entry (for example `trestle_1x0x0_linux_amd64XtarZgz`) could satisfy
+it.
+
+### Repair
+
+`verify_archive` now parses every `SHA256SUMS` line structurally and never
+constructs a regex from the filename. Each line is split on its first space;
+the entry is valid only when the hash field is exactly 64 lowercase
+hexadecimal characters, the separator is exactly two spaces, and the remaining
+text is byte-for-byte the expected bare filename with nothing after it (the
+`case` pattern quotes the expansion, so dots and other metacharacters match
+only themselves). The parser requires exactly one valid entry and fails closed
+with a distinct diagnostic for: zero matching entries, multiple matching
+entries, or a same-looking malformed entry. The legitimate exact entry still
+passes with both `sha256sum` and `shasum -a 256`.
+
+### Adversarial regressions (`scripts/test-download.sh`)
+
+- dots in the expected filename cannot act as wildcards;
+- a regex near-match filename is rejected;
+- a prefix variant is rejected;
+- a suffix variant is rejected;
+- duplicate exact valid entries are rejected;
+- a malformed exact-name entry is diagnosed as malformed;
+- the legitimate exact entry passes with both checksum tools.
+
+The canonical helper, the regenerated standalone scripts, the website source
+copies and the generated website copies are all synchronized and covered by the
+parity gate.
+
+### Commands run (Go-equipped environment)
+
+- `sh -n` on all 8 scripts: OK.
+- `sh scripts/build-public-scripts.sh`: regenerated; committed public copies
+  byte-identical to fresh output for install/download/update.
+- `sh scripts/test-download.sh`: passed (latest/explicit version, all four
+  platform mappings, sha256sum and shasum verification, missing sums / missing
+  entry / malformed / corrupt / missing binary fail-closed, overwrite safety,
+  atomic staging, no mutation, packaged release runs as `./trestle version`,
+  and the six new adversarial exact-entry cases).
+- `sh scripts/test-installer.sh`: passed (verifies before installing, fails
+  closed on unverifiable releases).
+- `sh scripts/test-update.sh`: passed (portable shasum and sha256sum paths,
+  atomic rollback, fail-closed).
+- `sh scripts/test-public-scripts.sh`: passed (syntax, deterministic
+  regeneration, website source/output parity, download/install/update
+  regressions).
+- `sh scripts/test-release.sh`: passed (six archives, `sha256sum -c` clean,
+  layout and version/date injection verified).
+- `sh scripts/test-quickstart.sh`: passed.
+- `go test ./...`: 24 packages ok, no FAIL.
+- `go vet ./...`: OK. `gofmt -l .`: clean.
+- Website `nift status` / `nift build`: 90 tracked pages up to date.
+  `node scripts/check-site.mjs`: 87 HTML pages and 94 files checked.
+- Served bytes: `public/install.sh`, `public/download.sh`, `public/update.sh`
+  byte-identical to the canonical `scripts/public/*.sh`.
+
+### Honesty
+
+- All download/install/update tests use local fake release assets or the
+  locally built release-candidate binary; none depend on GitHub availability.
+- The public `https://trestle.cv/*.sh` URLs remain untested against a published
+  stable release (none exists); the piped flow is exercised with the exact
+  served bytes, proven byte-identical by the parity gate.
+
+Completion record:
+
+```text
+Status: complete (repair); browser acceptance unchanged
+Application commit: recorded by this commit
+Website output commit: recorded by the website-output commit
+Website source commit: recorded by the website-source commit
+Verified: structural exact-entry parser; 6 adversarial exact-entry cases;
+  full CP16 gate rerun (commands above)
+Findings repaired: exact checksum-entry matching was regex-based (dots matched
+  arbitrary characters); now literal structural parsing with exactly-one rule
+Local simulations: all download/install/update tests (local fake releases)
+Public URLs tested: no (no stable release exists; served bytes exercised
+  locally and proven byte-identical by the parity gate)
+Known limits: public curl commands not yet validated against a published
+  stable release; browser acceptance partial as before
+```
+
 ## Checkpoint roadmap
 
 - CP1 - PostgreSQL contract and baseline (this checkpoint)
