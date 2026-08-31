@@ -93,6 +93,36 @@ Trestle creates `./data/trestle.db` by default. The data directory is set to
 owner-only permissions and must live on a local filesystem; shared/network
 filesystem operation is not supported.
 
+## Run as a systemd user service
+
+Run Trestle in the foreground with `./trestle` or `trestle serve`. To keep it
+running without a terminal, install a per-user systemd unit:
+
+```sh
+trestle service install --data-dir /var/lib/trestle   # --listen accepted
+trestle service status
+trestle service logs                # or: trestle service logs --follow
+trestle service restart
+trestle service uninstall           # stops the service but keeps Trestle data
+```
+
+The user unit is written to `~/.config/systemd/user/trestle.service` and managed
+with `systemctl --user` and `journalctl --user-unit trestle.service`. `service
+install` resolves the executable to a stable absolute path, refuses empty,
+relative or transient paths, writes the unit atomically, reloads systemd, and
+enables and starts the service. An existing unit that is not managed by Trestle
+is never overwritten or removed silently. `trestle service status` reports
+enabled/running state, PID, version, listen address and a live health check of
+the public `GET /system/health` endpoint, and exits nonzero when the service is
+failed or missing.
+
+`service install` records `--listen` and `--data-dir` (default `./data` made
+absolute) in the unit. The remaining configuration, including the secret
+`TRESTLE_DATABASE_URL` for PostgreSQL, must not be embedded in the unit; set
+`TRESTLE_*` environment variables in the service environment instead.
+`service install --system` (system-wide units) is a documented follow-up and is
+not yet supported; user mode is the default.
+
 ## Install a release
 
 Two verified download paths are available. Both fetch the exact release archive
