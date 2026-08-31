@@ -2590,6 +2590,38 @@ Tag/release: v0.1.0-rc.1 preserved at b616ebc; not promoted or announced
 Remaining: native mac/Windows execution; CP22 publish-or-hold decision
 ```
 
+## CP22 - publish-or-hold review (recommendation recorded)
+
+Recommendation: **ready for public preview - not production/battle-proven**.
+Awaiting explicit human authorization to publish the stable `v0.1.0` release;
+nothing was published, promoted, tagged or announced.
+
+Classification refined:
+
+- Meaningful maturity gaps (not universal blockers): native macOS/Windows
+  execution not yet performed; longer release-binary soak not yet accumulated;
+  broader operational dogfooding not yet done; the compatibility contract is
+  still young.
+- Product gaps, not production blockers: a few browser degraded-state
+  screenshots pending fault injection (database unavailable, backup progress,
+  pending file deletion) and the absence of an official container image.
+- Publishing `v0.1.0` establishes the stable download channel and the initial
+  public compatibility contract; it does not mean Trestle is battle-proven.
+
+Maintenance note (non-blocking): `scripts/test-highlight.mjs` is deterministic
+and passing but only runs when invoked directly; it should later be
+incorporated into the normal website validation path (`check-site.mjs` or
+website CI) so it cannot silently rot.
+
+```text
+Status: recommendation recorded; stable v0.1.0 release NOT authorized or published
+Review evidence: rehearsal run 33356238953 (candidate fe10d46); app CI 33360690643; Pages deploy on ad93acd
+Next: on human authorization, bind the tag to the chosen app head, run the pinned
+  release workflow, verify (assets, checksums, provenance, unversioned scripts,
+  binary metadata, SQLite smoke), then update website status; generated website
+  committed/pushed before source
+```
+
 ## Checkpoint roadmap (authoritative status)
 
 This table reconciles the public-preview campaign's actual accepted scope with
@@ -2627,4 +2659,4 @@ time, not embedded here; the repository state containing this ledger is simply
 | CP19 | Public-preview documentation and positioning | Website documentation complete; preview-status honesty maintained | website source `d9921ba` (accepted remote); generated output `4af2e41` (accepted remote) | final positioning review |
 | CP20 | Launch assets and publication draft | LAUNCH.md draft exists; not published | n/a | publication draft review |
 | CP21 | Clean-machine release rehearsal | Complete | rehearsal candidate `fe10d46`, successful run `33356238953`, completion record `5be0a07`; prep `5f51043`, `42a8c08`, `0291eb6` | native macOS/Windows execution untested; CP22 is the publish-or-hold decision |
-| CP22 | Publish/no-publish review | Not done | n/a | requires explicit human review |
+| CP22 | Publish/no-publish review | Recommendation recorded: ready for public preview, not production/battle-proven; awaiting explicit human authorization to publish the stable v0.1.0 | n/a | explicit authorization to publish the stable v0.1.0 release and update website status |
