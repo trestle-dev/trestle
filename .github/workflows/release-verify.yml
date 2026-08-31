@@ -1,24 +1,21 @@
-name: Release verify
+name: Release verify (read-only)
 
-# Fresh GitHub-hosted runner verification of a published release: downloads the
-# six archives and SHA256SUMS, verifies every checksum, runs the constrained
-# `gh attestation verify` on every archive, and corrects the release body in
-# place from the canonical release-notes template (idempotent; never moves or
-# recreates the tag and never replaces assets). Triggers on template changes
-# and on manual dispatch.
+# Manual, read-only verification of a published Trestle release on a fresh
+# GitHub-hosted runner. It queries the real GitHub release asset set, verifies
+# every checksum, runs the constrained `gh attestation verify` on every
+# archive, and checks that the live release body wording matches the release
+# kind. It never edits the release body, moves or recreates the tag, or mutates
+# assets. It is deliberately manual-only and read-only; the one-off in-place
+# body correction for v0.1.0 was already applied and is recorded in the ledger.
 on:
-  push:
-    branches: ['main']
-    paths: ['docs/release-notes-template.md', '.github/workflows/release-verify.yml']
   workflow_dispatch:
     inputs:
       release:
-        description: 'Release tag to verify (e.g. v0.1.0)'
+        description: 'Release tag to verify (e.g. v0.1.0 or v0.1.0-rc.1)'
         required: true
-        default: v0.1.0
 
 permissions:
-  contents: write
+  contents: read
   attestations: read
 
 jobs:
@@ -26,29 +23,59 @@ jobs:
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
-      - name: Resolve the release tag to its commit
-        id: resolve
+      - name: Validate release tag
         env:
           INPUT_RELEASE: ${{ inputs.release }}
         run: |
           set -euo pipefail
-          # The push trigger has no dispatch inputs; default to the published
-          # stable release. workflow_dispatch supplies the release explicitly.
-          release="${INPUT_RELEASE:-v0.1.0}"
-          [ "$release" = v0.1.0 ] || { echo "this workflow verifies v0.1.0 (the published stable release)" >&2; exit 1; }
-          commit=$(curl -fsSL --max-time 30 "https://api.github.com/repos/trestle-dev/trestle/commits/${release}" | jq -r '.sha')
-          printf '%s\n' "$commit" | LC_ALL=C grep -q '^[0-9a-f]\{40\}$' || { echo "could not resolve ${release} to a commit" >&2; exit 1; }
+          release=$INPUT_RELEASE
+          case "$release" in
+            v[0-9]*.[0-9]*.[0-9]*) ;;
+            *) echo "invalid release tag '$release': expected vMAJOR.MINOR.PATCH[-suffix]" >&2; exit 1 ;;
+          esac
+          if printf '%s' "$release" | LC_ALL=C grep -q '[^ -~]'; then
+            echo "invalid characters in release tag '$release'" >&2; exit 1
+          fi
+          printf '%s\n' "$release" | LC_ALL=C grep -q '^v[0-9][0-9]*\.[0-9][0-9]*\.[0-9][0-9]*\(-[0-9A-Za-z][0-9A-Za-z.]*\)\?$' \
+            || { echo "invalid release tag '$release'" >&2; exit 1; }
           echo "release=$release" >> "$GITHUB_ENV"
+
+      - name: Resolve the release tag to its commit
+        run: |
+          set -euo pipefail
+          commit=$(curl -fsSL --max-time 30 "https://api.github.com/repos/trestle-dev/trestle/commits/${release}" | jq -r '.sha')
+          printf '%s\n' "$commit" | LC_ALL=C grep -q '^[0-9a-f]\{40\}$' \
+            || { echo "could not resolve ${release} to a commit" >&2; exit 1; }
           echo "commit=$commit" >> "$GITHUB_ENV"
           echo "resolved ${release} -> $commit"
 
-      - name: Download public release assets
+      - name: Verify the public release asset set
+        run: |
+          set -euo pipefail
+          { printf '%s\n' SHA256SUMS; for a in \
+              "trestle_${release#v}_darwin_amd64.tar.gz" \
+              "trestle_${release#v}_darwin_arm64.tar.gz" \
+              "trestle_${release#v}_linux_amd64.tar.gz" \
+              "trestle_${release#v}_linux_arm64.tar.gz" \
+              "trestle_${release#v}_windows_amd64.zip" \
+              "trestle_${release#v}_windows_arm64.zip"; do printf '%s\n' "$a"; done; } | LC_ALL=C sort > expected.txt
+          actual=$(gh api "repos/trestle-dev/trestle/releases/tags/${release}" --jq '.assets[].name' | LC_ALL=C sort)
+          if ! diff -u expected.txt <(printf '%s\n' "$actual"); then
+            echo "release asset set does not match the expected set" >&2
+            exit 1
+          fi
+          echo "public asset set matches exactly:"
+          cat expected.txt
+        env:
+          GH_TOKEN: ${{ github.token }}
+
+      - name: Download the public assets
         run: |
           set -euo pipefail
           mkdir -p artifacts
           base="https://github.com/trestle-dev/trestle/releases/download/${release}"
-          curl -fsSL --max-time 60 -o artifacts/SHA256SUMS "$base/SHA256SUMS"
           for a in \
+            SHA256SUMS \
             "trestle_${release#v}_linux_amd64.tar.gz" \
             "trestle_${release#v}_linux_arm64.tar.gz" \
             "trestle_${release#v}_darwin_amd64.tar.gz" \
@@ -58,12 +85,39 @@ jobs:
             curl -fsSL --max-time 120 -o "artifacts/$a" "$base/$a"
           done
 
-      - name: Verify checksums and exact asset set
+      - name: Validate SHA256SUMS entries and verify every checksum
         run: |
           set -euo pipefail
           cd artifacts
-          n=$(find . -maxdepth 1 -name 'trestle_*' | wc -l)
-          [ "$n" -eq 6 ] || { echo "expected exactly six archives, found $n" >&2; exit 1; }
+          [ "$(wc -l < SHA256SUMS)" -eq 6 ] || { echo "SHA256SUMS must contain exactly six entries" >&2; exit 1; }
+          python3 - "${release#v}" <<'PY'
+          import sys
+          version = sys.argv[1]
+          expected = {
+              f"trestle_{version}_linux_amd64.tar.gz",
+              f"trestle_{version}_linux_arm64.tar.gz",
+              f"trestle_{version}_darwin_amd64.tar.gz",
+              f"trestle_{version}_darwin_arm64.tar.gz",
+              f"trestle_{version}_windows_amd64.zip",
+              f"trestle_{version}_windows_arm64.zip",
+          }
+          seen = {}
+          for line in open("SHA256SUMS"):
+              line = line.rstrip("\n")
+              parts = line.split("  ")
+              if len(parts) != 2 or len(parts[0]) != 64 or not all(c in "0123456789abcdef" for c in parts[0]):
+                  sys.exit(f"malformed checksum line: {line!r}")
+              name = parts[1]
+              if "/" in name or name.startswith(".") or ".." in name:
+                  sys.exit(f"suspicious filename in SHA256SUMS: {name}")
+              if name not in expected:
+                  sys.exit(f"unexpected filename in SHA256SUMS: {name}")
+              seen[name] = seen.get(name, 0) + 1
+          for name in sorted(expected):
+              if seen.get(name) != 1:
+                  sys.exit(f"expected exactly one entry for {name}, found {seen.get(name, 0)}")
+          print("SHA256SUMS: exactly six expected entries, no traversal or unexpected names")
+          PY
           sha256sum -c SHA256SUMS
 
       - name: Constrained provenance verification (gh attestation verify)
@@ -83,26 +137,28 @@ jobs:
         env:
           GH_TOKEN: ${{ github.token }}
 
-      - name: Correct the release body in place (idempotent)
+      - name: Verify release-body wording matches the release kind (read-only)
         run: |
           set -euo pipefail
+          body=$(gh api "repos/trestle-dev/trestle/releases/tags/${release}" --jq .body)
           case "${release#v}" in
-            *-*) echo "release is a prerelease; leaving its body unchanged" ;;
+            *-*)
+              printf '%s' "$body" | grep -qi "preview / release candidate" \
+                || { echo "prerelease body lacks release-candidate wording" >&2; exit 1; }
+              printf '%s' "$body" | grep -qi "not a stable release" \
+                || { echo "prerelease body must say it is not a stable release" >&2; exit 1; }
+              echo "release body: honest prerelease wording confirmed (read-only)"
+              ;;
             *)
-              kind="stable public preview"
-              body="establishes the stable download channel and the initial public compatibility contract. It is ready for public preview and evaluation, but is not yet claimed to be production-proven or battle-proven."
-              sed -e "s|{{VERSION}}|${release#v}|" \
-                  -e "s|{{RELEASE_KIND}}|${kind}|" \
-                  -e "s|{{RELEASE_KIND_BODY}}|${body}|" \
-                  docs/release-notes-template.md > release-body.md
-              current=$(gh release view "$release" --json body -q .body)
-              if printf '%s' "$current" | grep -q "stable public preview" \
-                 && ! printf '%s' "$current" | grep -q "release candidate"; then
-                echo "release body already carries the stable-public-preview wording; no edit needed"
-              else
-                gh release edit "$release" --notes-file release-body.md
-                echo "release body corrected in place (tag and assets untouched)"
+              printf '%s' "$body" | grep -qi "stable public preview" \
+                || { echo "stable body lacks stable-public-preview wording" >&2; exit 1; }
+              if printf '%s' "$body" | grep -qi "release candidate"; then
+                echo "stable body must not call itself a release candidate" >&2; exit 1
               fi
+              if printf '%s' "$body" | grep -qi "not a stable release"; then
+                echo "stable body must not say it is not a stable release" >&2; exit 1
+              fi
+              echo "release body: stable-public-preview wording confirmed (read-only)"
               ;;
           esac
         env:

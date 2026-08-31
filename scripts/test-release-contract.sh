@@ -177,9 +177,10 @@ print("prerelease detection present and wired to the release action")
 PY
 [ "$?" -eq 0 ] || fail "prerelease tag semantics"
 
-# 6. The release-verify workflow must run the constrained gh attestation verify
-#    with the full policy and must never move/recreate the tag or create a new
-#    release.
+# 6. The permanent release-verify workflow must be manual-only and read-only:
+#    it must not edit the release body, create releases, mutate tags or assets,
+#    or silently default the release; it must validate the real GitHub
+#    asset-name set and retain the full constrained attestation policy.
 wf2="$root/.github/workflows/release-verify.yml"
 [ -f "$wf2" ] || fail "release-verify workflow is missing"
 python3 - "$wf2" <<'PY'
@@ -187,23 +188,38 @@ import sys, yaml, re
 d = yaml.safe_load(open(sys.argv[1]))
 text = open(sys.argv[1]).read()
 issues = []
+trig = (d.get("on") or d.get(True)) if isinstance(d, dict) else None
+triggers = set(trig.keys()) if isinstance(trig, dict) else set()
+if triggers != {"workflow_dispatch"}:
+    issues.append(f"release-verify triggers are not manual-only: {sorted(triggers)}")
+perm = d.get("permissions") or {}
+if perm.get("contents") != "read" or perm.get("attestations") != "read":
+    issues.append(f"release-verify permissions are not read-only: {perm}")
+if any(v not in ("read", "none") for v in perm.values()):
+    issues.append(f"a release-verify permission is write-capable: {perm}")
+for bad in "gh release edit", "gh release create", "gh release delete", "gh release upload", "git tag", "gh api --method PATCH":
+    if bad in text:
+        issues.append(f"release-verify may mutate releases/tags/assets: {bad}")
+if ":-v0.1.0" in text or "INPUT_RELEASE:-v0.1.0" in text:
+    issues.append("release-verify silently defaults the release to v0.1.0")
+# The release must come from the required dispatch input, never a default.
+inputs = (trig or {}).get("workflow_dispatch", {}).get("inputs", {})
+if not inputs or "release" not in inputs or inputs["release"].get("required") is not True:
+    issues.append("release-verify does not require the release input")
 for flag in "--repo" "--signer-workflow" "--source-ref" "--source-digest" "--deny-self-hosted-runners":
     if flag not in text:
         issues.append(f"release-verify is missing {flag}")
-for cmd in "gh release create", "git tag", "git push origin v0.1.0", "--force":
-    if cmd in text:
-        issues.append(f"release-verify may mutate tags/releases: {cmd}")
-if "attestations: read" not in text:
-    issues.append("release-verify lacks attestations: read")
 if "gh attestation verify" not in text:
     issues.append("release-verify does not run gh attestation verify")
+if "gh api" not in text or "releases/tags/" not in text or "assets[].name" not in text:
+    issues.append("release-verify does not validate the real GitHub asset-name set")
 if "sha256sum -c SHA256SUMS" not in text:
     issues.append("release-verify does not verify checksums")
 for i in issues:
     print("workflow issue:", i)
 if issues:
     sys.exit(1)
-print("release-verify workflow uses the full constrained policy and never mutates tags")
+print("release-verify workflow is manual-only, read-only, required-input, real-asset-set-validating, full-policy attestation")
 PY
 [ "$?" -eq 0 ] || fail "release-verify workflow structure"
 
