@@ -31,14 +31,43 @@ jobs:
       - name: Package six targets
         run: ./scripts/package-release.sh "${GITHUB_REF_NAME#v}" dist
       - name: Write release notes
-        run: sed "s/{{VERSION}}/${GITHUB_REF_NAME#v}/" docs/release-notes-template.md > release-body.md
+        run: |
+          set -euo pipefail
+          case "${GITHUB_REF_NAME#v}" in
+            *-*)
+              kind="preview release candidate"
+              body="is a preview / release candidate, not a stable release. Use it to test an upcoming release; prereleases must be selected explicitly by version."
+              ;;
+            *)
+              kind="stable public preview"
+              body="establishes the stable download channel and the initial public compatibility contract. It is ready for public preview and evaluation, but is not yet claimed to be production-proven or battle-proven."
+              ;;
+          esac
+          sed -e "s|{{VERSION}}|${GITHUB_REF_NAME#v}|" \
+              -e "s|{{RELEASE_KIND}}|${kind}|" \
+              -e "s|{{RELEASE_KIND_BODY}}|${body}|" \
+              docs/release-notes-template.md > release-body.md
       - name: Validate release notes
         run: |
+          set -euo pipefail
           version="${GITHUB_REF_NAME#v}"
           [ -s release-body.md ] || { echo "release body is empty" >&2; exit 1; }
-          grep -q "{{VERSION}}" release-body.md && { echo "unresolved {{VERSION}} placeholder" >&2; exit 1; } || true
-          echo "$version" | grep -q . && grep -q "$version" release-body.md || { echo "expected version missing" >&2; exit 1; }
-          for heading in "preview / release candidate" PostgreSQL SQLite "Operator responsibilities" "Back up before upgrading" "Known limitations" "Verified installation"; do
+          grep -q "{{VERSION}}\|{{RELEASE_KIND}}\|{{RELEASE_KIND_BODY}}" release-body.md \
+            && { echo "unresolved placeholder in the release body" >&2; exit 1; } || true
+          echo "$version" | grep -q . && grep -q "$version" release-body.md \
+            || { echo "expected version missing from the release body" >&2; exit 1; }
+          case "$version" in
+            *-*)
+              grep -qi "preview / release candidate" release-body.md || { echo "prerelease body lacks release-candidate wording" >&2; exit 1; }
+              grep -qi "not a stable release" release-body.md || { echo "prerelease body must say it is not a stable release" >&2; exit 1; }
+              ;;
+            *)
+              grep -qi "stable public preview" release-body.md || { echo "stable body lacks stable-public-preview wording" >&2; exit 1; }
+              grep -qi "release candidate" release-body.md && { echo "stable body must not call itself a release candidate" >&2; exit 1; } || true
+              grep -qi "not a stable release" release-body.md && { echo "stable body must not say it is not a stable release" >&2; exit 1; } || true
+              ;;
+          esac
+          for heading in "Supported database options" "Operator responsibilities" "Back up before upgrading" "Known limitations" "Verified installation"; do
             grep -qi "$heading" release-body.md || { echo "release body lacks: $heading" >&2; exit 1; }
           done
       - uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1

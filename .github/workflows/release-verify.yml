@@ -1,0 +1,105 @@
+name: Release verify
+
+# Fresh GitHub-hosted runner verification of a published release: downloads the
+# six archives and SHA256SUMS, verifies every checksum, runs the constrained
+# `gh attestation verify` on every archive, and corrects the release body in
+# place from the canonical release-notes template (idempotent; never moves or
+# recreates the tag and never replaces assets). Triggers on template changes
+# and on manual dispatch.
+on:
+  push:
+    branches: ['main']
+    paths: ['docs/release-notes-template.md']
+  workflow_dispatch:
+    inputs:
+      release:
+        description: 'Release tag to verify (e.g. v0.1.0)'
+        required: true
+        default: v0.1.0
+
+permissions:
+  contents: write
+  attestations: read
+
+jobs:
+  verify:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+      - name: Resolve the release tag to its commit
+        id: resolve
+        run: |
+          set -euo pipefail
+          release="${{ inputs.release }}"
+          [ "$release" = v0.1.0 ] || { echo "this workflow verifies v0.1.0 (the published stable release)" >&2; exit 1; }
+          commit=$(curl -fsSL --max-time 30 "https://api.github.com/repos/trestle-dev/trestle/commits/${release}" | jq -r '.sha')
+          printf '%s\n' "$commit" | LC_ALL=C grep -q '^[0-9a-f]\{40\}$' || { echo "could not resolve ${release} to a commit" >&2; exit 1; }
+          echo "release=$release" >> "$GITHUB_ENV"
+          echo "commit=$commit" >> "$GITHUB_ENV"
+          echo "resolved ${release} -> $commit"
+
+      - name: Download public release assets
+        run: |
+          set -euo pipefail
+          mkdir -p artifacts
+          base="https://github.com/trestle-dev/trestle/releases/download/${release}"
+          curl -fsSL --max-time 60 -o artifacts/SHA256SUMS "$base/SHA256SUMS"
+          for a in \
+            "trestle_${release#v}_linux_amd64.tar.gz" \
+            "trestle_${release#v}_linux_arm64.tar.gz" \
+            "trestle_${release#v}_darwin_amd64.tar.gz" \
+            "trestle_${release#v}_darwin_arm64.tar.gz" \
+            "trestle_${release#v}_windows_amd64.zip" \
+            "trestle_${release#v}_windows_arm64.zip"; do
+            curl -fsSL --max-time 120 -o "artifacts/$a" "$base/$a"
+          done
+
+      - name: Verify checksums and exact asset set
+        run: |
+          set -euo pipefail
+          cd artifacts
+          n=$(find . -maxdepth 1 -name 'trestle_*' | wc -l)
+          [ "$n" -eq 6 ] || { echo "expected exactly six archives, found $n" >&2; exit 1; }
+          sha256sum -c SHA256SUMS
+
+      - name: Constrained provenance verification (gh attestation verify)
+        run: |
+          set -euo pipefail
+          cd artifacts
+          for a in trestle_*; do
+            echo "=== gh attestation verify: $a ==="
+            gh attestation verify "$a" \
+              --repo trestle-dev/trestle \
+              --signer-workflow "trestle-dev/trestle/.github/workflows/release.yml" \
+              --source-ref "refs/tags/${release}" \
+              --source-digest "${commit}" \
+              --deny-self-hosted-runners
+            echo "=== $a: VERIFIED (repo, release.yml workflow, ${release}, ${commit}, hosted runners) ==="
+          done
+        env:
+          GH_TOKEN: ${{ github.token }}
+
+      - name: Correct the release body in place (idempotent)
+        run: |
+          set -euo pipefail
+          case "${release#v}" in
+            *-*) echo "release is a prerelease; leaving its body unchanged" ;;
+            *)
+              kind="stable public preview"
+              body="establishes the stable download channel and the initial public compatibility contract. It is ready for public preview and evaluation, but is not yet claimed to be production-proven or battle-proven."
+              sed -e "s|{{VERSION}}|${release#v}|" \
+                  -e "s|{{RELEASE_KIND}}|${kind}|" \
+                  -e "s|{{RELEASE_KIND_BODY}}|${body}|" \
+                  docs/release-notes-template.md > release-body.md
+              current=$(gh release view "$release" --json body -q .body)
+              if printf '%s' "$current" | grep -q "stable public preview" \
+                 && ! printf '%s' "$current" | grep -q "release candidate"; then
+                echo "release body already carries the stable-public-preview wording; no edit needed"
+              else
+                gh release edit "$release" --notes-file release-body.md
+                echo "release body corrected in place (tag and assets untouched)"
+              fi
+              ;;
+          esac
+        env:
+          GH_TOKEN: ${{ github.token }}

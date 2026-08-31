@@ -1,10 +1,6 @@
-# Trestle v{{VERSION}} (preview release candidate)
+# Trestle v{{VERSION}} - {{RELEASE_KIND}}
 
-This release is a **preview / release candidate**, not a stable release.
-Compatibility is frozen only when a stable version is published; a
-release-candidate defect may still require a documented breaking correction.
-Before adopting it for production, read the candidate support boundary
-(`STABILITY.md`) and hardening evidence.
+Trestle v{{VERSION}} {{RELEASE_KIND_BODY}}
 
 ## What this release is
 
@@ -45,7 +41,7 @@ Before adopting it for production, read the candidate support boundary
 - No clustering, GraphQL, plugin marketplace, managed cloud, official container
   image, outbound verification email or self-service password recovery in this
   release.
-- Before stable release, only the newest release line receives security fixes.
+- Only the newest release line receives security fixes.
 
 ## Verified installation
 

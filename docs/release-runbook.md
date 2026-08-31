@@ -19,10 +19,16 @@ runbook starts (public-script parity gate: `scripts/test-public-scripts.sh`).
   reproducibility, workflow/notes contract).
 - `./scripts/test-download.sh`, `./scripts/test-installer.sh`,
   `./scripts/test-update.sh` pass against local fake release assets.
-- The release notes template (`docs/release-notes-template.md`) states preview
-  status, supported PostgreSQL versions, SQLite/PostgreSQL boundaries, TLS and
-  operator responsibilities, backup-before-upgrade, and known limitations.
-- The website does not claim a stable release already exists.
+- The release notes template (`docs/release-notes-template.md`) produces the
+  correct maturity wording for the release kind: a stable tag leads with
+  "stable public preview" and never calls itself a release candidate; a
+  prerelease tag honestly says it is a preview / release candidate, not a
+  stable release. The template retains supported PostgreSQL versions,
+  SQLite/PostgreSQL boundaries, TLS and operator responsibilities,
+  backup-before-upgrade, known limitations and verification instructions.
+- The website status matches the release kind (a stable release is described
+  as a public preview, not battle-proven; an unreleased state says no stable
+  version is published).
 
 ### Bind the tag to the reviewed commit (human)
 
@@ -52,7 +58,7 @@ must equal the recorded reviewed commit.
 Create the annotated tag locally and push it:
 
 ```sh
-git tag -a v0.1.0 -m "Trestle v0.1.0 (preview release candidate)"
+git tag -a v0.1.0 -m "Trestle v0.1.0 (stable public preview)"
 git push origin v0.1.0
 ```
 
@@ -80,7 +86,10 @@ successfully. The workflow:
 - writes `SHA256SUMS` (one line per archive: 64 lowercase hex, two spaces, exact
   filename) and uploads all seven files as release assets;
 - creates a normal release (never draft, never prerelease) with the release
-  notes template body plus the auto-generated changelog.
+  notes template body plus the auto-generated changelog. For a stable tag the
+  body leads with "stable public preview" and never calls itself a release
+  candidate or "not a stable release"; for a prerelease tag it honestly says
+  it is a preview / release candidate, not a stable release.
 
 ### 3. Asset inspection (human)
 

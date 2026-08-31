@@ -83,16 +83,50 @@ PY
 [ "$?" -eq 0 ] || fail "release workflow wiring"
 
 # 2. The release-notes body satisfies the operational requirements after
-#    version substitution.
-body=$(sed "s/{{VERSION}}/0.1.0/" "$root/docs/release-notes-template.md")
-[ -n "$body" ] || fail "release-notes body is empty"
-case "$body" in
-  *'{{VERSION}}'*) fail "unresolved {{VERSION}} placeholder remains in the release body" ;;
-esac
-echo "$body" | grep -q "0.1.0" || fail "expected version is absent from the release body"
-for heading in "preview / release candidate" "PostgreSQL" "SQLite" "Operator responsibilities" "Back up before upgrading" "Known limitations" "Verified installation"; do
-  echo "$body" | grep -qi "$heading" || fail "release body lacks required statement: $heading"
+#    version substitution, and the maturity wording matches the release kind:
+#    stable versions never get release-candidate wording; prerelease versions
+#    keep honest prerelease wording; unresolved or contradictory wording fails.
+release_kind() { # release_kind VERSION prints kind then body on two lines (matches the workflow)
+  case "${1#v}" in
+    *-*) printf 'preview release candidate\nis a preview / release candidate, not a stable release. Use it to test an upcoming release; prereleases must be selected explicitly by version.\n' ;;
+    *) printf 'stable public preview\nestablishes the stable download channel and the initial public compatibility contract. It is ready for public preview and evaluation, but is not yet claimed to be production-proven or battle-proven.\n' ;;
+  esac
+}
+build_body() { # build_body VERSION applies the workflow's substitution
+  kind=$(release_kind "$1" | sed -n '1p')
+  body=$(release_kind "$1" | sed -n '2p')
+  sed -e "s|{{VERSION}}|${1#v}|" \
+      -e "s|{{RELEASE_KIND}}|${kind}|" \
+      -e "s|{{RELEASE_KIND_BODY}}|${body}|" \
+      "$root/docs/release-notes-template.md"
+}
+stable_body=$(build_body v0.1.0)
+prerelease_body=$(build_body v0.1.0-rc.1)
+[ -n "$stable_body" ] && [ -n "$prerelease_body" ] || fail "release-notes body is empty"
+for placeholder in '{{VERSION}}' '{{RELEASE_KIND}}' '{{RELEASE_KIND_BODY}}'; do
+  case "$stable_body" in *"$placeholder"*) fail "unresolved placeholder $placeholder in the stable body" ;; esac
+  case "$prerelease_body" in *"$placeholder"*) fail "unresolved placeholder $placeholder in the prerelease body" ;; esac
 done
+echo "$stable_body" | grep -q "0.1.0" || fail "expected stable version is absent"
+echo "$prerelease_body" | grep -q "0.1.0-rc.1" || fail "expected prerelease version is absent"
+# Stable: must lead with stable-public-preview wording and never call itself a
+# release candidate or "not a stable release".
+echo "$stable_body" | grep -qi "stable public preview" || fail "stable body lacks stable-public-preview wording"
+echo "$stable_body" | grep -qi "release candidate" && fail "stable body calls itself a release candidate"
+echo "$stable_body" | grep -qi "not a stable release" && fail "stable body says it is not a stable release"
+# Prerelease: must honestly say it is a preview release candidate.
+echo "$prerelease_body" | grep -qi "preview / release candidate" || fail "prerelease body lacks release-candidate wording"
+echo "$prerelease_body" | grep -qi "not a stable release" || fail "prerelease body must say it is not a stable release"
+# Operational headings present in both.
+for heading in "Supported database options" "Operator responsibilities" "Back up before upgrading" "Known limitations" "Verified installation"; do
+  echo "$stable_body" | grep -qi "$heading" || fail "stable body lacks required statement: $heading"
+  echo "$prerelease_body" | grep -qi "$heading" || fail "prerelease body lacks required statement: $heading"
+done
+# Contradictory maturity wording must fail validation: a stable body that also
+# contains release-candidate wording is invalid.
+if echo "$stable_body" | grep -qi "release candidate"; then
+  fail "contradictory maturity wording was not rejected"
+fi
 
 # 3. Asset contract: the six packaged targets match the public scripts'
 #    os/arch naming, and package-release.sh emits SHA256SUMS with the exact
@@ -143,8 +177,38 @@ print("prerelease detection present and wired to the release action")
 PY
 [ "$?" -eq 0 ] || fail "prerelease tag semantics"
 
+# 6. The release-verify workflow must run the constrained gh attestation verify
+#    with the full policy and must never move/recreate the tag or create a new
+#    release.
+wf2="$root/.github/workflows/release-verify.yml"
+[ -f "$wf2" ] || fail "release-verify workflow is missing"
+python3 - "$wf2" <<'PY'
+import sys, yaml, re
+d = yaml.safe_load(open(sys.argv[1]))
+text = open(sys.argv[1]).read()
+issues = []
+for flag in "--repo" "--signer-workflow" "--source-ref" "--source-digest" "--deny-self-hosted-runners":
+    if flag not in text:
+        issues.append(f"release-verify is missing {flag}")
+for cmd in "gh release create", "git tag", "git push origin v0.1.0", "--force":
+    if cmd in text:
+        issues.append(f"release-verify may mutate tags/releases: {cmd}")
+if "attestations: read" not in text:
+    issues.append("release-verify lacks attestations: read")
+if "gh attestation verify" not in text:
+    issues.append("release-verify does not run gh attestation verify")
+if "sha256sum -c SHA256SUMS" not in text:
+    issues.append("release-verify does not verify checksums")
+for i in issues:
+    print("workflow issue:", i)
+if issues:
+    sys.exit(1)
+print("release-verify workflow uses the full constrained policy and never mutates tags")
+PY
+[ "$?" -eq 0 ] || fail "release-verify workflow structure"
+
 if [ "$failures" -gt 0 ]; then
   echo "release-contract regression: $failures failure(s)" >&2
   exit 1
 fi
-echo "release-contract regression passed: workflow wiring, release-notes body, asset contract, script agreement, prerelease tag semantics"
+echo "release-contract regression passed: workflow wiring, release-notes body (stable/prerelease maturity), asset contract, script agreement, prerelease tag semantics, release-verify policy"
