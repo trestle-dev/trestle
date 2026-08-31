@@ -9,7 +9,9 @@ name: Release rehearsal (manual)
 # The accepted version format is deliberately narrowed to release candidates:
 #   vMAJOR.MINOR.PATCH-rc.POSITIVE_INTEGER   (example: v0.1.0-rc.1)
 # Stable tags, missing/zero/leading-zero RC numbers, repeated/trailing dots,
-# build metadata, whitespace and shell metacharacters are rejected.
+# build metadata, whitespace, control characters and shell metacharacters are
+# rejected. The untrusted input is passed through the step environment and
+# never interpolated into shell source.
 on:
   workflow_dispatch:
     inputs:
@@ -27,12 +29,19 @@ jobs:
     runs-on: ubuntu-latest
     steps:
       - name: Validate version input
+        env:
+          INPUT_VERSION: ${{ inputs.version }}
         run: |
-          version="${{ github.event.inputs.version }}"
+          set -euo pipefail
+          version=$INPUT_VERSION
           case "$version" in
             v[0-9]*.[0-9]*.[0-9]*-rc\.[1-9]*) ;;
             *) echo "invalid version '$version': expected vMAJOR.MINOR.PATCH-rc.POSITIVE_INTEGER (e.g. v0.1.0-rc.1)" >&2; exit 1 ;;
           esac
+          if printf '%s' "$version" | LC_ALL=C grep -q '[^ -~]' \
+            || [ "$(printf '%s' "$version" | wc -l)" -gt 0 ]; then
+            echo "invalid version '$version': contains a control, newline or non-ASCII character" >&2; exit 1
+          fi
           printf '%s\n' "$version" | LC_ALL=C grep -q '^v[0-9][0-9]*\.[0-9][0-9]*\.[0-9][0-9]*-rc\.[1-9][0-9]*$' \
             || { echo "invalid version '$version': not an exact vMAJOR.MINOR.PATCH-rc.N value" >&2; exit 1; }
           echo "version=$version" >> "$GITHUB_ENV"
@@ -48,6 +57,15 @@ jobs:
             || { echo "could not resolve tag ${version} to a commit (got '$expected_commit')" >&2; exit 1; }
           echo "expected_commit=$expected_commit" >> "$GITHUB_ENV"
           echo "resolved ${version} -> $expected_commit"
+
+      - name: Inspect the installed gh CLI contract
+        run: |
+          set -euo pipefail
+          gh version
+          echo "--- gh attestation verify --help ---"
+          gh attestation verify --help
+        env:
+          GH_TOKEN: ${{ github.token }}
 
       - name: Download public release assets
         run: |
@@ -82,9 +100,10 @@ jobs:
             echo "=== gh attestation verify: $a ==="
             gh attestation verify "$a" \
               --repo trestle-dev/trestle \
-              --signer-workflow "trestle-dev/trestle/.github/workflows/release.yml@refs/tags/${version}" \
+              --signer-workflow "trestle-dev/trestle/.github/workflows/release.yml" \
               --source-ref "refs/tags/${version}" \
-              --source-sha "${expected_commit}"
+              --source-digest "${expected_commit}" \
+              --deny-self-hosted-runners
             echo "=== $a: attestation VERIFIED against the pinned release workflow @ ${version} ==="
           done
         env:
@@ -96,14 +115,20 @@ jobs:
           cd artifacts
           for a in trestle_*; do
             echo "=== $a provenance ==="
-            gh attestation verify "$a" --repo trestle-dev/trestle --format json |
-              jq -r '
-                .verificationResult as $r |
-                "subject: " + (($r.subjects // []) | map(.name) | join(",")),
+            gh attestation verify "$a" \
+              --repo trestle-dev/trestle \
+              --signer-workflow "trestle-dev/trestle/.github/workflows/release.yml" \
+              --source-ref "refs/tags/${version}" \
+              --source-digest "${expected_commit}" \
+              --deny-self-hosted-runners \
+              --format json |
+              jq -e 'type == "array" and length > 0' |
+              jq -r '.[] | .verificationResult as $r |
+                "subject: " + (($r.statement.subject // []) | map(.name) | join(",")),
                 "repository: " + ($r.sourceRepository // "n/a"),
                 "workflow: " + ($r.sourceRepositoryURI // "n/a"),
-                "signer: " + ($r.issuer // "n/a"),
-                "sourceRef: " + (($r.sourceDigest // {}) | keys | join(","))
+                "signer: " + (($r.signature.certificate // {}) | .subjectAlternativeName // "n/a"),
+                "verified: " + (($r.verifiedTimestamps // []) | length | tostring)
               '
           done
         env:
@@ -115,14 +140,18 @@ jobs:
           work="$(mktemp -d)"
           svc=""
           cleanup() {
-            if [ -n "$svc" ] && kill -0 "$svc" 2>/dev/null; then
-              kill "$svc" 2>/dev/null || true
+            if [ -n "$svc" ]; then
+              if kill -0 "$svc" 2>/dev/null; then
+                kill "$svc" 2>/dev/null || true
+              fi
               wait "$svc" 2>/dev/null || true
+              svc=""
             fi
-            svc=""
             rm -rf "$work"
           }
-          trap cleanup EXIT INT TERM
+          trap cleanup EXIT
+          trap 'cleanup; exit 130' INT
+          trap 'cleanup; exit 143' TERM
           cd "$work"
 
           echo "--- 1. pinned download.sh (public URL) ---"
@@ -198,7 +227,6 @@ jobs:
             || { echo "record lost across restart" >&2; exit 1; }
           echo "restart persistence: OK"
           kill "$svc" 2>/dev/null || true; wait "$svc" 2>/dev/null || true; svc=""
-          cleanup
           echo "=== REHEARSAL COMPLETE (fresh GitHub-hosted Ubuntu runner) ==="
         env:
           GH_TOKEN: ${{ github.token }}
