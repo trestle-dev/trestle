@@ -126,11 +126,15 @@ PostgreSQL and `TRESTLE_S3_*`/`TRESTLE_AWS_*` credentials):
 trestle service install --env-file /absolute/protected/trestle.env
 ```
 
-The file must be an absolute, regular, owner-only (0600), non-symlink file
-owned by the invoking user; it is referenced by the unit's `EnvironmentFile=`
-and its path is recorded in the authenticated managed metadata. Secret values
-are never copied into the unit or printed. Changing the file takes effect on
-`trestle service restart`. Repeated `service install` calls preserve the
+The file must be an absolute, regular, non-symlink file with exactly `0600`
+permissions, owned by the invoking user; it is referenced by the unit's
+`EnvironmentFile=` and its path is recorded in the integrity-checked managed
+metadata. Secret values are never copied into the unit or printed. The recorded
+environment file is revalidated before `start`, `restart` and `status`; `stop`,
+`logs` and `uninstall` remain available even if it is missing. Changing the file
+takes effect on `trestle service restart`. Install creates the data directory
+with owner-only permissions and refuses symlink, non-directory or
+group/world-writable data paths. Repeated `service install` calls preserve the
 installed listen, data directory and environment file unless a flag is given
 explicitly. `service install --system` (system-wide units) is a documented
 follow-up and is not yet supported; user mode is the default.
