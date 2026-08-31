@@ -2550,29 +2550,44 @@ Manual release-rehearsal runs and outcomes:
 - Run `33353275168` (commit `5ff8fc7`): PASSED end-to-end.
 - Run `33354434825` (commit `01a1d76`): constrained provenance verification
   PASSED; `Record provenance details` failed because the diagnostic reporting
-  additionally required guessed certificate fields (`certificate.sourceRepository`
-  and/or `certificate.issuer`) not present in the installed CLI output. The
-  authoritative constrained verification was not implicated.
+  additionally required guessed certificate fields not present in the installed
+  CLI output. The authoritative constrained verification was not implicated.
+- Run `33356238953` (commit `fe10d46`): PASSED end-to-end. Head SHA exactly
+  `fe10d466c3a01ff1015d0a307a29067ffb20bff6`. Every step passed: validate
+  version input, resolve tag to commit, inspect the installed gh CLI contract,
+  download public release assets, verify checksums and exact asset set, verify
+  build provenance and record details, and exercise the public release on the
+  fresh runner (pinned download.sh, pinned install.sh with isolated HOME,
+  SQLite first-run with seven-character password, restart persistence).
+  URL: https://github.com/trestle-dev/trestle/actions/runs/33356238953
 
-CP21 remains incomplete until the corrected current workflow passes.
+### CP21 - release rehearsal (complete)
 
-Repair (current commit): verification and reporting are merged into one step so
-each archive is verified exactly once by the constrained `gh attestation verify`
-command (the authoritative gate). The reporting jq requires only a non-empty
-array of `verificationResult` objects and prints the subject names, the
-certificate object verbatim (`tojson`), and the verified-timestamp count - it
-no longer treats optional certificate field presence or casing as a security
-gate and no longer labels guessed fields as repository/workflow/issuer. The
-regression suite drives the extracted validate/report jq through a valid array,
-a result without any certificate (must still pass, since reporting is
-diagnostic), and `true` / `{}` / `[]` / malformed JSON / a missing
-`verificationResult` (each must fail validation).
+Status: complete. The tag-triggered release path and public artifacts were
+rehearsed on a fresh GitHub-hosted Ubuntu runner. Evidence recorded above:
+
+- All six archives and `SHA256SUMS` downloaded from the public release and
+  verified (`sha256sum -c`); exactly six archives present.
+- Build provenance verified for every archive with the constrained
+  `gh attestation verify` policy (`--repo trestle-dev/trestle`,
+  `--signer-workflow trestle-dev/trestle/.github/workflows/release.yml`,
+  `--source-ref refs/tags/v0.1.0-rc.1`,
+  `--source-digest b616ebcfecedd8b0b9585e11f34bf96a4dbb8588`,
+  `--deny-self-hosted-runners`); reporting is diagnostic-only and prints the
+  certificate object verbatim.
+- Public scripts exercised on the fresh runner: `download.sh` (cwd-only,
+  `0.1.0-rc.1` / `b616ebc...` / linux/amd64), `install.sh` (isolated HOME,
+  mode 0755), SQLite first-run (health, ready, six-character password rejected,
+  seven-character accepted, login, collection, record, restart persistence).
+- Remaining limitations: native macOS and Windows execution was not available;
+  the Linux journey ran on a fresh GitHub-hosted runner; isolated host profiles
+  were used in earlier evidence.
 
 ```text
-Status: end-to-end rehearsal incomplete (last run failed only in diagnostic
-  reporting; reporting is now diagnostic-only and verify-once)
-Constrained attestation verification: PASSED in every run since dd70a8e
-CP21: not marked complete until the corrected workflow passes end-to-end
+Status: complete (browser acceptance partial; native mac/Windows untested)
+Rehearsal run: 33356238953 at fe10d466c3a01ff1015d0a307a29067ffb20bff6
+Tag/release: v0.1.0-rc.1 preserved at b616ebc; not promoted or announced
+Remaining: native mac/Windows execution; CP22 publish-or-hold decision
 ```
 
 ## Checkpoint roadmap (authoritative status)
