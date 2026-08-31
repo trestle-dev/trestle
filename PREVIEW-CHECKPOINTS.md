@@ -2566,6 +2566,15 @@ extracted jq program through a representative non-empty attestation array
 (success + expected fields) and through `true`, `{}`, `[]`, malformed JSON and
 an array without `verificationResult` (each must fail).
 
+Provenance reporting trust distinction: `repository`, `signerWorkflow` (the
+certificate SubjectAlternativeName) and `signerIssuer` are read from
+`signature.certificate`, and the timestamp count from `verifiedTimestamps` -
+the values the GitHub CLI manual documents as protected from originating-workflow
+manipulation. `subject` names come from `statement.subject`, which is
+user-controllable and reported as the artifact subject, not as proof of
+builder identity. Missing or malformed security evidence terminates the step
+rather than being silently reported as n/a.
+
 ```text
 Status: end-to-end rehearsal incomplete (reporting-step bug repaired)
 Constrained attestation verification: PASSED for the archives (run 33351635285)

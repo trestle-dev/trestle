@@ -113,23 +113,40 @@ jobs:
         run: |
           set -euo pipefail
           cd artifacts
+          # Single jq invocation: validates that every attestation result is
+          # fully usable (statement + non-empty subject names, certificate with
+          # a non-empty signer identity and source repository, non-empty
+          # verifiedTimestamps) and formats the original array in place. Missing
+          # security evidence terminates the step instead of becoming n/a.
           jqprog='
-            if type == "array" and length > 0 and (all(.[]; (.verificationResult | type) == "object")) then
-              .[] |
-              .verificationResult as $r |
-              "subject: " + (($r.statement.subject // []) | map(.name) | join(",")),
-              "repository: " + ($r.sourceRepository // "n/a"),
-              "workflow: " + ($r.sourceRepositoryURI // "n/a"),
-              "signer: " + (($r.signature.certificate // {}) | .subjectAlternativeName // "n/a"),
-              "verified: " + (($r.verifiedTimestamps // []) | length | tostring)
-            else
-              error("expected a non-empty array of attestation results each carrying verificationResult")
-            end
+            (type == "array" and length > 0 and all(.[];
+              (.verificationResult | type) == "object"
+              and ((.verificationResult.statement // {}) | type) == "object"
+              and (((.verificationResult.statement.subject // []) | type) == "array")
+              and ((.verificationResult.statement.subject // []) | length) > 0
+              and all((.verificationResult.statement.subject // [])[]; (.name | type) == "string" and (.name | length) > 0)
+              and ((.verificationResult.signature.certificate // {}) | type) == "object"
+              and ((.verificationResult.signature.certificate.subjectAlternativeName // .verificationResult.signature.certificate.SubjectAlternativeName // "") | length) > 0
+              and ((.verificationResult.signature.certificate.sourceRepository // .verificationResult.signature.certificate.SourceRepository // "") | type) == "string"
+              and ((.verificationResult.signature.certificate.sourceRepository // .verificationResult.signature.certificate.SourceRepository // "") | length) > 0
+              and ((.verificationResult.signature.certificate.issuer // .verificationResult.signature.certificate.Issuer // "") | length) > 0
+              and ((.verificationResult.verifiedTimestamps // []) | type) == "array"
+              and ((.verificationResult.verifiedTimestamps // []) | length) > 0
+            )) as $ok
+            | if $ok then
+                .[] |
+                .verificationResult as $r |
+                "subject: " + (($r.statement.subject // []) | map(.name) | join(",")),
+                "repository: " + ($r.signature.certificate.sourceRepository // $r.signature.certificate.SourceRepository),
+                "signerWorkflow: " + ($r.signature.certificate.subjectAlternativeName // $r.signature.certificate.SubjectAlternativeName),
+                "signerIssuer: " + ($r.signature.certificate.issuer // $r.signature.certificate.Issuer),
+                "verifiedTimestamps: " + (($r.verifiedTimestamps // []) | length | tostring)
+              else
+                error("expected a non-empty array of attestation results each carrying a usable verificationResult")
+              end
           '
           for a in trestle_*; do
             echo "=== $a provenance ==="
-            # Single jq invocation: validates the top-level array AND formats it
-            # in place, so the validated input reaches the formatter.
             gh attestation verify "$a" \
               --repo trestle-dev/trestle \
               --signer-workflow "trestle-dev/trestle/.github/workflows/release.yml" \

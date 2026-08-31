@@ -143,19 +143,36 @@ PY
 [ -n "$jqprog" ] || fail "could not extract the provenance jq program"
 
 # Representative non-empty attestation-result array matching the documented
-# gh attestation verify --format json structure.
-valid='[{"verificationResult":{"statement":{"subject":[{"name":"trestle_0.1.0-rc.1_linux_amd64.tar.gz","digest":{"sha256":"abcd"}}]},"sourceRepository":"trestle-dev/trestle","sourceRepositoryURI":"https://github.com/trestle-dev/trestle","signature":{"certificate":{"subjectAlternativeName":"https://github.com/trestle-dev/trestle/.github/workflows/release.yml@refs/tags/v0.1.0-rc.1"}},"verifiedTimestamps":[{"type":"RFC3161"}]}}]'
-run_jq() { printf '%s' "$1" | jq -er "$jqprog" >/tmp/jqout 2>/dev/null; }
+# gh attestation verify --format json structure: verificationResult carries a
+# statement with a non-empty subject array, a certificate with a non-empty
+# signer identity (SAN), source repository and issuer, and non-empty
+# verifiedTimestamps. Field names are accepted in the workflow in either
+# camelCase or Go-style capitalization.
+valid='[{"verificationResult":{"statement":{"subject":[{"name":"trestle_0.1.0-rc.1_linux_amd64.tar.gz","digest":{"sha256":"abcd"}}]},"signature":{"certificate":{"subjectAlternativeName":"https://github.com/trestle-dev/trestle/.github/workflows/release.yml@refs/tags/v0.1.0-rc.1","sourceRepository":"trestle-dev/trestle","issuer":"https://token.actions.githubusercontent.com"}},"verifiedTimestamps":[{"type":"RFC3161"}]}}]'
+jqout=$(mktemp "${TMPDIR:-/tmp}/trestle-rehearsal-jq.XXXXXX")
+trap 'rm -f "$jqout"' EXIT INT TERM
+run_jq() { printf '%s' "$1" | jq -er "$jqprog" >"$jqout" 2>/dev/null; }
 # 1. A valid array must succeed and emit the expected subject/provenance fields.
 run_jq "$valid" || fail "valid attestation array was rejected by the reporting jq"
-grep -q 'subject: trestle_0.1.0-rc.1_linux_amd64.tar.gz' /tmp/jqout || fail "subject not emitted"
-grep -q 'repository: trestle-dev/trestle' /tmp/jqout || fail "repository not emitted"
-grep -q 'workflow: https://github.com/trestle-dev/trestle' /tmp/jqout || fail "workflow not emitted"
-grep -q 'signer: https://github.com/trestle-dev/trestle/.github/workflows/release.yml' /tmp/jqout || fail "signer not emitted"
-grep -q 'verified: 1' /tmp/jqout || fail "verified count not emitted"
-# 2-5. Each invalid form must fail clearly (the validated array must not be
-# replaced by the predicate result).
-for bad in 'true' '{}' '[]' '{' '[{"foo":1}]'; do
+grep -q 'subject: trestle_0.1.0-rc.1_linux_amd64.tar.gz' "$jqout" || fail "subject not emitted"
+grep -q 'repository: trestle-dev/trestle' "$jqout" || fail "repository not emitted"
+grep -q 'signerWorkflow: https://github.com/trestle-dev/trestle/.github/workflows/release.yml' "$jqout" || fail "signer workflow not emitted"
+grep -q 'signerIssuer: https://token.actions.githubusercontent.com' "$jqout" || fail "signer issuer not emitted"
+grep -q 'verifiedTimestamps: 1' "$jqout" || fail "verified timestamp count not emitted"
+# 2-5. Each invalid or incomplete form must fail clearly: no missing security
+# evidence may be silently turned into n/a.
+for bad in \
+  'true' '{}' '[]' '{' \
+  '[{"verificationResult":{}}]' \
+  '[{"verificationResult":{"statement":{}}}]' \
+  '[{"verificationResult":{"statement":{"subject":[]}}}]' \
+  '[{"verificationResult":{"statement":{"subject":[{}]}}}]' \
+  '[{"verificationResult":{"statement":{"subject":[{"name":""}]}}}]' \
+  '[{"verificationResult":{"statement":{"subject":[{"name":"asset"}]},"signature":{}}}]' \
+  '[{"verificationResult":{"statement":{"subject":[{"name":"asset"}]},"signature":{"certificate":{}},"verifiedTimestamps":[]}}]' \
+  '[{"verificationResult":{"statement":{"subject":[{"name":"asset"}]},"signature":{"certificate":{"subjectAlternativeName":"https://github.com/trestle-dev/trestle/.github/workflows/release.yml@refs/tags/v0.1.0-rc.1","sourceRepository":"trestle-dev/trestle"}},"verifiedTimestamps":[{"type":"RFC3161"}]}}]' \
+  '[{"verificationResult":{"statement":{"subject":[{"name":"asset"}]},"signature":{"certificate":{"subjectAlternativeName":"","sourceRepository":"trestle-dev/trestle","issuer":"https://token.actions.githubusercontent.com"}},"verifiedTimestamps":[{"type":"RFC3161"}]}}]' \
+  '[{"verificationResult":{"statement":{"subject":[{"name":"asset"}]},"signature":{"certificate":{"subjectAlternativeName":"https://github.com/trestle-dev/trestle/.github/workflows/release.yml@refs/tags/v0.1.0-rc.1","sourceRepository":"trestle-dev/trestle","issuer":"https://token.actions.githubusercontent.com"}},"verifiedTimestamps":[]}}]'; do
   if run_jq "$bad"; then fail "invalid attestation JSON accepted by the reporting jq: $bad"; fi
 done
 
