@@ -2610,8 +2610,27 @@ evidence.
 - Artifacts: exactly six platform archives (`linux/amd64`, `linux/arm64`,
   `darwin/amd64`, `darwin/arm64`, `windows/amd64`, `windows/arm64`) plus
   `SHA256SUMS`; `sha256sum -c` OK for every archive.
-- Provenance: the attestation job succeeded; every archive digest has a
-  matching entry in the sigstore transparency log.
+- Provenance, by evidence class (do not conflate):
+  - checksum verification: `sha256sum -c` passed for all six archives;
+  - attestation generation: the release workflow's
+    `actions/attest-build-provenance` step succeeded (pinned SHA);
+  - Rekor inclusion: every archive digest has a matching entry in the sigstore
+    transparency log;
+  - independent constrained verification: the `Release verify` workflow (run
+    `33375953591`) downloaded all six public archives and ran
+    `gh attestation verify` on each with the full policy
+    (`--repo trestle-dev/trestle`,
+    `--signer-workflow trestle-dev/trestle/.github/workflows/release.yml`,
+    `--source-ref refs/tags/v0.1.0`,
+    `--source-digest 80f8497d945ca9bfa15d07dec5be6956054de6d3`,
+    `--deny-self-hosted-runners`) - the step failed on any archive and
+    completed success for all six.
+- Release-body correction: the `Release verify` workflow rebuilt the body from
+  the canonical release-notes template for a stable tag and corrected the live
+  `v0.1.0` release body in place. It now leads with "stable public preview",
+  no longer says "release candidate" or "not a stable release", and retains the
+  operational boundaries (backup-before-upgrade, TLS responsibilities, known
+  limitations, verification). The tag and its seven assets were untouched.
 - Binary: Linux amd64 natively executed; `trestle version` reports
   `{"version":"0.1.0","commit":"80f8497d945ca9bfa15d07dec5be6956054de6d3",
   "os":"linux","arch":"amd64"}`; all six binaries embed version `0.1.0` and the
@@ -2638,7 +2657,8 @@ evidence.
 Status: complete (stable v0.1.0 public preview published and verified)
 Release: https://github.com/trestle-dev/trestle/releases/tag/v0.1.0
 Tag target: 80f8497d945ca9bfa15d07dec5be6956054de6d3
-Workflow: 33371772597 (success)
+Workflow: 33371772597 (release, success); 33375953591 (independent constrained
+  gh attestation verify + in-place release-body correction, success)
 Boundary: not battle-proven; native mac/Windows untested; no announcement made
 ```
 
