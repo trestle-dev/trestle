@@ -2662,6 +2662,31 @@ Workflow: 33371772597 (release, success); 33375953591 (independent constrained
 Boundary: not battle-proven; native mac/Windows untested; no announcement made
 ```
 
+### Permanent release-verify workflow (read-only)
+
+The write-capable one-off `release-verify.yml` (which corrected the v0.1.0 body
+in run `33375953591`) was replaced by a permanent **manual-only, read-only**
+verification workflow: `workflow_dispatch` only, an explicitly required release
+input, `contents: read` + `attestations: read`, no release-body editing, no
+tag/asset mutation, real GitHub asset-name-set validation (exactly `SHA256SUMS`
+plus the six archives derived from the requested version), a six-entry
+`SHA256SUMS` structural check, and the full constrained `gh attestation verify`
+policy. Future releases receive the correct body from `release.yml`; the one-off
+body correction remains recorded above and is not retained as automation.
+
+Status: the read-only workflow is committed at `79af4ed` and CI passed. Its
+`v0.1.0` run is **pending an authenticated dispatch** - this environment has no
+GitHub credentials (the local `gh` is unauthenticated and its CLI lacks the
+`attestation` subcommand; the dispatch REST call returns 401). An authenticated
+operator can run it via `gh workflow run release-verify.yml --ref main -f
+release=v0.1.0` or the Actions "Release verify (read-only)" Run workflow form.
+
+```text
+Status: read-only release-verify workflow committed; v0.1.0 run pending an
+  authenticated dispatch (blocked on credentials in this environment)
+Release body: already corrected (recorded above); tag and assets unchanged
+```
+
 ## Checkpoint roadmap (authoritative status)
 
 This table reconciles the public-preview campaign's actual accepted scope with
