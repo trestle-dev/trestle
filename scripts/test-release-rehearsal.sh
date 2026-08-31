@@ -93,9 +93,6 @@ if "commits/${version}" not in text or "expected_commit" not in text:
     issues.append("tag-to-commit resolution is missing")
 if '${expected_commit}' not in text or "commit" not in text:
     issues.append("binary commit comparison is missing")
-# JSON provenance output validated as an array.
-if "--format json" in text and 'type == "array"' not in text:
-    issues.append("structured JSON output is not validated as an array")
 # INT/TERM traps exit after cleanup; cleanup waits for the service.
 if "trap 'cleanup; exit 130' INT" not in text or "trap 'cleanup; exit 143' TERM" not in text:
     issues.append("INT/TERM traps do not clean up and exit")
@@ -112,6 +109,15 @@ for bad in 'echo "$pw"', 'echo "$GH_TOKEN"', 'cat cj', 'cat setup.json', 'curl -
         issues.append(f"workflow may print a secret/token: {bad}")
 if "https://trestle.cv" not in text:
     issues.append("public script URLs are not used")
+# JSON provenance output validated as an array.
+if "--format json" in text and 'type == "array"' not in text:
+    issues.append("structured JSON output is not validated as an array")
+# The reporting step must NOT be the broken predicate-pipe-predicate structure:
+# one jq invocation validates and formats the array in place.
+if re.search(r"jq -e 'type == \"array\"[^\n]*\|\s*jq", text):
+    issues.append("predicate jq is piped into a second jq (validated array is replaced by true)")
+if text.count("\njq -er") != 1 and "jq -er \"$jqprog\"" not in text:
+    issues.append("the reporting step does not use a single jq invocation")
 for i in issues:
     print("workflow issue:", i)
 if issues:
@@ -119,6 +125,39 @@ if issues:
 print("release-rehearsal workflow is manual-only, read-only, injection-safe, RC-validated, tag-bound, policy-constrained attestation, array-validated JSON, 7-char, signal-safe cleanup")
 PY
 [ "$?" -eq 0 ] || fail "release-rehearsal workflow structure"
+
+# --- Executable behavioral regression for the provenance-reporting jq ---------
+# Extract the exact jq program used by the "Record provenance details" step and
+# drive it through valid and invalid attestation-result JSON.
+command -v jq >/dev/null 2>&1 || { echo "jq unavailable for the provenance regression" >&2; exit 1; }
+jqprog=$(python3 - "$wf" <<'PY'
+import sys, yaml
+d = yaml.safe_load(open(sys.argv[1]))
+steps = d["jobs"]["rehearse"]["steps"]
+run = next(s["run"] for s in steps if s.get("name") == "Record provenance details")
+start = run.index("jqprog='") + len("jqprog='")
+end = run.index("\n'", start)
+print(run[start:end])
+PY
+)
+[ -n "$jqprog" ] || fail "could not extract the provenance jq program"
+
+# Representative non-empty attestation-result array matching the documented
+# gh attestation verify --format json structure.
+valid='[{"verificationResult":{"statement":{"subject":[{"name":"trestle_0.1.0-rc.1_linux_amd64.tar.gz","digest":{"sha256":"abcd"}}]},"sourceRepository":"trestle-dev/trestle","sourceRepositoryURI":"https://github.com/trestle-dev/trestle","signature":{"certificate":{"subjectAlternativeName":"https://github.com/trestle-dev/trestle/.github/workflows/release.yml@refs/tags/v0.1.0-rc.1"}},"verifiedTimestamps":[{"type":"RFC3161"}]}}]'
+run_jq() { printf '%s' "$1" | jq -er "$jqprog" >/tmp/jqout 2>/dev/null; }
+# 1. A valid array must succeed and emit the expected subject/provenance fields.
+run_jq "$valid" || fail "valid attestation array was rejected by the reporting jq"
+grep -q 'subject: trestle_0.1.0-rc.1_linux_amd64.tar.gz' /tmp/jqout || fail "subject not emitted"
+grep -q 'repository: trestle-dev/trestle' /tmp/jqout || fail "repository not emitted"
+grep -q 'workflow: https://github.com/trestle-dev/trestle' /tmp/jqout || fail "workflow not emitted"
+grep -q 'signer: https://github.com/trestle-dev/trestle/.github/workflows/release.yml' /tmp/jqout || fail "signer not emitted"
+grep -q 'verified: 1' /tmp/jqout || fail "verified count not emitted"
+# 2-5. Each invalid form must fail clearly (the validated array must not be
+# replaced by the predicate result).
+for bad in 'true' '{}' '[]' '{' '[{"foo":1}]'; do
+  if run_jq "$bad"; then fail "invalid attestation JSON accepted by the reporting jq: $bad"; fi
+done
 
 if [ "$failures" -gt 0 ]; then
   echo "release-rehearsal regression: $failures failure(s)" >&2

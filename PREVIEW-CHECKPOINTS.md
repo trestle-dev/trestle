@@ -2537,6 +2537,42 @@ Recommendation: see the CP21 evidence report; no promotion or announcement
   via Nift source; generated output rebuilt. Website source and output commits
   are separate.
 
+## CP21 rehearsal failure record (run 33351635285)
+
+The manually dispatched release-rehearsal run (commit `dd70a8e`, URL
+https://github.com/trestle-dev/trestle/actions/runs/33351635285) failed during
+`Record provenance details`, NOT during provenance verification:
+
+- The constrained verification step (`Verify build provenance (constrained
+  policy)`) succeeded for the archives before the reporting failure, proving the
+  `--signer-workflow` / `--source-ref` / `--source-digest` /
+  `--deny-self-hosted-runners` policy flags are valid on the hosted runner and
+  the attestations match the pinned release workflow.
+- The reporting step failed because its first `jq` was a predicate
+  (`jq -e 'type == "array" and length > 0'`) that emitted the boolean `true`
+  instead of forwarding the array; the second `jq` then ran `.[]` on `true`
+  (`jq: error: Cannot iterate over boolean (true)`).
+- The end-to-end rehearsal therefore remains incomplete; CP21 is not marked
+  complete.
+- An earlier manual run (33350396151, pre-flag-fix commit) failed at the
+  constrained-verification step because it used the invalid `--source-sha`
+  flag; that is fixed.
+
+Repair (this commit): the reporting step now uses a single `jq -er "$jqprog"`
+invocation that both validates the top-level array (including requiring each
+element to carry a usable `verificationResult`) and formats it in place, so the
+validated array reaches the formatter. The regression suite drives the exact
+extracted jq program through a representative non-empty attestation array
+(success + expected fields) and through `true`, `{}`, `[]`, malformed JSON and
+an array without `verificationResult` (each must fail).
+
+```text
+Status: end-to-end rehearsal incomplete (reporting-step bug repaired)
+Constrained attestation verification: PASSED for the archives (run 33351635285)
+Reporting step: FAILED (jq predicate emitted true); repaired in this commit
+CP21: not marked complete
+```
+
 ## Checkpoint roadmap (authoritative status)
 
 This table reconciles the public-preview campaign's actual accepted scope with
