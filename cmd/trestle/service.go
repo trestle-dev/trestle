@@ -15,6 +15,7 @@ import (
 	"path/filepath"
 	"regexp"
 	"strings"
+	"syscall"
 	"time"
 )
 
@@ -84,8 +85,46 @@ type serviceManager struct {
 }
 
 type unitMeta struct {
-	listen string
-	health string
+	listen   string
+	data     string
+	envfile  string
+	health   string
+}
+
+// validateEnvFile validates an EnvironmentFile path for the service unit:
+// absolute, a regular non-symlink file, owner-only permissions, owned by the
+// invoking user, and free of systemd specifier and control characters. Secret
+// values are never read or embedded.
+func validateEnvFile(path string) error {
+	if !filepath.IsAbs(path) {
+		return fmt.Errorf("environment file %q must be an absolute path", path)
+	}
+	if err := validateNoControl(path, "environment file"); err != nil {
+		return err
+	}
+	if strings.ContainsAny(path, "%") {
+		return fmt.Errorf("environment file %q must not contain systemd specifiers (%% )", path)
+	}
+	info, err := os.Lstat(path)
+	if err != nil {
+		return fmt.Errorf("environment file: %w", err)
+	}
+	if info.Mode()&os.ModeSymlink != 0 {
+		return fmt.Errorf("environment file %q must not be a symlink", path)
+	}
+	if !info.Mode().IsRegular() {
+		return fmt.Errorf("environment file %q must be a regular file", path)
+	}
+	if info.Mode().Perm()&0o022 != 0 {
+		return fmt.Errorf("environment file %q must not be group- or world-writable", path)
+	}
+	if info.Mode().Perm()&0o077 != 0 {
+		return fmt.Errorf("environment file %q must be owner-only (0600)", path)
+	}
+	if stat, ok := info.Sys().(*syscall.Stat_t); ok && int(stat.Uid) != os.Getuid() {
+		return fmt.Errorf("environment file %q must be owned by the invoking user", path)
+	}
+	return nil
 }
 
 func userUnitPath(unitName string) string {
@@ -241,7 +280,7 @@ func systemdQuote(s string) string {
 	return b.String()
 }
 
-func renderTrestleUnitBody(exe, listen, dataDir string) string {
+func renderTrestleUnitBody(exe, listen, dataDir, envfile string) string {
 	var b strings.Builder
 	b.WriteString("[Unit]\n")
 	b.WriteString("Description=Trestle records service\n")
@@ -256,13 +295,27 @@ func renderTrestleUnitBody(exe, listen, dataDir string) string {
 	b.WriteString("WorkingDirectory=" + systemdQuote(filepath.Dir(exe)) + "\n")
 	b.WriteString("Restart=on-failure\n")
 	b.WriteString("Environment=HOME=%h\n")
+	b.WriteString("UMask=0077\n")
+	b.WriteString("NoNewPrivileges=true\n")
+	b.WriteString("PrivateTmp=true\n")
+	b.WriteString("ProtectSystem=strict\n")
+	b.WriteString("ProtectHome=read-only\n")
+	b.WriteString("ReadWritePaths=" + dataDir + "\n")
+	if envfile != "" {
+		b.WriteString("EnvironmentFile=" + systemdQuote(envfile) + "\n")
+	}
 	b.WriteString("\n[Install]\n")
 	b.WriteString("WantedBy=default.target\n")
 	return b.String()
 }
 
-func buildTrestleUnit(exe, listen, dataDir string) string {
-	content := "# trestle-listen: " + listen + "\n# trestle-health: " + trestleHealthPath + "\n" + renderTrestleUnitBody(exe, listen, dataDir)
+func buildTrestleUnit(exe, listen, dataDir, envfile string) string {
+	meta := "# trestle-listen: " + listen + "\n# trestle-data: " + dataDir + "\n"
+	if envfile != "" {
+		meta += "# trestle-envfile: " + envfile + "\n"
+	}
+	meta += "# trestle-health: " + trestleHealthPath + "\n"
+	content := meta + renderTrestleUnitBody(exe, listen, dataDir, envfile)
 	sum := sha256.Sum256([]byte(content))
 	header := trestleUnitMarker + "\n" + trestleManagedPrefix + "v1 sha256=" + hex.EncodeToString(sum[:]) + "\n"
 	return header + content
@@ -296,7 +349,7 @@ func readManagedUnit(path string) (unitMeta, error) {
 		return unitMeta{}, errModified
 	}
 	meta := unitMeta{}
-	listenSeen, healthSeen := 0, 0
+	listenSeen, dataSeen, envfileSeen, healthSeen := 0, 0, 0, 0
 	for _, ln := range lines[2:] {
 		switch {
 		case strings.HasPrefix(ln, "# trestle-listen: "):
@@ -305,6 +358,18 @@ func readManagedUnit(path string) (unitMeta, error) {
 				return unitMeta{}, errMalformed
 			}
 			meta.listen = strings.TrimSpace(strings.TrimPrefix(ln, "# trestle-listen: "))
+		case strings.HasPrefix(ln, "# trestle-data: "):
+			dataSeen++
+			if dataSeen > 1 {
+				return unitMeta{}, errMalformed
+			}
+			meta.data = strings.TrimSpace(strings.TrimPrefix(ln, "# trestle-data: "))
+		case strings.HasPrefix(ln, "# trestle-envfile: "):
+			envfileSeen++
+			if envfileSeen > 1 {
+				return unitMeta{}, errMalformed
+			}
+			meta.envfile = strings.TrimSpace(strings.TrimPrefix(ln, "# trestle-envfile: "))
 		case strings.HasPrefix(ln, "# trestle-health: "):
 			healthSeen++
 			if healthSeen > 1 {
@@ -313,16 +378,63 @@ func readManagedUnit(path string) (unitMeta, error) {
 			meta.health = strings.TrimSpace(strings.TrimPrefix(ln, "# trestle-health: "))
 		}
 	}
-	if listenSeen != 1 || healthSeen != 1 || meta.listen == "" || meta.health == "" {
+	if listenSeen != 1 || dataSeen != 1 || healthSeen != 1 || meta.listen == "" || meta.data == "" || meta.health == "" {
+		return unitMeta{}, errMalformed
+	}
+	if envfileSeen > 1 {
 		return unitMeta{}, errMalformed
 	}
 	if meta.health != trestleHealthPath {
 		return unitMeta{}, errMalformed
 	}
-	if err := validateNoControl(meta.listen, "listen"); err != nil {
-		return unitMeta{}, errMalformed
+	for _, v := range []struct{ val, name string }{{meta.listen, "listen"}, {meta.data, "data-dir"}} {
+		if err := validateNoControl(v.val, v.name); err != nil {
+			return unitMeta{}, errMalformed
+		}
+	}
+	if meta.envfile != "" {
+		if err := validateNoControl(meta.envfile, "environment file"); err != nil {
+			return unitMeta{}, errMalformed
+		}
+		if strings.ContainsAny(meta.envfile, "%") {
+			return unitMeta{}, errMalformed
+		}
 	}
 	return meta, nil
+}
+
+// existingUnitMeta reads a valid managed unit's metadata, or returns an empty
+// meta (nil error) when no unit is installed. An existing foreign or modified
+// unit is an error so repeated installs never silently diverge from it.
+func existingUnitMeta(path string) (unitMeta, error) {
+	meta, err := readManagedUnit(path)
+	if err != nil {
+		if errors.Is(err, os.ErrNotExist) {
+			return unitMeta{}, nil
+		}
+		return unitMeta{}, fmt.Errorf("existing unit at %s is not valid: %w", path, err)
+	}
+	return meta, nil
+}
+
+// resolveInstallValues preserves installed configuration on repeated installs:
+// a flag the operator did not explicitly set keeps its existing managed value
+// rather than being silently replaced by a CLI default.
+func resolveInstallValues(meta unitMeta, visited map[string]bool, listen, dataDir, envfile string) (string, string, string) {
+	if !visited["listen"] && meta.listen != "" {
+		listen = meta.listen
+	}
+	if !visited["env-file"] && meta.envfile != "" {
+		envfile = meta.envfile
+	}
+	if dataDir == "" {
+		if !visited["data-dir"] && meta.data != "" {
+			dataDir = meta.data
+		} else if abs, err := filepath.Abs("./data"); err == nil {
+			dataDir = abs
+		}
+	}
+	return listen, dataDir, envfile
 }
 
 func writeManagedUnit(path, content string) error {
@@ -420,7 +532,7 @@ func (m *serviceManager) requireManaged(verb string) error {
 	return nil
 }
 
-func (m *serviceManager) install(listen, dataDir string, out io.Writer) error {
+func (m *serviceManager) install(listen, dataDir, envfile string, out io.Writer) error {
 	for _, v := range []struct{ val, name string }{
 		{listen, "listen"}, {dataDir, "data-dir"},
 	} {
@@ -428,7 +540,12 @@ func (m *serviceManager) install(listen, dataDir string, out io.Writer) error {
 			return err
 		}
 	}
-	unit := buildTrestleUnit(m.exe, listen, dataDir)
+	if envfile != "" {
+		if err := validateEnvFile(envfile); err != nil {
+			return err
+		}
+	}
+	unit := buildTrestleUnit(m.exe, listen, dataDir, envfile)
 	if err := writeManagedUnit(m.unitPath, unit); err != nil {
 		return err
 	}
@@ -493,6 +610,10 @@ func (m *serviceManager) status(out io.Writer, version string) error {
 	fmt.Fprintf(out, "pid:     %s\n", strings.TrimSpace(pid))
 	fmt.Fprintf(out, "version: %s\n", version)
 	fmt.Fprintf(out, "listen:  %s\n", meta.listen)
+	fmt.Fprintf(out, "data:    %s\n", meta.data)
+	if meta.envfile != "" {
+		fmt.Fprintf(out, "env:     %s\n", meta.envfile)
+	}
 	if active != stateActive {
 		return fmt.Errorf("%s is %q; expected active", m.unitName, active)
 	}
@@ -538,23 +659,45 @@ func syncDir(dir string) {
 	}
 }
 
-func unitBackupSuffix() string {
-	b := make([]byte, 8)
-	_, _ = rand.Read(b)
-	return hex.EncodeToString(b)
-}
+var (
+	linkFile = os.Link
+	removeFile = os.Remove
+	randomSuffix = func() (string, error) {
+		b := make([]byte, 8)
+		if _, err := rand.Read(b); err != nil {
+			return "", err
+		}
+		return hex.EncodeToString(b), nil
+	}
+)
 
-// backupManagedUnit atomically renames the managed unit to a unique hidden
-// backup name in the same directory. The name never ends in ".service", so
-// systemd ignores it. The original inode is preserved by the rename.
+// backupManagedUnit moves the managed unit aside to a unique hidden backup name
+// in the same directory. It uses an exclusive hard link so an existing retained
+// backup is never overwritten; the original is unlinked only after the backup
+// link exists, and on any failure the original stays intact with no backup
+// artifact left behind.
 func backupManagedUnit(path string) (string, error) {
 	dir := filepath.Dir(path)
-	backup := filepath.Join(dir, "."+filepath.Base(path)+".unit-backup-"+unitBackupSuffix())
-	if err := os.Rename(path, backup); err != nil {
-		return "", err
+	for i := 0; i < 32; i++ {
+		suffix, err := randomSuffix()
+		if err != nil {
+			return "", fmt.Errorf("cannot generate a backup name: %w", err)
+		}
+		backup := filepath.Join(dir, "."+filepath.Base(path)+".unit-backup-"+suffix)
+		if err := linkFile(path, backup); err != nil {
+			if errors.Is(err, os.ErrExist) {
+				continue // candidate already exists; try another name
+			}
+			return "", err
+		}
+		if err := removeFile(path); err != nil {
+			_ = os.Remove(backup)
+			return "", fmt.Errorf("cannot remove the original after backing it up: %w", err)
+		}
+		syncDir(dir)
+		return backup, nil
 	}
-	syncDir(dir)
-	return backup, nil
+	return "", errors.New("could not allocate a unique backup name")
 }
 
 // restoreFromBackup atomically restores the managed unit at its original path
@@ -658,6 +801,7 @@ func runService(args []string, version string) int {
 	follow := fs.Bool("follow", false, "follow new journal output")
 	listen := fs.String("listen", defaultListen, "listen address recorded in the unit")
 	dataDir := fs.String("data-dir", "", "data directory recorded in the unit (default: ./data made absolute)")
+	envFile := fs.String("env-file", "", "absolute owner-only environment file for TRESTLE_* variables")
 	if err := fs.Parse(rest); err != nil {
 		return 2
 	}
@@ -669,19 +813,22 @@ func runService(args []string, version string) int {
 		fmt.Fprintln(os.Stderr, "trestle: systemctl not found; is systemd installed?")
 		return 1
 	}
-	if *dataDir == "" {
-		if abs, err := filepath.Abs("./data"); err == nil {
-			*dataDir = abs
-		}
-	}
-	if !filepath.IsAbs(*dataDir) {
-		fmt.Fprintln(os.Stderr, "trestle: --data-dir must be an absolute path")
-		return 2
-	}
 	m := &serviceManager{
 		unitName: "trestle.service",
 		unitPath: userUnitPath("trestle.service"),
 		run:      execRunner{},
+	}
+	visited := map[string]bool{}
+	fs.Visit(func(f *flag.Flag) { visited[f.Name] = true })
+	meta, err := existingUnitMeta(m.unitPath)
+	if err != nil {
+		fmt.Fprintln(os.Stderr, "trestle:", err)
+		return 1
+	}
+	*listen, *dataDir, *envFile = resolveInstallValues(meta, visited, *listen, *dataDir, *envFile)
+	if !filepath.IsAbs(*dataDir) {
+		fmt.Fprintln(os.Stderr, "trestle: --data-dir must be an absolute path")
+		return 2
 	}
 	switch cmd {
 	case "install":
@@ -696,7 +843,7 @@ func runService(args []string, version string) int {
 			return 1
 		}
 		m.exe = exe
-		if err := m.install(*listen, *dataDir, os.Stdout); err != nil {
+		if err := m.install(*listen, *dataDir, *envFile, os.Stdout); err != nil {
 			fmt.Fprintln(os.Stderr, "trestle:", err)
 			return 1
 		}

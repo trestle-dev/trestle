@@ -99,7 +99,7 @@ Run Trestle in the foreground with `./trestle` or `trestle serve`. To keep it
 running without a terminal, install a per-user systemd unit:
 
 ```sh
-trestle service install --data-dir /var/lib/trestle   # --listen accepted
+trestle service install                 # optional --listen, --data-dir, --env-file
 trestle service status
 trestle service logs                # or: trestle service logs --follow
 trestle service restart
@@ -117,11 +117,23 @@ the public `GET /system/health` endpoint, and exits nonzero when the service is
 failed or missing.
 
 `service install` records `--listen` and `--data-dir` (default `./data` made
-absolute) in the unit. The remaining configuration, including the secret
-`TRESTLE_DATABASE_URL` for PostgreSQL, must not be embedded in the unit; set
-`TRESTLE_*` environment variables in the service environment instead.
-`service install --system` (system-wide units) is a documented follow-up and is
-not yet supported; user mode is the default.
+absolute) in the unit. Because a systemd user service does not inherit the
+shell environment, use an explicit protected environment file for the
+remaining `TRESTLE_*` configuration (including `TRESTLE_DATABASE_URL` for
+PostgreSQL and `TRESTLE_S3_*`/`TRESTLE_AWS_*` credentials):
+
+```sh
+trestle service install --env-file /absolute/protected/trestle.env
+```
+
+The file must be an absolute, regular, owner-only (0600), non-symlink file
+owned by the invoking user; it is referenced by the unit's `EnvironmentFile=`
+and its path is recorded in the authenticated managed metadata. Secret values
+are never copied into the unit or printed. Changing the file takes effect on
+`trestle service restart`. Repeated `service install` calls preserve the
+installed listen, data directory and environment file unless a flag is given
+explicitly. `service install --system` (system-wide units) is a documented
+follow-up and is not yet supported; user mode is the default.
 
 ## Install a release
 
