@@ -9,7 +9,7 @@ name: Release verify
 on:
   push:
     branches: ['main']
-    paths: ['docs/release-notes-template.md']
+    paths: ['docs/release-notes-template.md', '.github/workflows/release-verify.yml']
   workflow_dispatch:
     inputs:
       release:
@@ -28,9 +28,13 @@ jobs:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
       - name: Resolve the release tag to its commit
         id: resolve
+        env:
+          INPUT_RELEASE: ${{ inputs.release }}
         run: |
           set -euo pipefail
-          release="${{ inputs.release }}"
+          # The push trigger has no dispatch inputs; default to the published
+          # stable release. workflow_dispatch supplies the release explicitly.
+          release="${INPUT_RELEASE:-v0.1.0}"
           [ "$release" = v0.1.0 ] || { echo "this workflow verifies v0.1.0 (the published stable release)" >&2; exit 1; }
           commit=$(curl -fsSL --max-time 30 "https://api.github.com/repos/trestle-dev/trestle/commits/${release}" | jq -r '.sha')
           printf '%s\n' "$commit" | LC_ALL=C grep -q '^[0-9a-f]\{40\}$' || { echo "could not resolve ${release} to a commit" >&2; exit 1; }
