@@ -2590,36 +2590,56 @@ Tag/release: v0.1.0-rc.1 preserved at b616ebc; not promoted or announced
 Remaining: native mac/Windows execution; CP22 publish-or-hold decision
 ```
 
-## CP22 - publish-or-hold review (recommendation recorded)
+## CP22 - publish-or-hold review (stable release published)
 
 Recommendation: **ready for public preview - not production/battle-proven**.
-Awaiting explicit human authorization to publish the stable `v0.1.0` release;
-nothing was published, promoted, tagged or announced.
+Explicit human authorization was received and the stable `v0.1.0` release was
+published and verified. It was announced nowhere; this record is the factual
+evidence.
 
-Classification refined:
+### Stable release evidence
 
-- Meaningful maturity gaps (not universal blockers): native macOS/Windows
-  execution not yet performed; longer release-binary soak not yet accumulated;
-  broader operational dogfooding not yet done; the compatibility contract is
-  still young.
-- Product gaps, not production blockers: a few browser degraded-state
-  screenshots pending fault injection (database unavailable, backup progress,
-  pending file deletion) and the absence of an official container image.
-- Publishing `v0.1.0` establishes the stable download channel and the initial
-  public compatibility contract; it does not mean Trestle is battle-proven.
+- Tag `v0.1.0` (annotated) peels to exactly
+  `80f8497d945ca9bfa15d07dec5be6956054de6d3` (the authorized app head);
+  `refs/tags/v0.1.0^{}` verified.
+- Release URL: https://github.com/trestle-dev/trestle/releases/tag/v0.1.0
+  (public, `draft: false`, `prerelease: false`); `/releases/latest` now selects
+  `v0.1.0`.
+- Workflow URL: https://github.com/trestle-dev/trestle/actions/runs/33371772597
+  (build, attest, publish all success at the pinned action SHAs).
+- Artifacts: exactly six platform archives (`linux/amd64`, `linux/arm64`,
+  `darwin/amd64`, `darwin/arm64`, `windows/amd64`, `windows/arm64`) plus
+  `SHA256SUMS`; `sha256sum -c` OK for every archive.
+- Provenance: the attestation job succeeded; every archive digest has a
+  matching entry in the sigstore transparency log.
+- Binary: Linux amd64 natively executed; `trestle version` reports
+  `{"version":"0.1.0","commit":"80f8497d945ca9bfa15d07dec5be6956054de6d3",
+  "os":"linux","arch":"amd64"}`; all six binaries embed version `0.1.0` and the
+  exact commit.
+- Unversioned public commands: `download.sh` and `install.sh` now select stable
+  `v0.1.0`, verify the checksum, write to the documented locations, and report
+  the exact metadata; `update.sh` (unversioned) updates and `--rollback`
+  restores.
+- SQLite first-run smoke (public binary): health/ready/setupRequired,
+  six-character password rejected, seven-character accepted, login, collection,
+  record create/read, restart persistence.
 
-Maintenance note (non-blocking): `scripts/test-highlight.mjs` is deterministic
-and passing but only runs when invoked directly; it should later be
-incorporated into the normal website validation path (`check-site.mjs` or
-website CI) so it cannot silently rot.
+### Boundary retained
+
+- Publishing `v0.1.0` established the stable download channel and the initial
+  public compatibility contract. It is **not** battle-proven.
+- Remaining maturity gaps: native macOS/Windows execution not performed;
+  longer release-binary soak not accumulated; broader operational dogfooding
+  not done; compatibility contract still young. Product gaps (not production
+  blockers): a few browser degraded-state screenshots pending fault injection
+  and no official container image.
 
 ```text
-Status: recommendation recorded; stable v0.1.0 release NOT authorized or published
-Review evidence: rehearsal run 33356238953 (candidate fe10d46); app CI 33360690643; Pages deploy on ad93acd
-Next: on human authorization, bind the tag to the chosen app head, run the pinned
-  release workflow, verify (assets, checksums, provenance, unversioned scripts,
-  binary metadata, SQLite smoke), then update website status; generated website
-  committed/pushed before source
+Status: complete (stable v0.1.0 public preview published and verified)
+Release: https://github.com/trestle-dev/trestle/releases/tag/v0.1.0
+Tag target: 80f8497d945ca9bfa15d07dec5be6956054de6d3
+Workflow: 33371772597 (success)
+Boundary: not battle-proven; native mac/Windows untested; no announcement made
 ```
 
 ## Checkpoint roadmap (authoritative status)
@@ -2659,4 +2679,4 @@ time, not embedded here; the repository state containing this ledger is simply
 | CP19 | Public-preview documentation and positioning | Website documentation complete; preview-status honesty maintained | website source `d9921ba` (accepted remote); generated output `4af2e41` (accepted remote) | final positioning review |
 | CP20 | Launch assets and publication draft | LAUNCH.md draft exists; not published | n/a | publication draft review |
 | CP21 | Clean-machine release rehearsal | Complete | rehearsal candidate `fe10d46`, successful run `33356238953`, completion record `5be0a07`; prep `5f51043`, `42a8c08`, `0291eb6` | native macOS/Windows execution untested; CP22 is the publish-or-hold decision |
-| CP22 | Publish/no-publish review | Recommendation recorded: ready for public preview, not production/battle-proven; awaiting explicit human authorization to publish the stable v0.1.0 | n/a | explicit authorization to publish the stable v0.1.0 release and update website status |
+| CP22 | Publish/no-publish review | Complete (stable v0.1.0 public preview published and verified; not battle-proven) | tag `v0.1.0` at `80f8497`; release/workflow evidence in the CP22 section | native mac/Windows execution; longer soak; official container image; announcement authorization |
