@@ -109,71 +109,80 @@ for bad in 'echo "$pw"', 'echo "$GH_TOKEN"', 'cat cj', 'cat setup.json', 'curl -
         issues.append(f"workflow may print a secret/token: {bad}")
 if "https://trestle.cv" not in text:
     issues.append("public script URLs are not used")
-# JSON provenance output validated as an array.
-if "--format json" in text and 'type == "array"' not in text:
-    issues.append("structured JSON output is not validated as an array")
-# The reporting step must NOT be the broken predicate-pipe-predicate structure:
-# one jq invocation validates and formats the array in place.
-if re.search(r"jq -e 'type == \"array\"[^\n]*\|\s*jq", text):
-    issues.append("predicate jq is piped into a second jq (validated array is replaced by true)")
-if text.count("\njq -er") != 1 and "jq -er \"$jqprog\"" not in text:
-    issues.append("the reporting step does not use a single jq invocation")
+# Provenance reporting is diagnostic, NOT a second security policy: the
+# authoritative gate is the constrained gh command; the jq requires only a
+# non-empty array of verificationResult objects, prints the certificate
+# verbatim (tojson), and must not depend on guessed certificate field names or
+# label guessed identity fields.
+if "validate_json" not in text or 'type == "array"' not in text:
+    issues.append("non-empty verification-result array validation is missing")
+if "tojson" not in text:
+    issues.append("the certificate is not printed verbatim (tojson)")
+if re.search(r"jq\s+-[a-z]+[^\n]*\|\s*jq", text) or re.search(r"jq -e[^\n]*\|\s*jq", text):
+    issues.append("one jq is piped directly into another jq")
+for label in '"repository: "', '"workflow: "', '"issuer: "', '"signerWorkflow: "', '"signerIssuer: "':
+    if label in text:
+        issues.append(f"reporting labels a guessed identity field: {label}")
+for field in "sourceRepository", "SourceRepository", "subjectAlternativeName", "SubjectAlternativeName", 'issuer', 'Issuer':
+    if field in text:
+        issues.append(f"reporting depends on an unverified certificate field: {field}")
 for i in issues:
     print("workflow issue:", i)
 if issues:
     sys.exit(1)
-print("release-rehearsal workflow is manual-only, read-only, injection-safe, RC-validated, tag-bound, policy-constrained attestation, array-validated JSON, 7-char, signal-safe cleanup")
+print("release-rehearsal workflow is manual-only, read-only, injection-safe, RC-validated, tag-bound, policy-constrained attestation, diagnostic-only reporting, 7-char, signal-safe cleanup")
 PY
 [ "$?" -eq 0 ] || fail "release-rehearsal workflow structure"
 
-# --- Executable behavioral regression for the provenance-reporting jq ---------
-# Extract the exact jq program used by the "Record provenance details" step and
-# drive it through valid and invalid attestation-result JSON.
+# --- Executable behavioral regression for the provenance reporting jq --------
+# Extract the exact validate/report programs from the merged
+# "Verify build provenance and record details" step and drive them through
+# valid and invalid attestation-result JSON. Certificate field presence or
+# casing must NOT be treated as a security gate.
 command -v jq >/dev/null 2>&1 || { echo "jq unavailable for the provenance regression" >&2; exit 1; }
-jqprog=$(python3 - "$wf" <<'PY'
+vprog=$(mktemp "${TMPDIR:-/tmp}/trestle-rehearsal-validate.XXXXXX")
+rprog=$(mktemp "${TMPDIR:-/tmp}/trestle-rehearsal-report.XXXXXX")
+jqout=$(mktemp "${TMPDIR:-/tmp}/trestle-rehearsal-jq.XXXXXX")
+trap 'rm -f "$vprog" "$rprog" "$jqout"' EXIT INT TERM
+python3 - "$wf" "$vprog" "$rprog" <<'PY'
 import sys, yaml
 d = yaml.safe_load(open(sys.argv[1]))
 steps = d["jobs"]["rehearse"]["steps"]
-run = next(s["run"] for s in steps if s.get("name") == "Record provenance details")
-start = run.index("jqprog='") + len("jqprog='")
-end = run.index("\n'", start)
-print(run[start:end])
+run = next(s["run"] for s in steps if s.get("name") == "Verify build provenance and record details")
+def grab(name):
+    start = run.index(name + "='") + len(name + "='")
+    end = run.index("\n'", start)
+    return run[start:end]
+open(sys.argv[2], "w").write(grab("validate_json") + "\n")
+open(sys.argv[3], "w").write(grab("report_json") + "\n")
 PY
-)
-[ -n "$jqprog" ] || fail "could not extract the provenance jq program"
+validate=$(cat "$vprog")
+report=$(cat "$rprog")
+[ -n "$validate" ] || fail "could not extract the validation jq program"
+[ -n "$report" ] || fail "could not extract the reporting jq program"
 
-# Representative non-empty attestation-result array matching the documented
-# gh attestation verify --format json structure: verificationResult carries a
-# statement with a non-empty subject array, a certificate with a non-empty
-# signer identity (SAN), source repository and issuer, and non-empty
-# verifiedTimestamps. Field names are accepted in the workflow in either
-# camelCase or Go-style capitalization.
-valid='[{"verificationResult":{"statement":{"subject":[{"name":"trestle_0.1.0-rc.1_linux_amd64.tar.gz","digest":{"sha256":"abcd"}}]},"signature":{"certificate":{"subjectAlternativeName":"https://github.com/trestle-dev/trestle/.github/workflows/release.yml@refs/tags/v0.1.0-rc.1","sourceRepository":"trestle-dev/trestle","issuer":"https://token.actions.githubusercontent.com"}},"verifiedTimestamps":[{"type":"RFC3161"}]}}]'
-jqout=$(mktemp "${TMPDIR:-/tmp}/trestle-rehearsal-jq.XXXXXX")
-trap 'rm -f "$jqout"' EXIT INT TERM
-run_jq() { printf '%s' "$1" | jq -er "$jqprog" >"$jqout" 2>/dev/null; }
-# 1. A valid array must succeed and emit the expected subject/provenance fields.
-run_jq "$valid" || fail "valid attestation array was rejected by the reporting jq"
-grep -q 'subject: trestle_0.1.0-rc.1_linux_amd64.tar.gz' "$jqout" || fail "subject not emitted"
-grep -q 'repository: trestle-dev/trestle' "$jqout" || fail "repository not emitted"
-grep -q 'signerWorkflow: https://github.com/trestle-dev/trestle/.github/workflows/release.yml' "$jqout" || fail "signer workflow not emitted"
-grep -q 'signerIssuer: https://token.actions.githubusercontent.com' "$jqout" || fail "signer issuer not emitted"
+validate_jq() { printf '%s' "$1" | jq -e "$validate" >/dev/null 2>&1; }
+report_jq() { printf '%s' "$1" | jq -r "$report" >"$jqout" 2>/dev/null; }
+
+# 1. A valid non-empty verificationResult array succeeds and the report emits
+#    the subject names, the verbatim certificate and the timestamp count.
+valid='[{"verificationResult":{"statement":{"subject":[{"name":"trestle_0.1.0-rc.1_linux_amd64.tar.gz"}]},"signature":{"certificate":{"SubjectAlternativeName":"https://github.com/trestle-dev/trestle/.github/workflows/release.yml@refs/tags/v0.1.0-rc.1"}},"verifiedTimestamps":[{"type":"RFC3161"}]}}]'
+validate_jq "$valid" || fail "valid attestation array was rejected by the validation jq"
+report_jq "$valid" || fail "valid attestation array was rejected by the reporting jq"
+grep -q 'subjects: trestle_0.1.0-rc.1_linux_amd64.tar.gz' "$jqout" || fail "subjects not emitted"
+grep -q 'certificate: {' "$jqout" || fail "certificate not emitted verbatim"
 grep -q 'verifiedTimestamps: 1' "$jqout" || fail "verified timestamp count not emitted"
-# 2-5. Each invalid or incomplete form must fail clearly: no missing security
-# evidence may be silently turned into n/a.
-for bad in \
-  'true' '{}' '[]' '{' \
-  '[{"verificationResult":{}}]' \
-  '[{"verificationResult":{"statement":{}}}]' \
-  '[{"verificationResult":{"statement":{"subject":[]}}}]' \
-  '[{"verificationResult":{"statement":{"subject":[{}]}}}]' \
-  '[{"verificationResult":{"statement":{"subject":[{"name":""}]}}}]' \
-  '[{"verificationResult":{"statement":{"subject":[{"name":"asset"}]},"signature":{}}}]' \
-  '[{"verificationResult":{"statement":{"subject":[{"name":"asset"}]},"signature":{"certificate":{}},"verifiedTimestamps":[]}}]' \
-  '[{"verificationResult":{"statement":{"subject":[{"name":"asset"}]},"signature":{"certificate":{"subjectAlternativeName":"https://github.com/trestle-dev/trestle/.github/workflows/release.yml@refs/tags/v0.1.0-rc.1","sourceRepository":"trestle-dev/trestle"}},"verifiedTimestamps":[{"type":"RFC3161"}]}}]' \
-  '[{"verificationResult":{"statement":{"subject":[{"name":"asset"}]},"signature":{"certificate":{"subjectAlternativeName":"","sourceRepository":"trestle-dev/trestle","issuer":"https://token.actions.githubusercontent.com"}},"verifiedTimestamps":[{"type":"RFC3161"}]}}]' \
-  '[{"verificationResult":{"statement":{"subject":[{"name":"asset"}]},"signature":{"certificate":{"subjectAlternativeName":"https://github.com/trestle-dev/trestle/.github/workflows/release.yml@refs/tags/v0.1.0-rc.1","sourceRepository":"trestle-dev/trestle","issuer":"https://token.actions.githubusercontent.com"}},"verifiedTimestamps":[]}}]'; do
-  if run_jq "$bad"; then fail "invalid attestation JSON accepted by the reporting jq: $bad"; fi
+
+# 2. Certificate field presence/casing is NOT a security gate: a result with no
+#    certificate still passes validation and the report prints what it can.
+minimal='[{"verificationResult":{"statement":{"subject":[{"name":"asset"}]}}}]'
+validate_jq "$minimal" || fail "validation treats missing certificate as a gate"
+report_jq "$minimal" || fail "reporting failed on a result without a certificate"
+
+# 3. Invalid forms fail validation: true, non-array object, empty array,
+#    malformed JSON and an element missing verificationResult.
+for bad in 'true' '{}' '[]' '{' '[{"foo":1}]'; do
+  if validate_jq "$bad"; then fail "invalid attestation JSON accepted by the validation jq: $bad"; fi
 done
 
 if [ "$failures" -gt 0 ]; then

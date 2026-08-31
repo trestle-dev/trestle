@@ -92,69 +92,37 @@ jobs:
           [ "$n" -eq 6 ] || { echo "expected exactly six archives, found $n" >&2; exit 1; }
           sha256sum -c SHA256SUMS
 
-      - name: Verify build provenance (constrained policy)
+      - name: Verify build provenance and record details
         run: |
           set -euo pipefail
           cd artifacts
-          for a in trestle_*; do
-            echo "=== gh attestation verify: $a ==="
-            gh attestation verify "$a" \
-              --repo trestle-dev/trestle \
-              --signer-workflow "trestle-dev/trestle/.github/workflows/release.yml" \
-              --source-ref "refs/tags/${version}" \
-              --source-digest "${expected_commit}" \
-              --deny-self-hosted-runners
-            echo "=== $a: attestation VERIFIED against the pinned release workflow @ ${version} ==="
-          done
-        env:
-          GH_TOKEN: ${{ github.token }}
-
-      - name: Record provenance details
-        run: |
-          set -euo pipefail
-          cd artifacts
-          # Single jq invocation: validates that every attestation result is
-          # fully usable (statement + non-empty subject names, certificate with
-          # a non-empty signer identity and source repository, non-empty
-          # verifiedTimestamps) and formats the original array in place. Missing
-          # security evidence terminates the step instead of becoming n/a.
-          jqprog='
-            (type == "array" and length > 0 and all(.[];
-              (.verificationResult | type) == "object"
-              and ((.verificationResult.statement // {}) | type) == "object"
-              and (((.verificationResult.statement.subject // []) | type) == "array")
-              and ((.verificationResult.statement.subject // []) | length) > 0
-              and all((.verificationResult.statement.subject // [])[]; (.name | type) == "string" and (.name | length) > 0)
-              and ((.verificationResult.signature.certificate // {}) | type) == "object"
-              and ((.verificationResult.signature.certificate.subjectAlternativeName // .verificationResult.signature.certificate.SubjectAlternativeName // "") | length) > 0
-              and ((.verificationResult.signature.certificate.sourceRepository // .verificationResult.signature.certificate.SourceRepository // "") | type) == "string"
-              and ((.verificationResult.signature.certificate.sourceRepository // .verificationResult.signature.certificate.SourceRepository // "") | length) > 0
-              and ((.verificationResult.signature.certificate.issuer // .verificationResult.signature.certificate.Issuer // "") | length) > 0
-              and ((.verificationResult.verifiedTimestamps // []) | type) == "array"
-              and ((.verificationResult.verifiedTimestamps // []) | length) > 0
-            )) as $ok
-            | if $ok then
-                .[] |
-                .verificationResult as $r |
-                "subject: " + (($r.statement.subject // []) | map(.name) | join(",")),
-                "repository: " + ($r.signature.certificate.sourceRepository // $r.signature.certificate.SourceRepository),
-                "signerWorkflow: " + ($r.signature.certificate.subjectAlternativeName // $r.signature.certificate.SubjectAlternativeName),
-                "signerIssuer: " + ($r.signature.certificate.issuer // $r.signature.certificate.Issuer),
-                "verifiedTimestamps: " + (($r.verifiedTimestamps // []) | length | tostring)
-              else
-                error("expected a non-empty array of attestation results each carrying a usable verificationResult")
-              end
+          # Diagnostic-only reporting. The authoritative provenance gate is the
+          # gh command itself and its exit status; the jq below merely requires
+          # a non-empty array of verificationResult objects and prints whatever
+          # certificate structure the installed CLI actually supplied (no
+          # guessed field names, no additional schema contract).
+          validate_json='
+            type == "array" and length > 0 and all(.[]; (.verificationResult | type) == "object")
+          '
+          report_json='
+            .[] |
+            .verificationResult as $r |
+            "subjects: " + (($r.statement.subject // []) | map(.name // "<unnamed>") | join(",")),
+            "certificate: " + (($r.signature.certificate // {}) | tojson),
+            "verifiedTimestamps: " + (($r.verifiedTimestamps // []) | length | tostring)
           '
           for a in trestle_*; do
-            echo "=== $a provenance ==="
-            gh attestation verify "$a" \
+            echo "=== gh attestation verify: $a ==="
+            json=$(gh attestation verify "$a" \
               --repo trestle-dev/trestle \
               --signer-workflow "trestle-dev/trestle/.github/workflows/release.yml" \
               --source-ref "refs/tags/${version}" \
               --source-digest "${expected_commit}" \
               --deny-self-hosted-runners \
-              --format json |
-              jq -er "$jqprog"
+              --format json)
+            printf '%s' "$json" | jq -e "$validate_json" >/dev/null
+            printf '%s' "$json" | jq -r "$report_json"
+            echo "=== $a: attestation VERIFIED against the pinned release workflow @ ${version} ==="
           done
         env:
           GH_TOKEN: ${{ github.token }}
