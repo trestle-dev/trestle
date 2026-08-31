@@ -1,19 +1,20 @@
 name: Release rehearsal (manual)
 
-# Manually dispatched, fresh GitHub-hosted Ubuntu runner rehearsal of the
-# public vX.Y.Z-* prerelease. It never checks out the repository, never uses
-# local build outputs, never tags/publishes/promotes/edits a release and never
-# writes repository contents: everything is downloaded from the public GitHub
-# release and https://trestle.cv, and permissions are read-only.
+# Manually dispatched, fresh GitHub-hosted Ubuntu runner rehearsal of a public
+# vX.Y.Z-rc.N release. It never checks out the repository, never uses local
+# build outputs, never tags/publishes/promotes/edits a release and never writes
+# repository contents: everything is downloaded from the public GitHub release
+# and https://trestle.cv, and permissions are read-only.
 #
-# Verifies checksums and build provenance (gh attestation verify) for all six
-# archives, then exercises the public download/install scripts and a SQLite
-# first-run journey on the fresh runner.
+# The accepted version format is deliberately narrowed to release candidates:
+#   vMAJOR.MINOR.PATCH-rc.POSITIVE_INTEGER   (example: v0.1.0-rc.1)
+# Stable tags, missing/zero/leading-zero RC numbers, repeated/trailing dots,
+# build metadata, whitespace and shell metacharacters are rejected.
 on:
   workflow_dispatch:
     inputs:
       version:
-        description: 'Exact prerelease tag to rehearse (e.g. v0.1.0-rc.1)'
+        description: 'Exact RC tag to rehearse (e.g. v0.1.0-rc.1)'
         required: true
         default: v0.1.0-rc.1
 
@@ -28,15 +29,25 @@ jobs:
       - name: Validate version input
         run: |
           version="${{ github.event.inputs.version }}"
-          # Exact semver prerelease tag only: vMAJOR.MINOR.PATCH-PRERELEASE.
-          # Rejects whitespace, shell metacharacters and any non-version value.
           case "$version" in
-            v[0-9]*.[0-9]*.[0-9]*-*) ;;
-            *) echo "invalid version '$version': expected an exact prerelease tag like v0.1.0-rc.1" >&2; exit 1 ;;
+            v[0-9]*.[0-9]*.[0-9]*-rc\.[1-9]*) ;;
+            *) echo "invalid version '$version': expected vMAJOR.MINOR.PATCH-rc.POSITIVE_INTEGER (e.g. v0.1.0-rc.1)" >&2; exit 1 ;;
           esac
-          printf '%s\n' "$version" | LC_ALL=C grep -q '^v[0-9][0-9]*\.[0-9][0-9]*\.[0-9][0-9]*-[0-9A-Za-z][0-9A-Za-z.]*$' \
-            || { echo "invalid characters in version '$version'" >&2; exit 1; }
+          printf '%s\n' "$version" | LC_ALL=C grep -q '^v[0-9][0-9]*\.[0-9][0-9]*\.[0-9][0-9]*-rc\.[1-9][0-9]*$' \
+            || { echo "invalid version '$version': not an exact vMAJOR.MINOR.PATCH-rc.N value" >&2; exit 1; }
           echo "version=$version" >> "$GITHUB_ENV"
+
+      - name: Resolve tag to commit
+        run: |
+          set -euo pipefail
+          # Peel the selected tag to its commit via the GitHub API (handles
+          # annotated and lightweight tags without checking out the repository).
+          expected_commit=$(curl -fsSL --max-time 30 \
+            "https://api.github.com/repos/trestle-dev/trestle/commits/${version}" | jq -r '.sha')
+          printf '%s\n' "$expected_commit" | LC_ALL=C grep -q '^[0-9a-f]\{40\}$' \
+            || { echo "could not resolve tag ${version} to a commit (got '$expected_commit')" >&2; exit 1; }
+          echo "expected_commit=$expected_commit" >> "$GITHUB_ENV"
+          echo "resolved ${version} -> $expected_commit"
 
       - name: Download public release assets
         run: |
@@ -63,14 +74,18 @@ jobs:
           [ "$n" -eq 6 ] || { echo "expected exactly six archives, found $n" >&2; exit 1; }
           sha256sum -c SHA256SUMS
 
-      - name: Verify build provenance for all six archives
+      - name: Verify build provenance (constrained policy)
         run: |
           set -euo pipefail
           cd artifacts
           for a in trestle_*; do
             echo "=== gh attestation verify: $a ==="
-            gh attestation verify "$a" --repo trestle-dev/trestle
-            echo "=== $a: attestation VERIFIED ==="
+            gh attestation verify "$a" \
+              --repo trestle-dev/trestle \
+              --signer-workflow "trestle-dev/trestle/.github/workflows/release.yml@refs/tags/${version}" \
+              --source-ref "refs/tags/${version}" \
+              --source-sha "${expected_commit}"
+            echo "=== $a: attestation VERIFIED against the pinned release workflow @ ${version} ==="
           done
         env:
           GH_TOKEN: ${{ github.token }}
@@ -81,17 +96,15 @@ jobs:
           cd artifacts
           for a in trestle_*; do
             echo "=== $a provenance ==="
-            if gh attestation verify "$a" --repo trestle-dev/trestle --format json > "provenance-$a.json" 2>/dev/null; then
+            gh attestation verify "$a" --repo trestle-dev/trestle --format json |
               jq -r '
                 .verificationResult as $r |
                 "subject: " + (($r.subjects // []) | map(.name) | join(",")),
                 "repository: " + ($r.sourceRepository // "n/a"),
                 "workflow: " + ($r.sourceRepositoryURI // "n/a"),
-                "signer: " + ($r.issuer // "n/a")
-              ' "provenance-$a.json" || true
-            else
-              echo "(structured provenance JSON unavailable for $a; human verification output above is authoritative)"
-            fi
+                "signer: " + ($r.issuer // "n/a"),
+                "sourceRef: " + (($r.sourceDigest // {}) | keys | join(","))
+              '
           done
         env:
           GH_TOKEN: ${{ github.token }}
@@ -100,7 +113,16 @@ jobs:
         run: |
           set -euo pipefail
           work="$(mktemp -d)"
-          trap 'rm -rf "$work"' EXIT
+          svc=""
+          cleanup() {
+            if [ -n "$svc" ] && kill -0 "$svc" 2>/dev/null; then
+              kill "$svc" 2>/dev/null || true
+              wait "$svc" 2>/dev/null || true
+            fi
+            svc=""
+            rm -rf "$work"
+          }
+          trap cleanup EXIT INT TERM
           cd "$work"
 
           echo "--- 1. pinned download.sh (public URL) ---"
@@ -111,9 +133,10 @@ jobs:
           [ -z "$leftovers" ] || { echo "download wrote unexpected files: $leftovers" >&2; exit 1; }
           vout="$(./trestle version)"
           echo "$vout" | grep -q "\"version\":\"${version#v}\"" || { echo "version mismatch: $vout" >&2; exit 1; }
+          echo "$vout" | grep -q "\"commit\":\"${expected_commit}\"" || { echo "commit mismatch (want ${expected_commit}): $vout" >&2; exit 1; }
           echo "$vout" | grep -q '"os":"linux"' || { echo "os mismatch: $vout" >&2; exit 1; }
           echo "$vout" | grep -q '"arch":"amd64"' || { echo "arch mismatch: $vout" >&2; exit 1; }
-          echo "download.sh: OK (version=${version#v}, linux/amd64)"
+          echo "download.sh: OK (version=${version#v}, commit=${expected_commit}, linux/amd64)"
 
           echo "--- 2. pinned install.sh with isolated HOME ---"
           curl -fsSL --max-time 60 https://trestle.cv/install.sh -o install.sh
@@ -137,11 +160,11 @@ jobs:
           echo "health: $(curl -fsS --max-time 3 "$base/system/health")"
           echo "ready: $(curl -fsS --max-time 3 "$base/system/ready")"
           [ "$(curl -fsS --max-time 3 "$base/admin/v1/setup/status")" = '{"setupRequired":true}' ] || { echo "setupRequired unexpected" >&2; exit 1; }
-          # Six-character password rejected; seven-character accepted.
+          # Six-character password rejected; exactly seven-character accepted.
           reject=$(curl -s --max-time 5 -o /dev/null -w '%{http_code}' -X POST "$base/admin/v1/setup" \
             -H 'Content-Type: application/json' -H "Origin: $base" -d '{"email":"a@example.com","password":"123456"}')
           [ "$reject" = "422" ] || { echo "six-char password not rejected (status $reject)" >&2; exit 1; }
-          pw="correct horse battery staple"
+          pw="1234567"
           curl -fsS --max-time 5 -c cj -X POST "$base/admin/v1/setup" \
             -H 'Content-Type: application/json' -H "Origin: $base" \
             -d "{\"email\":\"admin@example.com\",\"password\":\"$pw\"}" > setup.json
@@ -158,8 +181,8 @@ jobs:
             -d '{"values":{"title":"rehearsal note"}}')
           [ "$rw" = "201" ] || { echo "record create status $rw" >&2; exit 1; }
           curl -fsS --max-time 5 -b cj "$base/api/v1/collections/notes/records?limit=25" | grep -q '"rehearsal note"' || { echo "record not retrievable" >&2; exit 1; }
-          echo "first-run journey: OK (setup/collection/record)"
-          kill "$svc" 2>/dev/null || true; wait "$svc" 2>/dev/null || true
+          echo "first-run journey: OK (7-char password setup/collection/record)"
+          kill "$svc" 2>/dev/null || true; wait "$svc" 2>/dev/null || true; svc=""
 
           echo "--- restart persistence ---"
           "$installed" --listen "127.0.0.1:$port" --data-dir "$work/data" >> server.log 2>&1 &
@@ -174,7 +197,8 @@ jobs:
           curl -fsS --max-time 5 -b cj "$base/api/v1/collections/notes/records?limit=25" | grep -q '"rehearsal note"' \
             || { echo "record lost across restart" >&2; exit 1; }
           echo "restart persistence: OK"
-          kill "$svc" 2>/dev/null || true; wait "$svc" 2>/dev/null || true
+          kill "$svc" 2>/dev/null || true; wait "$svc" 2>/dev/null || true; svc=""
+          cleanup
           echo "=== REHEARSAL COMPLETE (fresh GitHub-hosted Ubuntu runner) ==="
         env:
           GH_TOKEN: ${{ github.token }}
