@@ -1049,6 +1049,93 @@ func TestEntropyFailureNoDurableMutation(t *testing.T) {
 	}
 }
 
+// TestPartialEntropyReadNoDurableMutation proves a short-read-without-error
+// entropy source is rejected by randomToken on invitation creation, approval,
+// reissue and access-request creation: no invitation, user, or request row
+// commits and no token is minted from a partially filled buffer.
+func TestPartialEntropyReadNoDurableMutation(t *testing.T) {
+	shortRead := func(b []byte) (int, error) {
+		if len(b) == 0 {
+			return 0, nil
+		}
+		half := len(b) / 2
+		if half == 0 {
+			half = 1
+		}
+		for i := 0; i < half; i++ {
+			b[i] = 0xA5
+		}
+		return half, nil
+	}
+	for _, provider := range storetest.Providers(t) {
+		t.Run(provider, func(t *testing.T) {
+			s, h := setupReg(t, provider)
+			admin := adminauth.New(s.DB(), string(s.Provider()))
+			cookie, csrf := adminSetup(t, s, admin)
+			h.reg.SetRandomReader(shortRead)
+			setPolicy(t, s, "open")
+
+			// Invitation creation: partial entropy -> no invitation row.
+			if w := adminCall(h, cookie, csrf, "POST", "/admin/v1/app-registration/invitations", `{"kind":"activate","email":"partial@example.com"}`); w.Code == 201 {
+				t.Fatalf("invitation created under partial entropy read")
+			}
+			var invites int
+			if err := s.DB().QueryRow("SELECT count(*) FROM _trestle_app_invitations").Scan(&invites); err != nil || invites != 0 {
+				t.Fatalf("invitation committed under partial read: %d err=%v", invites, err)
+			}
+
+			// Approval of a pending request under partial entropy -> no user,
+			// no invitation, request stays pending.
+			setPolicy(t, s, "approval")
+			h.reg.SetRandomReader(realRandom)
+			publicCall(h, "/api/v1/auth/access-request", `{"email":"partial-approve@example.com"}`)
+			h.reg.SetRandomReader(shortRead)
+			w := adminCall(h, cookie, csrf, "GET", "/admin/v1/app-registration/requests", "")
+			var list struct {
+				Items []struct {
+					ID string `json:"id"`
+				}
+			}
+			json.Unmarshal(w.Body.Bytes(), &list)
+			rid := list.Items[0].ID
+			if w := adminCall(h, cookie, csrf, "POST", "/admin/v1/app-registration/requests/"+rid+"/approve", `{}`); w.Code == 201 {
+				t.Fatal("approve succeeded under partial entropy read")
+			}
+			if err := s.DB().QueryRow("SELECT count(*) FROM _trestle_app_invitations").Scan(&invites); err != nil || invites != 0 {
+				t.Fatalf("approval invitation committed under partial read: %d err=%v", invites, err)
+			}
+			var status string
+			if err := s.DB().QueryRow("SELECT status FROM _trestle_app_access_requests WHERE id=?", rid).Scan(&status); err != nil || status != "pending" {
+				t.Fatalf("request status %q after failed approve, err=%v", status, err)
+			}
+
+			// Reissue under partial entropy -> no new invitation.
+			h.reg.SetRandomReader(realRandom)
+			setPolicy(t, s, "invite")
+			w = adminCall(h, cookie, csrf, "POST", "/admin/v1/app-registration/invitations", `{"kind":"self_register","email":"partial-reissue@example.com"}`)
+			var inv struct{ Token string }
+			json.Unmarshal(w.Body.Bytes(), &inv)
+			h.reg.SetRandomReader(shortRead)
+			if w := adminCall(h, cookie, csrf, "POST", "/admin/v1/app-registration/invitations/"+inv.Token+"/reissue", `{}`); w.Code == 201 {
+				t.Fatal("reissue succeeded under partial entropy read")
+			}
+			if err := s.DB().QueryRow("SELECT count(*) FROM _trestle_app_invitations WHERE email='partial-reissue@example.com'").Scan(&invites); err != nil || invites != 1 {
+				t.Fatalf("reissue minted extra invitation under partial read: %d err=%v", invites, err)
+			}
+
+			// Access-request submission under partial entropy -> no row.
+			setPolicy(t, s, "approval")
+			if err := h.reg.SubmitAccessRequest(context.Background(), "partial-req@example.com"); err == nil {
+				t.Fatal("access request succeeded under partial entropy read")
+			}
+			var reqCount int
+			if err := s.DB().QueryRow("SELECT count(*) FROM _trestle_app_access_requests WHERE email='partial-req@example.com'").Scan(&reqCount); err != nil || reqCount != 0 {
+				t.Fatalf("access-request row committed under partial read: %d err=%v", reqCount, err)
+			}
+		})
+	}
+}
+
 // TestAuditMatrixExactCounts proves the audit event matrix with exact counts on
 // SQLite and PostgreSQL: invitation creation, open registration, invitation
 // acceptance, approval/rejection, reissue, revocation (only on a real

@@ -10,13 +10,16 @@ import (
 	"testing"
 
 	"github.com/trestle-dev/trestle/internal/adminauth"
+	"github.com/trestle-dev/trestle/internal/audit"
 	"github.com/trestle-dev/trestle/internal/storetest"
 )
 
 func setup(t *testing.T, provider string) *Handler {
 	t.Helper()
 	s := storetest.Open(t, provider)
-	h := New(s.DB(), adminauth.New(s.DB(), string(s.Provider())))
+	admin := adminauth.New(s.DB(), string(s.Provider()))
+	h := New(s.DB(), admin)
+	h.SetAudit(audit.New(s.DB(), admin, string(s.Provider())))
 	// The default registration policy for a fresh database is closed; most
 	// registration tests exercise the open-registration path, so set it open.
 	if _, err := s.DB().Exec("UPDATE _trestle_app_registration_policy SET policy='open' WHERE id=1"); err != nil {

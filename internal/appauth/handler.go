@@ -10,6 +10,7 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"io"
 	"log/slog"
 	"net/http"
 	"net/mail"
@@ -111,12 +112,16 @@ func (h *Handler) register(w http.ResponseWriter, r *http.Request) {
 		if policy != appreg.PolicyOpen {
 			return fmt.Errorf("policy_%s", policy)
 		}
-		createdID := "usr_" + token(18)
+		idRaw, err := secureToken(18)
+		if err != nil {
+			return err
+		}
+		createdID := "usr_" + idRaw
 		now := h.now().UTC().Format(time.RFC3339Nano)
 		if _, ierr := tx.ExecContext(r.Context(), "INSERT INTO _trestle_app_users(id,email,password_hash,created_at) VALUES(?,?,?,?)", createdID, email, hash, now); ierr != nil {
 			return errors.New("insert_user")
 		}
-		if err := h.reg.AuditUserCreation(r.Context(), tx, email, "register"); err != nil {
+		if err := h.reg.AuditUserCreation(r.Context(), tx, createdID, email, "register"); err != nil {
 			return err
 		}
 		newID = createdID
@@ -127,6 +132,8 @@ func (h *Handler) register(w http.ResponseWriter, r *http.Request) {
 		switch {
 		case strings.HasPrefix(msg, "policy_"):
 			writeError(w, 403, msg, "The request could not be applied.")
+		case strings.Contains(msg, "entropy_source_unavailable") || strings.Contains(msg, "audit_not_configured"):
+			writeError(w, 503, "registration_temporarily_unavailable", "The request could not be completed.")
 		case errors.Is(err, store.ErrLockExhausted):
 			writeError(w, 503, "registration_temporarily_unavailable", "The request could not be completed.")
 		default:
@@ -207,7 +214,11 @@ func (h *Handler) inviteAccept(w http.ResponseWriter, r *http.Request) {
 				return errors.New("invalid_invitation")
 			}
 		}
-		newID := "usr_" + token(18)
+		idRaw, err := secureToken(18)
+		if err != nil {
+			return err
+		}
+		newID := "usr_" + idRaw
 		now := h.now().UTC().Format(time.RFC3339Nano)
 		if _, ierr := tx.ExecContext(r.Context(), "INSERT INTO _trestle_app_users(id,email,password_hash,created_at) VALUES(?,?,?,?)", newID, boundEmail, hash, now); ierr != nil {
 			return errors.New("invalid_invitation") // email conflict
@@ -218,7 +229,7 @@ func (h *Handler) inviteAccept(w http.ResponseWriter, r *http.Request) {
 		if _, ierr := tx.ExecContext(r.Context(), "UPDATE _trestle_app_invitations SET revoked_at=? WHERE email=? AND kind=? AND used_at IS NULL AND revoked_at IS NULL AND id<>?", now, boundEmail, "activate", id); ierr != nil {
 			return ierr
 		}
-		if err := h.reg.AuditUserCreation(r.Context(), tx, boundEmail, kind); err != nil {
+		if err := h.reg.AuditUserCreation(r.Context(), tx, newID, boundEmail, kind); err != nil {
 			return err
 		}
 		acceptedEmail = boundEmail
@@ -226,7 +237,7 @@ func (h *Handler) inviteAccept(w http.ResponseWriter, r *http.Request) {
 		return nil
 	})
 	if err != nil {
-		if errors.Is(err, store.ErrLockExhausted) {
+		if errors.Is(err, store.ErrLockExhausted) || strings.Contains(err.Error(), "entropy_source_unavailable") || strings.Contains(err.Error(), "audit_not_configured") {
 			writeError(w, 503, "registration_temporarily_unavailable", "The request could not be completed.")
 			return
 		}
@@ -303,9 +314,18 @@ func (h *Handler) login(w http.ResponseWriter, r *http.Request) {
 	h.issue(w, r, id, stored)
 }
 func (h *Handler) issue(w http.ResponseWriter, r *http.Request, userID, email string) {
-	raw := token(32)
+	raw, err := secureToken(32)
+	if err != nil {
+		writeError(w, 500, "internal_error", "The request could not be completed.")
+		return
+	}
 	sum := sha256.Sum256([]byte(raw))
-	id := "aps_" + token(18)
+	idRaw, err := secureToken(18)
+	if err != nil {
+		writeError(w, 500, "internal_error", "The request could not be completed.")
+		return
+	}
+	id := "aps_" + idRaw
 	now := h.now().UTC()
 	tx, err := h.db.BeginTx(r.Context(), nil)
 	if err != nil {
@@ -348,9 +368,18 @@ func (h *Handler) refresh(w http.ResponseWriter, r *http.Request) {
 		writeError(w, 401, "invalid_refresh", "The refresh token is invalid.")
 		return
 	}
-	next := token(32)
+	next, err := secureToken(32)
+	if err != nil {
+		writeError(w, 500, "internal_error", "The request could not be completed.")
+		return
+	}
 	nextSum := sha256.Sum256([]byte(next))
-	nextID := "aps_" + token(18)
+	nextIDRaw, err := secureToken(18)
+	if err != nil {
+		writeError(w, 500, "internal_error", "The request could not be completed.")
+		return
+	}
+	nextID := "aps_" + nextIDRaw
 	now := h.now().UTC()
 	result, err := tx.ExecContext(r.Context(), "UPDATE _trestle_app_sessions SET revoked_at=?,replaced_by=? WHERE id=? AND revoked_at IS NULL", now.Format(time.RFC3339Nano), nextID, sessionID)
 	affected, _ := result.RowsAffected()
@@ -380,10 +409,14 @@ func (h *Handler) refresh(w http.ResponseWriter, r *http.Request) {
 // access insert rolls back the whole login or refresh: no orphaned session,
 // and no rotated refresh token without a usable access token.
 func (h *Handler) createAccessTx(r *http.Request, tx store.Transaction, sessionID, userID string) (string, error) {
-	raw := "ta_" + token(24)
-	sum := sha256.Sum256([]byte(raw))
-	_, err := tx.ExecContext(r.Context(), "INSERT INTO _trestle_app_access(token_hash,session_id,user_id,expires_at) VALUES(?,?,?,?)", sum[:], sessionID, userID, h.now().UTC().Add(15*time.Minute).Format(time.RFC3339Nano))
-	return raw, err
+	raw, err := secureToken(24)
+	if err != nil {
+		return "", err
+	}
+	token := "ta_" + raw
+	sum := sha256.Sum256([]byte(token))
+	_, err = tx.ExecContext(r.Context(), "INSERT INTO _trestle_app_access(token_hash,session_id,user_id,expires_at) VALUES(?,?,?,?)", sum[:], sessionID, userID, h.now().UTC().Add(15*time.Minute).Format(time.RFC3339Nano))
+	return token, err
 }
 func (h *Handler) Authenticate(r *http.Request) (string, bool) {
 	header := r.Header.Get("Authorization")
@@ -605,17 +638,34 @@ func email(value string) (string, bool) {
 	parsed, err := mail.ParseAddress(value)
 	return value, err == nil && parsed.Address == value && len(value) <= 254
 }
-func token(n int) string {
+
+// entropyReader is the checked entropy source for the password salt and every
+// secureToken value. It is a package-level var so tests can inject a failing or
+// short-reading source; both hashPassword and secureToken require the buffer to
+// be filled exactly and propagate the failure before any durable mutation.
+var entropyReader io.Reader = rand.Reader
+
+// secureToken returns a random URL-safe token, requiring the entropy source to
+// fill the requested buffer exactly. It is the checked randomness helper for
+// every security-sensitive value (session and access token secrets, user and
+// session identifiers). Entropy-source failure propagates before any durable
+// mutation.
+func secureToken(n int) (string, error) {
 	b := make([]byte, n)
-	rand.Read(b)
-	return base64.RawURLEncoding.EncodeToString(b)
+	if _, err := io.ReadFull(entropyReader, b); err != nil {
+		return "", errors.New("entropy_source_unavailable")
+	}
+	return base64.RawURLEncoding.EncodeToString(b), nil
 }
+
 func hashPassword(password string) (string, error) {
 	if len([]rune(password)) < 7 {
 		return "", fmt.Errorf("password must be at least 7 characters")
 	}
 	salt := make([]byte, 16)
-	rand.Read(salt)
+	if _, err := io.ReadFull(entropyReader, salt); err != nil {
+		return "", errors.New("entropy_source_unavailable")
+	}
 	hash := argon2.IDKey([]byte(password), salt, 3, 64*1024, 2, 32)
 	return fmt.Sprintf("$argon2id$v=19$m=65536,t=3,p=2$%s$%s", base64.RawStdEncoding.EncodeToString(salt), base64.RawStdEncoding.EncodeToString(hash)), nil
 }

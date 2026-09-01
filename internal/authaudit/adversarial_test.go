@@ -49,6 +49,7 @@ func buildApp(t *testing.T, provider string) (http.Handler, *store.Store, adminS
 	credentials := identities.New(s.DB(), admin)
 	recordAPI := records.New(s.DB(), admin, credentials)
 	applicationAuth := appauth.New(s.DB(), admin)
+	applicationAuth.SetAudit(audit.New(s.DB(), admin, string(s.Provider())))
 	accessRules := rules.New(s.DB(), admin)
 	recordAPI.ConfigureAccess(applicationAuth, accessRules)
 	eventAPI := events.New(s.DB(), admin, credentials)
@@ -323,6 +324,7 @@ func TestAuthAdversarialIdentity(t *testing.T) {
 				t.Fatal(err)
 			}
 			appUser := appauth.New(s.DB(), admin)
+			appUser.SetAudit(audit.New(s.DB(), admin, string(s.Provider())))
 
 			if w := do(appUser, sess, "POST", "/api/v1/auth/register", map[string]any{"email": "u@example.com", "password": "1234567"}); w.Code != 201 {
 				t.Fatalf("register %d", w.Code)

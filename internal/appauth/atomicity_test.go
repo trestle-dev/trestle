@@ -11,6 +11,7 @@ import (
 	"testing"
 
 	"github.com/trestle-dev/trestle/internal/adminauth"
+	"github.com/trestle-dev/trestle/internal/audit"
 	"github.com/trestle-dev/trestle/internal/store"
 	"github.com/trestle-dev/trestle/internal/storetest"
 )
@@ -70,6 +71,7 @@ func TestLoginAndRefreshAreAtomicUnderInjectedFailure(t *testing.T) {
 			}
 			admin := adminauth.New(s.DB(), string(s.Provider()))
 			normal := New(s.DB(), admin)
+			normal.SetAudit(audit.New(s.DB(), admin, string(s.Provider())))
 
 			register := call(t, normal, "/api/v1/auth/register", map[string]any{"email": "user@example.com", "password": "1234567"})
 			if register.Code != 201 {

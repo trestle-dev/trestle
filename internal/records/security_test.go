@@ -10,6 +10,7 @@ import (
 
 	"github.com/trestle-dev/trestle/internal/adminauth"
 	"github.com/trestle-dev/trestle/internal/appauth"
+	"github.com/trestle-dev/trestle/internal/audit"
 	"github.com/trestle-dev/trestle/internal/collections"
 	"github.com/trestle-dev/trestle/internal/identities"
 	"github.com/trestle-dev/trestle/internal/rules"
@@ -39,6 +40,7 @@ func setupSecurityFixture(t *testing.T, provider string) securityFixture {
 		t.Fatalf("collection: %d %s", created.Code, created.Body.String())
 	}
 	users := appauth.New(database.DB(), admin)
+	users.SetAudit(audit.New(database.DB(), admin, string(database.Provider())))
 	if _, err := database.DB().Exec("UPDATE _trestle_app_registration_policy SET policy='open' WHERE id=1"); err != nil {
 		t.Fatal(err)
 	}

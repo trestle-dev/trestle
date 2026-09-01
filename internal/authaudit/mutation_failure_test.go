@@ -13,6 +13,7 @@ import (
 
 	"github.com/trestle-dev/trestle/internal/adminauth"
 	"github.com/trestle-dev/trestle/internal/appauth"
+	"github.com/trestle-dev/trestle/internal/audit"
 	"github.com/trestle-dev/trestle/internal/collections"
 	"github.com/trestle-dev/trestle/internal/functions"
 	"github.com/trestle-dev/trestle/internal/identities"
@@ -136,6 +137,7 @@ func TestSecuritySensitiveMutationsFailClosed(t *testing.T) {
 			// 2. Application logout: register + login, then a failed
 			// revocation must return 500 and leave the session live.
 			appReal := appauth.New(s.DB(), admin)
+			appReal.SetAudit(audit.New(s.DB(), admin, string(s.Provider())))
 			if w := do(appReal, sess, "POST", "/api/v1/auth/register", map[string]any{"email": "user@example.com", "password": "1234567"}); w.Code != 201 {
 				t.Fatalf("register %d", w.Code)
 			}

@@ -489,7 +489,8 @@ func NormalizeEmail(value string) (string, bool) {
 
 func (s *Service) randomToken(n int) (string, error) {
 	b := make([]byte, n)
-	if _, err := s.randReader(b); err != nil {
+	read, err := s.randReader(b)
+	if err != nil || read != n {
 		return "", errors.New("entropy_source_unavailable")
 	}
 	return base64.RawURLEncoding.EncodeToString(b), nil
@@ -599,14 +600,30 @@ func ValidateActivationBaseURL(value string) (*url.URL, error) {
 	return parsed, nil
 }
 
-// AuditUserCreation records a successful application-user creation with its
-// creation path. It is emitted on the caller's transaction; the raw token or
-// password is never included.
-func (s *Service) AuditUserCreation(ctx context.Context, tx store.Transaction, email, path string) error {
+// AuditUserCreation records a successful application-user creation. The audit
+// actor contract distinguishes public registration from administrator
+// activation:
+//
+//   - actorKind "system", actorID "public-registration" for open registration
+//     and self-register invitation acceptance;
+//   - actorKind "system", actorID "activation" for administrator-activation
+//     invitation acceptance.
+//
+// The created user ID is the audit target, so the durable record is
+// identifiable. The creation path stays in bounded details; passwords and raw
+// tokens are never included. Audit is a mandatory dependency: account creation
+// fails closed (returns an error, rolling back the user) when the audit handler
+// has not been wired, rather than silently creating a user without the promised
+// audit fact.
+func (s *Service) AuditUserCreation(ctx context.Context, tx store.Transaction, userID, email, path string) error {
 	if s.audit == nil {
-		return nil
+		return errors.New("audit_not_configured")
 	}
-	return s.audit.Emit(ctx, tx, "user", "", "app_registration.user.create", "", "success", requestID(ctx), map[string]any{"email": email, "path": path})
+	actor := "public-registration"
+	if path == "activate" {
+		actor = "activation"
+	}
+	return s.audit.Emit(ctx, tx, "system", actor, "app_registration.user.create", userID, "success", requestID(ctx), map[string]any{"email": email, "path": path})
 }
 
 // SetRandomReader overrides the entropy source (test injection).
