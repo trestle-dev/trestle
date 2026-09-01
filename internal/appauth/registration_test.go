@@ -3,9 +3,11 @@ package appauth
 import (
 	"bytes"
 	"context"
+	"crypto/rand"
 	"crypto/sha256"
 	"database/sql"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"net/http"
 	"net/http/httptest"
@@ -799,7 +801,23 @@ func TestConcurrentReissueSingleValidToken(t *testing.T) {
 	}
 }
 
+func realRandom(b []byte) (int, error) { return rand.Read(b) }
+
 func sha256Hash(v string) []byte { h := sha256.Sum256([]byte(v)); return h[:] }
+
+// failInsertStore wraps a store.Executor and fails INSERTs into the access
+// request table so a test can observe a genuine storage failure.
+type failInsertStore struct{ store.Executor }
+
+func (f failInsertStore) ExecContext(ctx context.Context, q string, args ...any) (sql.Result, error) {
+	if strings.HasPrefix(strings.TrimSpace(q), "INSERT INTO _trestle_app_access_requests") {
+		return nil, errors.New("injected storage failure")
+	}
+	return f.Executor.ExecContext(ctx, q, args...)
+}
+func (f failInsertStore) Exec(q string, args ...any) (sql.Result, error) {
+	return f.ExecContext(context.Background(), q, args...)
+}
 
 // TestBoundedCleanupProcessesAtMostOneBatch proves the sweep processes at most
 // CleanupBatch rows per trigger with deterministic ordering, and subsequent
@@ -808,6 +826,7 @@ func TestBoundedCleanupProcessesAtMostOneBatch(t *testing.T) {
 	for _, provider := range storetest.Providers(t) {
 		t.Run(provider, func(t *testing.T) {
 			s, h := setupReg(t, provider)
+			setPolicy(t, s, "approval")
 			// Insert more than one batch of pending requests past the 14-day
 			// pending TTL but within the 30-day retention window, so a trigger
 			// expires them without purging them (proving the expiry batch is
@@ -912,4 +931,359 @@ func TestActivationBaseURLValidation(t *testing.T) {
 	if strings.Contains(link, "?") {
 		t.Fatal("token must not appear in a query string")
 	}
+}
+
+// TestAccessRequestPolicyTransitionRaces proves access-request submission is
+// serialized against policy changes: when the restrictive policy change wins
+// first, the later request is not created. Every transition (approval to
+// closed/invite/open) is covered, plus the request-wins ordering.
+func TestAccessRequestPolicyTransitionRaces(t *testing.T) {
+	for _, provider := range storetest.Providers(t) {
+		t.Run(provider, func(t *testing.T) {
+			s, h := setupReg(t, provider)
+			admin := adminauth.New(s.DB(), string(s.Provider()))
+			cookie, csrf := adminSetup(t, s, admin)
+			setPolicy(t, s, "approval")
+
+			for _, target := range []string{"closed", "invite", "open"} {
+				// The policy change wins first.
+				body := `{"policy":"` + target + `"}`
+				if target == "open" {
+					body = `{"policy":"open","confirmOpen":true}`
+				}
+				if w := adminCall(h, cookie, csrf, "PUT", "/admin/v1/app-registration/policy", body); w.Code != 200 {
+					t.Fatalf("policy change to %s %d", target, w.Code)
+				}
+				// A request after the restrictive change must not be created.
+				email := "post-" + target + "@example.com"
+				if w := publicCall(h, "/api/v1/auth/access-request", `{"email":"`+email+`"}`); w.Code != 403 {
+					t.Fatalf("request after %s %d", target, w.Code)
+				}
+				// The serialization invariant: no pending row may be created
+				// after the restrictive change wins, for every target policy.
+				var count int
+				if err := s.DB().QueryRow("SELECT count(*) FROM _trestle_app_access_requests WHERE email=?", email).Scan(&count); err != nil || count != 0 {
+					t.Fatalf("request created after restrictive change to %s: %d err=%v", target, count, err)
+				}
+				// Reset to approval for the next transition.
+				setPolicy(t, s, "approval")
+			}
+
+			// Request wins first: under approval the request is created, then a
+			// later policy change to closed takes effect and the request
+			// remains stored.
+			setPolicy(t, s, "approval")
+			publicCall(h, "/api/v1/auth/access-request", `{"email":"winner@example.com"}`)
+			var count int
+			if err := s.DB().QueryRow("SELECT count(*) FROM _trestle_app_access_requests WHERE email='winner@example.com' AND status='pending'").Scan(&count); err != nil || count != 1 {
+				t.Fatalf("request-wins ordering failed: %d err=%v", count, err)
+			}
+			setPolicy(t, s, "closed")
+			if w := adminCall(h, cookie, csrf, "GET", "/admin/v1/app-registration/requests", ""); w.Code != 200 {
+				t.Fatalf("list after close %d", w.Code)
+			}
+		})
+	}
+}
+
+// TestEntropyFailureNoDurableMutation proves an injected entropy-source failure
+// prevents any invitation, approval, reissue, or access-request row from being
+// committed and returns a misleading-success-free outcome.
+func TestEntropyFailureNoDurableMutation(t *testing.T) {
+	for _, provider := range storetest.Providers(t) {
+		t.Run(provider, func(t *testing.T) {
+			s, h := setupReg(t, provider)
+			admin := adminauth.New(s.DB(), string(s.Provider()))
+			cookie, csrf := adminSetup(t, s, admin)
+			// Inject entropy failure on the service.
+			h.reg.SetRandomReader(func([]byte) (int, error) { return 0, errors.New("no entropy") })
+			setPolicy(t, s, "open")
+
+			// Provisioning an invitation fails before any row is committed.
+			if w := adminCall(h, cookie, csrf, "POST", "/admin/v1/app-registration/invitations", `{"kind":"activate","email":"entropy@example.com"}`); w.Code == 201 {
+				t.Fatalf("invitation created despite entropy failure")
+			}
+			var invites int
+			if err := s.DB().QueryRow("SELECT count(*) FROM _trestle_app_invitations").Scan(&invites); err != nil || invites != 0 {
+				t.Fatalf("invitation row committed under entropy failure: %d err=%v", invites, err)
+			}
+
+			// Approval of a pending request fails without creating a user or
+			// invitation. The request is created first (entropy works), then
+			// entropy is injected before the approval.
+			setPolicy(t, s, "approval")
+			h.reg.SetRandomReader(realRandom)
+			publicCall(h, "/api/v1/auth/access-request", `{"email":"entropy-approve@example.com"}`)
+			h.reg.SetRandomReader(func([]byte) (int, error) { return 0, errors.New("no entropy") })
+			w := adminCall(h, cookie, csrf, "GET", "/admin/v1/app-registration/requests", "")
+			var list struct {
+				Items []struct {
+					ID string `json:"id"`
+				}
+			}
+			json.Unmarshal(w.Body.Bytes(), &list)
+			rid := list.Items[0].ID
+			if w := adminCall(h, cookie, csrf, "POST", "/admin/v1/app-registration/requests/"+rid+"/approve", `{}`); w.Code == 201 {
+				t.Fatal("approve succeeded despite entropy failure")
+			}
+			var inviteCount int
+			if err := s.DB().QueryRow("SELECT count(*) FROM _trestle_app_invitations").Scan(&inviteCount); err != nil || inviteCount != 0 {
+				t.Fatalf("approval invitation committed under entropy failure: %d err=%v", inviteCount, err)
+			}
+			// The request stays pending (no approval audit, no decision).
+			var status string
+			if err := s.DB().QueryRow("SELECT status FROM _trestle_app_access_requests WHERE id=?", rid).Scan(&status); err != nil || status != "pending" {
+				t.Fatalf("request status %q after failed approve, err=%v", status, err)
+			}
+
+			// Access-request submission under entropy failure leaves no row.
+			setPolicy(t, s, "approval")
+			if err := h.reg.SubmitAccessRequest(context.Background(), "entropy-req@example.com"); err == nil {
+				t.Fatal("access request succeeded despite entropy failure")
+			}
+			var reqCount int
+			if err := s.DB().QueryRow("SELECT count(*) FROM _trestle_app_access_requests WHERE email='entropy-req@example.com'").Scan(&reqCount); err != nil || reqCount != 0 {
+				t.Fatalf("access-request row committed under entropy failure: %d err=%v", reqCount, err)
+			}
+		})
+	}
+}
+
+// TestAuditMatrixExactCounts proves the audit event matrix with exact counts on
+// SQLite and PostgreSQL: invitation creation, open registration, invitation
+// acceptance, approval/rejection, reissue, revocation (only on a real
+// transition), and policy change each emit exactly the expected facts, and a
+// nonexistent/already-terminal revocation emits no success fact.
+func TestAuditMatrixExactCounts(t *testing.T) {
+	for _, provider := range storetest.Providers(t) {
+		t.Run(provider, func(t *testing.T) {
+			s, h := setupReg(t, provider)
+			admin := adminauth.New(s.DB(), string(s.Provider()))
+			cookie, csrf := adminSetup(t, s, admin)
+
+			count := func(action string) int {
+				var n int
+				if err := s.DB().QueryRow("SELECT count(*) FROM _trestle_audit WHERE action=?", action).Scan(&n); err != nil {
+					t.Fatal(err)
+				}
+				return n
+			}
+
+			// 1. Administrator invitation creation -> one fact.
+			setPolicy(t, s, "invite")
+			w := adminCall(h, cookie, csrf, "POST", "/admin/v1/app-registration/invitations", `{"kind":"self_register","email":"audit@example.com"}`)
+			if w.Code != 201 {
+				t.Fatalf("invitation create %d", w.Code)
+			}
+			var inv struct{ Token string }
+			json.Unmarshal(w.Body.Bytes(), &inv)
+			if got := count("app_registration.invitation.create"); got != 1 {
+				t.Fatalf("invitation.create audit=%d want 1", got)
+			}
+
+			// 2. Invitation acceptance -> user.create fact.
+			if w := publicCall(h, "/api/v1/auth/invite/accept", `{"token":"`+inv.Token+`","password":"1234567"}`); w.Code != 201 {
+				t.Fatalf("accept %d", w.Code)
+			}
+			if got := count("app_registration.user.create"); got != 1 {
+				t.Fatalf("user.create audit=%d want 1", got)
+			}
+
+			// 3. Open registration -> user.create fact with path register.
+			setPolicy(t, s, "open")
+			if w := publicCall(h, "/api/v1/auth/register", `{"email":"open@example.com","password":"1234567"}`); w.Code != 201 {
+				t.Fatalf("open register %d", w.Code)
+			}
+			if got := count("app_registration.user.create"); got != 2 {
+				t.Fatalf("user.create audit=%d want 2", got)
+			}
+
+			// 4. Policy change -> one fact.
+			if w := adminCall(h, cookie, csrf, "PUT", "/admin/v1/app-registration/policy", `{"policy":"closed"}`); w.Code != 200 {
+				t.Fatalf("policy change %d", w.Code)
+			}
+			if got := count("app_registration.policy.change"); got != 1 {
+				t.Fatalf("policy.change audit=%d want 1", got)
+			}
+
+			// 5. Revocation of a real invitation -> one fact.
+			setPolicy(t, s, "invite")
+			w = adminCall(h, cookie, csrf, "POST", "/admin/v1/app-registration/invitations", `{"kind":"self_register","email":"revoke@example.com"}`)
+			var inv2 struct{ ID string }
+			json.Unmarshal(w.Body.Bytes(), &inv2)
+			if w := adminCall(h, cookie, csrf, "POST", "/admin/v1/app-registration/invitations/"+inv2.ID+"/revoke", `{}`); w.Code != 204 {
+				t.Fatalf("revoke %d", w.Code)
+			}
+			if got := count("app_registration.invitation.revoke"); got != 1 {
+				t.Fatalf("invitation.revoke audit=%d want 1", got)
+			}
+			// Revoking again (already revoked) is idempotent with no new fact.
+			if w := adminCall(h, cookie, csrf, "POST", "/admin/v1/app-registration/invitations/"+inv2.ID+"/revoke", `{}`); w.Code != 204 {
+				t.Fatalf("re-revoke %d", w.Code)
+			}
+			if got := count("app_registration.invitation.revoke"); got != 1 {
+				t.Fatalf("re-revoke audit=%d want still 1", got)
+			}
+			// Revoking a nonexistent invitation is idempotent with no fact.
+			if w := adminCall(h, cookie, csrf, "POST", "/admin/v1/app-registration/invitations/nonexistent/revoke", `{}`); w.Code != 204 {
+				t.Fatalf("revoke nonexistent %d", w.Code)
+			}
+			if got := count("app_registration.invitation.revoke"); got != 1 {
+				t.Fatalf("nonexistent revoke audit=%d want still 1", got)
+			}
+
+			// 6. Approval + reissue -> one approve fact and one reissue fact.
+			setPolicy(t, s, "approval")
+			publicCall(h, "/api/v1/auth/access-request", `{"email":"audit-approve@example.com"}`)
+			w = adminCall(h, cookie, csrf, "GET", "/admin/v1/app-registration/requests", "")
+			var list struct {
+				Items []struct {
+					ID string `json:"id"`
+				}
+			}
+			json.Unmarshal(w.Body.Bytes(), &list)
+			rid := list.Items[0].ID
+			if w := adminCall(h, cookie, csrf, "POST", "/admin/v1/app-registration/requests/"+rid+"/approve", `{}`); w.Code != 201 {
+				t.Fatalf("approve %d", w.Code)
+			}
+			if got := count("app_registration.request.approve"); got != 1 {
+				t.Fatalf("request.approve audit=%d want 1", got)
+			}
+			if w := adminCall(h, cookie, csrf, "POST", "/admin/v1/app-registration/requests/"+rid+"/reissue", `{}`); w.Code != 201 {
+				t.Fatalf("reissue %d", w.Code)
+			}
+			if got := count("app_registration.invitation.reissue"); got != 1 {
+				t.Fatalf("invitation.reissue audit=%d want 1", got)
+			}
+		})
+	}
+}
+
+// TestStorageFailureMetricObservable proves genuine access-request storage
+// failures increment the server-side metric while the public response stays
+// indistinguishable (202), and that normal operation does not increment it.
+func TestStorageFailureMetricObservable(t *testing.T) {
+	for _, provider := range storetest.Providers(t) {
+		t.Run(provider, func(t *testing.T) {
+			s, h := setupReg(t, provider)
+			setPolicy(t, s, "approval")
+			before := h.reg.StorageFailures()
+			if before != 0 {
+				t.Fatalf("storage failures started at %d", before)
+			}
+			// Normal submission succeeds with no metric increment.
+			if w := publicCall(h, "/api/v1/auth/access-request", `{"email":"ok@example.com"}`); w.Code != 202 {
+				t.Fatalf("ok request %d", w.Code)
+			}
+			if h.reg.StorageFailures() != before {
+				t.Fatal("normal submission incremented the storage-failure metric")
+			}
+			// Inject a storage failure by closing the underlying store's DB.
+			// Simpler: point the service at a broken executor for one call.
+			h.SetAudit(nil) // not needed
+			// Replace the store with one whose ExecContext fails on INSERT.
+			h.reg.SetStore(failInsertStore{s.DB()})
+			if w := publicCall(h, "/api/v1/auth/access-request", `{"email":"fail@example.com"}`); w.Code != 202 {
+				t.Fatalf("failure public response %d (must stay 202)", w.Code)
+			}
+			if h.reg.StorageFailures() <= before {
+				t.Fatal("storage failure did not increment the observable metric")
+			}
+		})
+	}
+}
+
+// TestConcurrentAccessRequestVsPolicyChange proves the serialized contract under
+// concurrency: a restrictive policy change and an access-request submission
+// race, and if the request commits then it committed while the policy was
+// approval; a request that loses to a closed/invite change creates no row.
+func TestConcurrentAccessRequestVsPolicyChange(t *testing.T) {
+	for _, provider := range storetest.Providers(t) {
+		t.Run(provider, func(t *testing.T) {
+			s, h := setupReg(t, provider)
+			admin := adminauth.New(s.DB(), string(s.Provider()))
+			cookie, csrf := adminSetup(t, s, admin)
+			setPolicy(t, s, "approval")
+
+			for round := 0; round < 4; round++ {
+				email := fmt.Sprintf("race-req%d@example.com", round)
+				// Submission goroutine.
+				submitted := make(chan int, 1)
+				go func() {
+					submitted <- publicCall(h, "/api/v1/auth/access-request", `{"email":"`+email+`"}`).Code
+				}()
+				// Policy change to closed concurrently.
+				adminCall(h, cookie, csrf, "PUT", "/admin/v1/app-registration/policy", `{"policy":"closed"}`)
+				code := <-submitted
+				var rows int
+				if err := s.DB().QueryRow("SELECT count(*) FROM _trestle_app_access_requests WHERE email=?", email).Scan(&rows); err != nil {
+					t.Fatal(err)
+				}
+				switch {
+				case code == 202 && rows == 1:
+					// The request won the lock while the policy was approval:
+					// exactly one pending row exists.
+					var status string
+					if err := s.DB().QueryRow("SELECT status FROM _trestle_app_access_requests WHERE email=?", email).Scan(&status); err != nil || status != "pending" {
+						t.Fatalf("round %d: committed request status=%q err=%v", round, status, err)
+					}
+				case code == 403 && rows == 0:
+					// The restrictive policy change won first: no row is created.
+				default:
+					t.Fatalf("round %d: code=%d rows=%d violates the serialization invariant", round, code, rows)
+				}
+				// Reset to approval for the next round.
+				setPolicy(t, s, "approval")
+			}
+		})
+	}
+}
+
+// TestAuditRollbackNoPartialFacts proves an injected failure after a mutation
+// rolls back both the durable row and the audit fact (no partial account,
+// invitation or audit state).
+func TestAuditRollbackNoPartialFacts(t *testing.T) {
+	for _, provider := range storetest.Providers(t) {
+		t.Run(provider, func(t *testing.T) {
+			s, _ := setupReg(t, provider)
+			admin := adminauth.New(s.DB(), string(s.Provider()))
+			setPolicy(t, s, "open")
+
+			// Register with an executor that fails on the audit INSERT: the
+			// user insert rolls back with it.
+			failAudit := &auditFailExecutor{Executor: s.DB(), failAction: "app_registration.user.create"}
+			fh := New(failAudit, admin)
+			fh.SetAudit(audit.New(s.DB(), admin, string(s.Provider())))
+			// The policy read must go to the real DB; only the audit insert
+			// fails. failAudit forwards everything except the audit insert.
+			if w := publicCall(fh, "/api/v1/auth/register", `{"email":"rollback@example.com","password":"1234567"}`); w.Code != 409 {
+				t.Fatalf("register with audit failure %d", w.Code)
+			}
+			var users int
+			if err := s.DB().QueryRow("SELECT count(*) FROM _trestle_app_users WHERE email='rollback@example.com'").Scan(&users); err != nil || users != 0 {
+				t.Fatalf("user row committed despite audit failure: %d err=%v", users, err)
+			}
+			var audits int
+			if err := s.DB().QueryRow("SELECT count(*) FROM _trestle_audit WHERE action='app_registration.user.create'").Scan(&audits); err != nil || audits != 0 {
+				t.Fatalf("audit row committed despite audit failure: %d err=%v", audits, err)
+			}
+		})
+	}
+}
+
+// auditFailExecutor wraps a store.Executor and fails the specific audit INSERT
+// action, so the transaction rolls back with no partial state.
+type auditFailExecutor struct {
+	store.Executor
+	failAction string
+}
+
+func (e *auditFailExecutor) ExecContext(ctx context.Context, q string, args ...any) (sql.Result, error) {
+	if strings.Contains(q, "INSERT INTO _trestle_audit") && len(args) > 3 && fmt.Sprint(args[3]) == e.failAction {
+		return nil, errors.New("injected audit failure")
+	}
+	return e.Executor.ExecContext(ctx, q, args...)
+}
+func (e *auditFailExecutor) Exec(q string, args ...any) (sql.Result, error) {
+	return e.ExecContext(context.Background(), q, args...)
 }

@@ -10,6 +10,7 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"log/slog"
 	"net/http"
 	"net/mail"
 	"strings"
@@ -115,6 +116,9 @@ func (h *Handler) register(w http.ResponseWriter, r *http.Request) {
 		if _, ierr := tx.ExecContext(r.Context(), "INSERT INTO _trestle_app_users(id,email,password_hash,created_at) VALUES(?,?,?,?)", createdID, email, hash, now); ierr != nil {
 			return errors.New("insert_user")
 		}
+		if err := h.reg.AuditUserCreation(r.Context(), tx, email, "register"); err != nil {
+			return err
+		}
 		newID = createdID
 		return nil
 	})
@@ -214,6 +218,9 @@ func (h *Handler) inviteAccept(w http.ResponseWriter, r *http.Request) {
 		if _, ierr := tx.ExecContext(r.Context(), "UPDATE _trestle_app_invitations SET revoked_at=? WHERE email=? AND kind=? AND used_at IS NULL AND revoked_at IS NULL AND id<>?", now, boundEmail, "activate", id); ierr != nil {
 			return ierr
 		}
+		if err := h.reg.AuditUserCreation(r.Context(), tx, boundEmail, kind); err != nil {
+			return err
+		}
 		acceptedEmail = boundEmail
 		acceptedID = newID
 		return nil
@@ -253,7 +260,20 @@ func (h *Handler) accessRequest(w http.ResponseWriter, r *http.Request) {
 		writeError(w, 403, "registration_approval_required", "Registration by approval is not available.")
 		return
 	}
-	_ = h.reg.SubmitAccessRequest(r.Context(), in.Email) // generic outcome regardless
+	if err := h.reg.SubmitAccessRequest(r.Context(), in.Email); err != nil {
+		if err.Error() == "policy_not_approval" {
+			writeError(w, 403, "registration_approval_required", "Registration by approval is not available.")
+			return
+		}
+		if err.Error() == "invalid_email" {
+			writeError(w, 422, "validation_failed", "The request could not be applied.")
+			return
+		}
+		// Genuine storage failure: keep the public response indistinguishable
+		// for enumeration safety, but surface a bounded server-side metric so
+		// operators can observe it. No submitted email is logged.
+		slog.Warn("access request storage failure", "count", h.reg.StorageFailures())
+	}
 	writeJSON(w, 202, map[string]any{"status": "requested"})
 }
 
