@@ -120,11 +120,34 @@ const document = {
 };
 const fetched = [];
 const locationObj = { origin: "http://localhost", pathname: "/", assign(url) { assignCalls.push(String(url)); } };
+const historyStack = { entries: ["/"], index: 0, popstateCount: 0 };
+function historyPush(url) {
+  historyStack.entries = historyStack.entries.slice(0, historyStack.index + 1);
+  historyStack.entries.push(String(url));
+  historyStack.index = historyStack.entries.length - 1;
+  locationObj.pathname = String(url);
+}
+function historyReplace(url) { historyStack.entries[historyStack.index] = String(url); locationObj.pathname = String(url); }
+function historyTraverse(d) {
+  const ni = Math.max(0, Math.min(historyStack.entries.length - 1, historyStack.index + d));
+  if (ni === historyStack.index) return;
+  historyStack.index = ni;
+  locationObj.pathname = historyStack.entries[ni];
+  historyStack.popstateCount++;
+  windowEmit("popstate");
+}
+const sandboxHistory = {
+  pushState(_s, _t, url) { historyPush(url); historyCalls.push("push " + String(url)); },
+  replaceState(_s, _t, url) { historyReplace(url); historyCalls.push("replace " + String(url)); },
+  back() { historyTraverse(-1); },
+  forward() { historyTraverse(1); },
+  go(d) { historyTraverse(d); },
+};
 const sandbox = {
   document,
   window: { addEventListener: windowOn, dispatchEvent: (e) => windowEmit(e.type), location: locationObj },
   location: locationObj,
-  history: { replaceState(_s, _t, url) { historyCalls.push(String(url)); } },
+  history: sandboxHistory,
   localStorage: { store: {}, getItem(k) { return this.store[k] ?? null; }, setItem(k, v) { this.store[k] = String(v); }, removeItem(k) { delete this.store[k]; } },
   crypto: { randomUUID: () => "id-1" },
   fetch: async (url, opt = {}) => {
@@ -135,7 +158,7 @@ const sandbox = {
     let body;
     if (u === "/admin/v1/app-registration/invitations" && method === "POST") body = { id: "inv_1", kind: "activate", email: "x@example.com", expiresAt: "2027-01-01T00:00:00Z", token: "TOKEN123" };
     else if (u.includes("/approve") || u.includes("/reissue")) body = { id: "inv_1", kind: "activate", email: "x@example.com", expiresAt: "2027-01-01T00:00:00Z", token: "TOKEN123" };
-    else if (u === "/admin/v1/app-registration/activation-base-url" && method === "PUT") body = { ok: true };
+    else if (u === "/admin/v1/app-registration/activation-base-url" && method === "PUT") body = { activationBaseUrl: JSON.parse(opt.body || "{}").activationBaseUrl || "" };
     else if (u === "/admin/v1/app-registration/invitations" && method === "GET") body = { items: [{ id: "inv_1", kind: "activate", email: "x@example.com", createdAt: "2026-01-01T00:00:00Z", expiresAt: "2027-01-01T00:00:00Z" }] };
     else if (u === "/admin/v1/app-registration/requests" && method === "GET") body = { items: [{ id: "req_1", email: "x@example.com", status: "pending", createdAt: "2026-01-01T00:00:00Z" }] };
     else body = { items: [], policy: "closed", setAt: "2026-01-01T00:00:00Z", activationBaseUrl: "" };
@@ -173,6 +196,11 @@ const sandbox = {
   __uiAssignCalls: () => assignCalls.slice(),
   __uiFailUrl: (u, on) => { if (on) failUrls.add(u); else failUrls.delete(u); },
   __uiWindowEmit: windowEmit,
+  __uiBack: () => sandboxHistory.back(),
+  __uiForward: () => sandboxHistory.forward(),
+  __uiPathname: () => locationObj.pathname,
+  __uiHistoryIndex: () => historyStack.index,
+  __uiPopstateCount: () => historyStack.popstateCount,
 };
 vm.createContext(sandbox);
 
@@ -209,6 +237,7 @@ const harness = `
   const rejectBtn = __uiEl("reject-btn"); rejectBtn.dataset.reject = "req_1"; __uiList("[data-reject]").push(rejectBtn);
   const revokeBtn = __uiEl("revoke-btn"); revokeBtn.dataset.revokeInv = "inv_1"; __uiList("[data-revoke-inv]").push(revokeBtn);
   const reissueBtn = __uiEl("reissue-btn"); reissueBtn.dataset.reissue = "req_1"; __uiList("[data-reissue]").push(reissueBtn);
+  const disableBtn = __uiEl("disable-btn"); disableBtn.dataset.disableUser = "usr_1"; __uiList("[data-disable-user]").push(disableBtn);
 
   // Render the registration view and let loadRegistration populate it.
   await renderUsers();
@@ -309,19 +338,46 @@ const harness = `
   assert(pendingToken === false, "no phantom token state after navigation");
   assert(panel() === "", "no phantom token panel after navigation");
 
-  // (d) Browser back/forward follows the same guarded contract.
+  // (d) Real browser back/forward: the traversal changes the history index and
+  // location.pathname BEFORE popstate, and restoreDashboardRoute runs.
+  // The stack is ["/","/users","/collections"] at index 2 (lastRenderedUrl
+  // "/collections") from the earlier navigations.
   showToken(host, "Back-forward token", "BFTOKEN");
   assert(pendingToken === true, "token must be pending before back/forward");
-  __uiSetConfirm(false);
+  const popBefore = __uiPopstateCount();
   const histBF = __uiHistoryCalls().length;
-  __uiWindowEmit("popstate");
+  __uiSetConfirm(false);
+  __uiBack();
   await settle();
-  assert(pendingToken === true && panel().indexOf("BFTOKEN") !== -1, "rejected back/forward must keep the token");
+  // Rejected traversal: the URL and view must be consistent again - the
+  // previously rendered "/collections" URL is restored, the collections view
+  // stays, the token stays, and the restore push never fires another popstate.
+  assert(__uiPathname() === "/collections", "rejected back must restore the rendered URL");
+  assert(document.getElementById("view-title").textContent === "Collections", "rejected back must keep the current view");
+  assert(panel().indexOf("BFTOKEN") !== -1 && pendingToken === true, "rejected back must keep the token");
+  assert(__uiHistoryCalls().length === histBF + 1, "rejected back restores via exactly one pushState");
+  assert(__uiPopstateCount() === popBefore + 1, "restoring a rejected traversal must not re-fire popstate");
   __uiSetConfirm(true);
-  __uiWindowEmit("popstate");
+  const histOK = __uiHistoryCalls().length;
+  const usersRendersBefore = renderCalls.users;
+  __uiBack();
   await settle();
-  assert(pendingToken === false, "accepted back/forward must clear the token");
-  assert(renderCalls.overview >= 1, "back/forward must render through the guarded path");
+  // Accepted traversal renders the entry the browser moved to ("/users", the
+  // entry before the restored "/collections") without creating or replacing an
+  // unrelated history entry, and discards the token.
+  assert(pendingToken === false, "accepted back must clear the token");
+  assert(panel() === "", "accepted back must clear the token panel");
+  assert(__uiPathname() === "/users", "accepted back must land on the traversed entry");
+  assert(__uiHistoryIndex() === 1, "accepted traversal must not create or replace an entry");
+  assert(__uiHistoryCalls().length === histOK, "accepted traversal must not write history");
+  assert(renderCalls.users === usersRendersBefore + 1, "accepted traversal must render the destination once");
+  // No phantom warning on a later traversal.
+  const confirmAtTraversal = __uiConfirmCalls();
+  __uiBack();
+  await settle();
+  assert(__uiPathname() === "/", "later traversal must reach the previous entry");
+  assert(renderCalls.overview >= 1, "later traversal must render through the guarded path");
+  assert(__uiConfirmCalls() === confirmAtTraversal, "no phantom warning after the token was cleared");
 
   // (e) openCollectionRoute cannot bypass the guard.
   showToken(host, "Collection token", "COLTOKEN");
@@ -374,6 +430,61 @@ const harness = `
   await settle();
   assert(panel().indexOf("TOKEN123") !== -1 && pendingToken === true, "after dismissal a later token may be issued");
 
+  // (j) Disabling an application user must preserve an undisposed token (a
+  // token from (i) is visible right now).
+  const beforeDisable = panel();
+  disableBtn.dispatch("click");
+  await settle();
+  assert(panel() === beforeDisable, "disable-user must preserve the token panel");
+  assert(pendingToken === true, "disable-user must preserve pendingToken");
+
+  // (k) Provisioning failure: no uncaught exception, a useful error in the
+  // view-error (distinct from the secret area), no token, pendingToken false,
+  // and a previously visible token is never overwritten.
+  dismissToken(host);
+  __uiEl(".provision-form").elements = { email: { value: "fail@example.com" } };
+  __uiFailUrl("POST /admin/v1/app-registration/invitations", true);
+  provForm.dispatch("submit", { preventDefault() {} });
+  await settle();
+  __uiFailUrl("POST /admin/v1/app-registration/invitations", false);
+  assert(host.querySelector(".view-error").textContent.indexOf("Could not issue the activation token") !== -1, "provision failure must show a useful error");
+  assert(panel() === "", "provision failure must not show a token");
+  assert(pendingToken === false, "provision failure must not set pendingToken");
+  showToken(host, "Keep", "KEEPTICKET");
+  __uiFailUrl("POST /admin/v1/app-registration/invitations", true);
+  provForm.dispatch("submit", { preventDefault() {} });
+  await settle();
+  __uiFailUrl("POST /admin/v1/app-registration/invitations", false);
+  assert(panel().indexOf("KEEPTICKET") !== -1, "a second provisioning attempt must not overwrite a visible token");
+  dismissToken(host);
+
+  // (l) Activation base-URL set / replace / clear, each followed immediately
+  // by token issuance so the token link uses the current client state.
+  const baseForm = host.querySelector(".baseurl-form");
+  baseForm.elements = { baseurl: { value: "https://app.example.com/register" } };
+  baseForm.dispatch("submit", { preventDefault() {} });
+  await settle();
+  assert(activationBaseUrl === "https://app.example.com/register", "set must update the client activationBaseUrl");
+  provForm.dispatch("submit", { preventDefault() {} });
+  await settle();
+  assert(panel().indexOf("https://app.example.com/register#invite=TOKEN123") !== -1, "a token issued after set must use the new base URL");
+  dismissToken(host);
+  baseForm.elements = { baseurl: { value: "https://new.example.com/reg" } };
+  baseForm.dispatch("submit", { preventDefault() {} });
+  await settle();
+  assert(activationBaseUrl === "https://new.example.com/reg", "replace must update the client activationBaseUrl");
+  provForm.dispatch("submit", { preventDefault() {} });
+  await settle();
+  assert(panel().indexOf("https://new.example.com/reg#invite=TOKEN123") !== -1, "a token issued after replace must use the new base URL");
+  dismissToken(host);
+  baseForm.elements = { baseurl: { value: "" } };
+  baseForm.dispatch("submit", { preventDefault() {} });
+  await settle();
+  assert(activationBaseUrl === "", "clear must reset the client activationBaseUrl");
+  provForm.dispatch("submit", { preventDefault() {} });
+  await settle();
+  assert(panel().indexOf("app.example.com") === -1 && panel().indexOf("TOKEN123") !== -1, "a token issued after clear must not carry a stale base-URL link");
+
   globalThis.__uiFailures = failures;
 })();
 `;
@@ -387,6 +498,7 @@ if (!/policyForm\.addEventListener\(["']submit["'][^;]*?ev\.preventDefault\(\)/.
 if (jsSource.indexOf('data-dismiss-token') === -1) failures.push("one-time panel must have an explicit Dismiss action");
 if (jsSource.indexOf('function canIssueToken') === -1) failures.push("token-minting actions must be blocked while a token is pending");
 if (!/function selectDashboardRoute\(route,title,href/.test(jsSource)) failures.push("route navigation must flow through one guarded function");
+if (!/history\.pushState\(null,"",href\)/.test(jsSource)) failures.push("ordinary route navigation must use pushState to build in-app history");
 if (/data-route="users"\][^;]*addEventListener\("click",renderUsers/.test(jsSource)) failures.push("independent render listeners must be removed (single navigation path)");
 if (jsSource.indexOf('pendingToken=false;const button=document.getElementById("logout")') !== -1) failures.push("logout must not clear pendingToken before the request succeeds");
 

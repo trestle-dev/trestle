@@ -524,7 +524,9 @@ func (h *Handler) adminRoutes(w http.ResponseWriter, r *http.Request) {
 			writeError(w, 400, err.Error(), "The request could not be applied.")
 			return
 		}
-		writeJSON(w, 200, map[string]any{"ok": true})
+		// The stored value equals the validated input; returning it lets the
+		// client adopt the exact configured value (empty when cleared).
+		writeJSON(w, 200, map[string]any{"activationBaseUrl": in.ActivationBaseURL})
 		return
 	}
 	if r.URL.Path == "/admin/v1/app-registration/invitations" && r.Method == http.MethodPost {
