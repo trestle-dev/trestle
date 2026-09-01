@@ -63,20 +63,23 @@ type PortableRecord struct {
 }
 
 type PortableSystem struct {
-	Admins          []map[string]any `json:"admins"`
-	AdminSessions   []map[string]any `json:"adminSessions"`
-	AppUsers        []map[string]any `json:"appUsers"`
-	AppSessions     []map[string]any `json:"appSessions"`
-	Credentials     []map[string]any `json:"credentials"`
-	AppAccess       []map[string]any `json:"appAccess"`
-	CollectionRules []map[string]any `json:"collectionRules"`
-	Events          []map[string]any `json:"events"`
-	Audit           []map[string]any `json:"audit"`
-	Jobs            []map[string]any `json:"jobs"`
-	Webhooks        []map[string]any `json:"webhooks"`
-	Functions       []map[string]any `json:"functions"`
-	Files           []map[string]any `json:"files"`
-	SystemMeta      []map[string]any `json:"systemMeta"`
+	Admins             []map[string]any `json:"admins"`
+	AdminSessions      []map[string]any `json:"adminSessions"`
+	AppUsers           []map[string]any `json:"appUsers"`
+	AppSessions        []map[string]any `json:"appSessions"`
+	Credentials        []map[string]any `json:"credentials"`
+	AppAccess          []map[string]any `json:"appAccess"`
+	CollectionRules    []map[string]any `json:"collectionRules"`
+	Events             []map[string]any `json:"events"`
+	Audit              []map[string]any `json:"audit"`
+	Jobs               []map[string]any `json:"jobs"`
+	Webhooks           []map[string]any `json:"webhooks"`
+	Functions          []map[string]any `json:"functions"`
+	Files              []map[string]any `json:"files"`
+	SystemMeta         []map[string]any `json:"systemMeta"`
+	RegistrationPolicy []map[string]any `json:"registrationPolicy"`
+	Invitations        []map[string]any `json:"invitations"`
+	AccessRequests     []map[string]any `json:"accessRequests"`
 }
 
 func quote(identifier string) string { return `"` + strings.ReplaceAll(identifier, `"`, `""`) + `"` }
@@ -167,6 +170,9 @@ func Export(ctx context.Context, db store.Executor, dialect store.Dialect, w io.
 		{"webhooks", &bundle.System.Webhooks, "_trestle_webhooks"},
 		{"functions", &bundle.System.Functions, "_trestle_functions"},
 		{"files", &bundle.System.Files, "_trestle_files"},
+		{"registrationPolicy", &bundle.System.RegistrationPolicy, "_trestle_app_registration_policy"},
+		{"invitations", &bundle.System.Invitations, "_trestle_app_invitations"},
+		{"accessRequests", &bundle.System.AccessRequests, "_trestle_app_access_requests"},
 	} {
 		values, err := dumpTable(ctx, tx, dialect, item.base)
 		if err != nil {
@@ -369,6 +375,8 @@ func Import(ctx context.Context, db store.Executor, dialect store.Dialect, r io.
 		{bundle.System.Webhooks, "_trestle_webhooks"},
 		{bundle.System.Functions, "_trestle_functions"},
 		{bundle.System.Files, "_trestle_files"},
+		{bundle.System.Invitations, "_trestle_app_invitations"},
+		{bundle.System.AccessRequests, "_trestle_app_access_requests"},
 	} {
 		if err := insertRows(ctx, tx, dialect, item.table, item.src); err != nil {
 			return err
@@ -385,10 +393,40 @@ func Import(ctx context.Context, db store.Executor, dialect store.Dialect, r io.
 			return err
 		}
 	}
+	if err := restoreRegistrationPolicy(ctx, tx, dialect, bundle); err != nil {
+		return err
+	}
 	if err := applyRestorePolicy(ctx, tx, dialect); err != nil {
 		return err
 	}
 	return tx.Commit()
+}
+
+// restoreRegistrationPolicy replaces the target's fresh-install policy seed
+// with the backup's policy. A v15+ backup restores its saved policy row; a
+// pre-v15 backup predates policy entirely, so the historical behavior (open
+// registration) is restored. The decision is driven by the durable backup
+// SchemaVersion, never by row counts.
+func restoreRegistrationPolicy(ctx context.Context, tx store.Transaction, dialect store.Dialect, bundle PortableBundle) error {
+	now := time.Now().UTC().Format(time.RFC3339Nano)
+	if _, err := tx.ExecContext(ctx, "DELETE FROM _trestle_app_registration_policy"); err != nil {
+		return err
+	}
+	if bundle.SchemaVersion >= 15 {
+		if len(bundle.System.RegistrationPolicy) == 0 {
+			// Defensive: a v15+ archive should carry its policy row.
+			if _, err := tx.ExecContext(ctx, "INSERT INTO _trestle_app_registration_policy(id,policy,set_at) VALUES(1,'open',?)", now); err != nil {
+				return err
+			}
+			return nil
+		}
+		return insertRows(ctx, tx, dialect, "_trestle_app_registration_policy", bundle.System.RegistrationPolicy)
+	}
+	// Pre-v15 archive: the pre-policy era had open registration.
+	if _, err := tx.ExecContext(ctx, "INSERT INTO _trestle_app_registration_policy(id,policy,set_at) VALUES(1,'open',?)", now); err != nil {
+		return err
+	}
+	return nil
 }
 
 func importCollection(ctx context.Context, tx store.Transaction, dialect store.Dialect, pc PortableCollection) error {
@@ -553,6 +591,14 @@ func applyRestorePolicy(ctx context.Context, tx store.Transaction, dialect store
 	if _, err := tx.ExecContext(ctx, "DELETE FROM _trestle_app_access"); err != nil {
 		return err
 	}
+	// Outstanding invitations are invalidated on restore: only invitations that
+	// are currently unused, not revoked and not expired receive the revocation
+	// timestamp. Used invitations stay used, previously revoked invitations
+	// retain their original revocation time, and expired invitations remain
+	// expired rather than being reclassified as revoked.
+	if _, err := tx.ExecContext(ctx, "UPDATE _trestle_app_invitations SET revoked_at=? WHERE used_at IS NULL AND revoked_at IS NULL AND expires_at > ?", now, now); err != nil {
+		return err
+	}
 	return nil
 }
 
@@ -566,7 +612,7 @@ var portableTables = []string{
 	"_trestle_app_sessions", "_trestle_app_access", "_trestle_credentials",
 	"_trestle_collection_rules", "_trestle_events", "_trestle_audit",
 	"_trestle_jobs", "_trestle_webhooks", "_trestle_functions", "_trestle_files",
-	"_trestle_file_deletions",
+	"_trestle_file_deletions", "_trestle_app_invitations", "_trestle_app_access_requests",
 }
 
 // ValidateEmptyDestination requires every portable-owned table to be empty and

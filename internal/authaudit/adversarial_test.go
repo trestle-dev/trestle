@@ -42,6 +42,9 @@ func buildApp(t *testing.T, provider string) (http.Handler, *store.Store, adminS
 	s := storetest.Open(t, provider)
 	admin := adminauth.New(s.DB(), string(s.Provider()))
 	sess := setupAdmin(t, admin)
+	if _, err := s.DB().Exec("UPDATE _trestle_app_registration_policy SET policy='open' WHERE id=1"); err != nil {
+		t.Fatal(err)
+	}
 	collectionsAPI := collections.New(s.DB(), admin)
 	credentials := identities.New(s.DB(), admin)
 	recordAPI := records.New(s.DB(), admin, credentials)
@@ -267,6 +270,9 @@ func TestSecuritySensitiveBeginAndCommitFailures(t *testing.T) {
 			s := storetest.Open(t, provider)
 			admin := adminauth.New(s.DB(), string(s.Provider()))
 			sess := setupAdmin(t, admin)
+			if _, err := s.DB().Exec("UPDATE _trestle_app_registration_policy SET policy='open' WHERE id=1"); err != nil {
+				t.Fatal(err)
+			}
 
 			beginApp := appauth.New(&failBeginExecutor{Executor: s.DB()}, admin)
 			if w := do(beginApp, sess, "POST", "/admin/v1/app-users/usr_none/disable", nil); w.Code != 500 {
@@ -313,6 +319,9 @@ func TestAuthAdversarialIdentity(t *testing.T) {
 			s := storetest.Open(t, provider)
 			admin := adminauth.New(s.DB(), string(s.Provider()))
 			sess := setupAdmin(t, admin)
+			if _, err := s.DB().Exec("UPDATE _trestle_app_registration_policy SET policy='open' WHERE id=1"); err != nil {
+				t.Fatal(err)
+			}
 			appUser := appauth.New(s.DB(), admin)
 
 			if w := do(appUser, sess, "POST", "/api/v1/auth/register", map[string]any{"email": "u@example.com", "password": "1234567"}); w.Code != 201 {
@@ -373,6 +382,9 @@ func TestRateLimiterThrottlesAbuse(t *testing.T) {
 			s := storetest.Open(t, provider)
 			admin := adminauth.New(s.DB(), string(s.Provider()))
 			sess := setupAdmin(t, admin)
+			if _, err := s.DB().Exec("UPDATE _trestle_app_registration_policy SET policy='open' WHERE id=1"); err != nil {
+				t.Fatal(err)
+			}
 			appUser := appauth.New(s.DB(), admin)
 			for i := 0; i < 11; i++ {
 				w := do(appUser, sess, "POST", "/api/v1/auth/login", map[string]any{"email": "missing@example.com", "password": "wrong"})
@@ -406,7 +418,7 @@ func issueAdminCookie(t *testing.T, provider string, secure bool) *http.Cookie {
 	if secure {
 		origin = "https://example.test"
 	}
-	r := httptest.NewRequest("POST", origin+"/admin/v1/setup", bytes.NewBufferString(`{"email":"admin@example.com","password":"correct horse battery staple"}`))
+	r := httptest.NewRequest("POST", origin+"/admin/v1/setup", bytes.NewBufferString(`{"email":"admin@example.com","password":"correct horse battery staple","applicationRegistrationPolicy":"closed"}`))
 	r.Host = "example.test"
 	r.Header.Set("Origin", origin)
 	if secure {

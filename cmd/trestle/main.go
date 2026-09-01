@@ -156,6 +156,7 @@ func main() {
 	eventAPI := events.New(database.DB(), admin, credentials)
 	recordAPI.ConfigureEvents(eventAPI)
 	auditAPI := audit.New(database.DB(), admin, string(database.Provider()))
+	applicationAuth.SetAudit(auditAPI)
 	jobAPI := jobs.New(database.DB(), admin)
 	webhookAPI, err := webhooks.New(database.DB(), admin, jobAPI, cfg.DataDir)
 	if err != nil {
@@ -200,6 +201,8 @@ func main() {
 	adminRoutes.Handle("/admin/v1/data/", recordAPI)
 	adminRoutes.Handle("/admin/v1/app-users", applicationAuth)
 	adminRoutes.Handle("/admin/v1/app-users/", applicationAuth)
+	adminRoutes.Handle("/admin/v1/app-registration", applicationAuth)
+	adminRoutes.Handle("/admin/v1/app-registration/", applicationAuth)
 	adminRoutes.Handle("/admin/v1/credentials", credentials)
 	adminRoutes.Handle("/admin/v1/credentials/", credentials)
 	adminRoutes.Handle("/admin/v1/collection-rules/", accessRules)

@@ -65,6 +65,9 @@ func TestLoginAndRefreshAreAtomicUnderInjectedFailure(t *testing.T) {
 	for _, provider := range storetest.Providers(t) {
 		t.Run(provider, func(t *testing.T) {
 			s := storetest.Open(t, provider)
+			if _, err := s.DB().Exec("UPDATE _trestle_app_registration_policy SET policy='open' WHERE id=1"); err != nil {
+				t.Fatal(err)
+			}
 			admin := adminauth.New(s.DB(), string(s.Provider()))
 			normal := New(s.DB(), admin)
 

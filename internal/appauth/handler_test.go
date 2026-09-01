@@ -16,7 +16,13 @@ import (
 func setup(t *testing.T, provider string) *Handler {
 	t.Helper()
 	s := storetest.Open(t, provider)
-	return New(s.DB(), adminauth.New(s.DB(), string(s.Provider())))
+	h := New(s.DB(), adminauth.New(s.DB(), string(s.Provider())))
+	// The default registration policy for a fresh database is closed; most
+	// registration tests exercise the open-registration path, so set it open.
+	if _, err := s.DB().Exec("UPDATE _trestle_app_registration_policy SET policy='open' WHERE id=1"); err != nil {
+		t.Fatal(err)
+	}
+	return h
 }
 func call(t *testing.T, h http.Handler, path string, body any) *httptest.ResponseRecorder {
 	t.Helper()

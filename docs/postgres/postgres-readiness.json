@@ -5,15 +5,22 @@
   "campaign": "public-preview",
   "provider": "postgres",
   "status": "implemented",
-  "currentSchemaVersion": 14,
+  "currentSchemaVersion": 15,
   "driver": "github.com/lib/pq",
-  "supportedServerVersions": [16, 17, 18],
+  "supportedServerVersions": [
+    16,
+    17,
+    18
+  ],
   "configurationInputs": {
     "provider": {
       "flag": "--database-provider",
       "env": "TRESTLE_DATABASE_PROVIDER",
       "default": "sqlite",
-      "values": ["sqlite", "postgres"]
+      "values": [
+        "sqlite",
+        "postgres"
+      ]
     },
     "url": {
       "flag": "--database-url",
@@ -85,7 +92,11 @@
     "externalEffects": "remote side effects such as webhook or Lambda deliveries are deliberately non-atomic and documented"
   },
   "pooling": {
-    "defaults": { "maxOpen": 10, "maxIdle": 2, "connMaxLifetime": "30m" },
+    "defaults": {
+      "maxOpen": 10,
+      "maxIdle": 2,
+      "connMaxLifetime": "30m"
+    },
     "bounds": "maxOpen 1..500, maxIdle 0..maxOpen",
     "sqlite": "single owned connection; not affected by PostgreSQL pool settings",
     "topology": "single Trestle process per instance"

@@ -1,14 +1,15 @@
 package appauth
 
 import (
+	"context"
 	"crypto/rand"
 	"crypto/sha256"
 	"crypto/subtle"
 	"database/sql"
 	"encoding/base64"
 	"encoding/json"
+	"errors"
 	"fmt"
-	"github.com/trestle-dev/trestle/internal/requestmeta"
 	"net/http"
 	"net/mail"
 	"strings"
@@ -16,7 +17,10 @@ import (
 	"time"
 
 	"github.com/trestle-dev/trestle/internal/adminauth"
+	"github.com/trestle-dev/trestle/internal/appreg"
+	"github.com/trestle-dev/trestle/internal/audit"
 	"github.com/trestle-dev/trestle/internal/httperr"
+	"github.com/trestle-dev/trestle/internal/requestmeta"
 	"github.com/trestle-dev/trestle/internal/store"
 	"golang.org/x/crypto/argon2"
 )
@@ -24,8 +28,11 @@ import (
 type Handler struct {
 	db      store.Executor
 	admin   *adminauth.Handler
+	reg     *appreg.Service
 	now     func() time.Time
 	limiter *limiter
+	invLim  *limiter
+	reqLim  *limiter
 }
 type credentials struct{ Email, Password string }
 type refreshInput struct {
@@ -33,13 +40,22 @@ type refreshInput struct {
 }
 
 func New(db any, admin *adminauth.Handler) *Handler {
-	return &Handler{db: store.Adapt(db), admin: admin, now: time.Now, limiter: newLimiter(10, time.Minute)}
+	exec := store.Adapt(db)
+	return &Handler{db: exec, admin: admin, reg: appreg.New(exec, nil), now: time.Now, limiter: newLimiter(10, time.Minute), invLim: newLimiter(10, time.Minute), reqLim: newLimiter(5, time.Minute)}
 }
+
+func (h *Handler) SetAudit(audit *audit.Handler) { h.reg = appreg.New(h.db, audit) }
 
 func (h *Handler) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 	switch {
+	case r.Method == http.MethodGet && r.URL.Path == "/api/v1/auth/capability":
+		h.capability(w, r)
 	case r.Method == http.MethodPost && r.URL.Path == "/api/v1/auth/register":
 		h.register(w, r)
+	case r.Method == http.MethodPost && r.URL.Path == "/api/v1/auth/invite/accept":
+		h.inviteAccept(w, r)
+	case r.Method == http.MethodPost && r.URL.Path == "/api/v1/auth/access-request":
+		h.accessRequest(w, r)
 	case r.Method == http.MethodPost && r.URL.Path == "/api/v1/auth/login":
 		h.login(w, r)
 	case r.Method == http.MethodPost && r.URL.Path == "/api/v1/auth/refresh":
@@ -52,7 +68,20 @@ func (h *Handler) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 		http.NotFound(w, r)
 	}
 }
+func (h *Handler) capability(w http.ResponseWriter, r *http.Request) {
+	policy, err := h.reg.CurrentPolicy(r.Context())
+	if err != nil {
+		writeError(w, 500, "internal_error", "The request could not be completed.")
+		return
+	}
+	writeJSON(w, 200, map[string]any{"registration": map[string]any{"flow": appreg.FlowForPolicy(policy.Name), "emailDelivery": "manual"}})
+}
 func (h *Handler) register(w http.ResponseWriter, r *http.Request) {
+	key := clientKey(r)
+	if !h.limiter.Allow(key, h.now()) {
+		writeError(w, 429, "rate_limited", "Too many attempts. Try again later.")
+		return
+	}
 	var in credentials
 	if !decode(w, r, &in) {
 		return
@@ -62,19 +91,165 @@ func (h *Handler) register(w http.ResponseWriter, r *http.Request) {
 		writeError(w, 422, "validation_failed", "The request could not be applied.")
 		return
 	}
+	// Validate and hash the password BEFORE acquiring any lock.
 	hash, err := hashPassword(in.Password)
 	if err != nil {
 		writeError(w, 422, "validation_failed", err.Error())
 		return
 	}
-	id := "usr_" + token(18)
-	now := h.now().UTC().Format(time.RFC3339Nano)
-	if _, err = h.db.ExecContext(r.Context(), "INSERT INTO _trestle_app_users(id,email,password_hash,created_at) VALUES(?,?,?,?)", id, email, hash, now); err != nil {
-		writeError(w, 409, "registration_unavailable", "The account could not be created.")
+	// Serialize registration against concurrent policy changes on the
+	// singleton policy row. The policy is read under the lock so a concurrent
+	// policy change that wins the lock makes a later registration fail.
+	var newID string
+	err = store.WithSerializedLock(r.Context(), h.db, func(tx store.Transaction) error {
+		policy, perr := h.policyForTx(r.Context(), tx)
+		if perr != nil {
+			return perr
+		}
+		if policy != appreg.PolicyOpen {
+			return fmt.Errorf("policy_%s", policy)
+		}
+		createdID := "usr_" + token(18)
+		now := h.now().UTC().Format(time.RFC3339Nano)
+		if _, ierr := tx.ExecContext(r.Context(), "INSERT INTO _trestle_app_users(id,email,password_hash,created_at) VALUES(?,?,?,?)", createdID, email, hash, now); ierr != nil {
+			return errors.New("insert_user")
+		}
+		newID = createdID
+		return nil
+	})
+	if err != nil {
+		msg := err.Error()
+		switch {
+		case strings.HasPrefix(msg, "policy_"):
+			writeError(w, 403, msg, "The request could not be applied.")
+		case errors.Is(err, store.ErrLockExhausted):
+			writeError(w, 503, "registration_temporarily_unavailable", "The request could not be completed.")
+		default:
+			writeError(w, 409, "registration_unavailable", "The account could not be created.")
+		}
 		return
 	}
-	writeJSON(w, 201, map[string]any{"id": id, "email": email, "verificationRequired": true})
+	writeJSON(w, 201, map[string]any{"id": newID, "email": email, "verificationRequired": true})
 }
+
+// policyForTx reads the singleton policy row on the caller's transaction, after
+// the caller has acquired the serialization lock (for PostgreSQL this is the
+// SELECT ... FOR UPDATE that must precede this read; callers are expected to
+// lock first). This guarantees the read observes the locked policy state.
+func (h *Handler) policyForTx(ctx context.Context, tx store.Transaction) (string, error) {
+	var policy string
+	if err := tx.QueryRowContext(ctx, "SELECT policy FROM _trestle_app_registration_policy WHERE id=1").Scan(&policy); err != nil {
+		return "", err
+	}
+	return policy, nil
+}
+
+type inviteAcceptInput struct {
+	Token    string `json:"token"`
+	Password string `json:"password"`
+}
+
+// inviteAccept consumes an email-bound invitation atomically and creates the
+// application user with the password. The password is validated and hashed
+// before the serialized transaction (for self_register) so no long-lived lock
+// is held during Argon2id. self_register requires the current policy to be
+// invite; activate is honored under every policy. Single-use token serialization
+// is mandatory.
+func (h *Handler) inviteAccept(w http.ResponseWriter, r *http.Request) {
+	if !h.invLim.Allow(clientKey(r), h.now()) {
+		writeError(w, 429, "rate_limited", "Too many attempts. Try again later.")
+		return
+	}
+	var in inviteAcceptInput
+	if !decode(w, r, &in) {
+		return
+	}
+	hash, err := hashPassword(in.Password)
+	if err != nil {
+		writeError(w, 422, "validation_failed", err.Error())
+		return
+	}
+	tokenHash := sha256.Sum256([]byte(in.Token))
+	var acceptedEmail, acceptedID string
+	err = store.WithSerializedLock(r.Context(), h.db, func(tx store.Transaction) error {
+		// Atomic single-use claim: obtain invitation data only when it is
+		// unused, not revoked and not expired. On PostgreSQL the serialized
+		// transaction plus this read contend on the token row; on SQLite the
+		// BEGIN IMMEDIATE write lock serializes consumers.
+		var id, kind, boundEmail, userID string
+		var expires string
+		var used, revoked sql.NullString
+		row := tx.QueryRowContext(r.Context(), `SELECT id,kind,email,expires_at,used_at,revoked_at,user_id FROM _trestle_app_invitations WHERE token_hash=?`, tokenHash[:])
+		if err := row.Scan(&id, &kind, &boundEmail, &expires, &used, &revoked, &userID); err != nil {
+			return errors.New("invalid_invitation")
+		}
+		expiry, perr := time.Parse(time.RFC3339Nano, expires)
+		if perr != nil || used.Valid || revoked.Valid || !expiry.After(h.now()) || userID != "" {
+			return errors.New("invalid_invitation")
+		}
+		if kind == "self_register" {
+			var policy string
+			if err := tx.QueryRowContext(r.Context(), "SELECT policy FROM _trestle_app_registration_policy WHERE id=1").Scan(&policy); err != nil {
+				return err
+			}
+			if policy != appreg.PolicyInvite {
+				return errors.New("invalid_invitation")
+			}
+		}
+		newID := "usr_" + token(18)
+		now := h.now().UTC().Format(time.RFC3339Nano)
+		if _, ierr := tx.ExecContext(r.Context(), "INSERT INTO _trestle_app_users(id,email,password_hash,created_at) VALUES(?,?,?,?)", newID, boundEmail, hash, now); ierr != nil {
+			return errors.New("invalid_invitation") // email conflict
+		}
+		if _, ierr := tx.ExecContext(r.Context(), "UPDATE _trestle_app_invitations SET used_at=?,user_id=? WHERE id=? AND used_at IS NULL AND revoked_at IS NULL", now, newID, id); ierr != nil {
+			return ierr
+		}
+		if _, ierr := tx.ExecContext(r.Context(), "UPDATE _trestle_app_invitations SET revoked_at=? WHERE email=? AND kind=? AND used_at IS NULL AND revoked_at IS NULL AND id<>?", now, boundEmail, "activate", id); ierr != nil {
+			return ierr
+		}
+		acceptedEmail = boundEmail
+		acceptedID = newID
+		return nil
+	})
+	if err != nil {
+		if errors.Is(err, store.ErrLockExhausted) {
+			writeError(w, 503, "registration_temporarily_unavailable", "The request could not be completed.")
+			return
+		}
+		writeError(w, 400, "invalid_invitation", "The invitation is invalid.")
+		return
+	}
+	writeJSON(w, 201, map[string]any{"id": acceptedID, "email": acceptedEmail})
+}
+
+type accessRequestInput struct {
+	Email string `json:"email"`
+}
+
+// accessRequest records a bounded pending access request under the approval
+// policy. It always presents the same generic outcome to the caller.
+func (h *Handler) accessRequest(w http.ResponseWriter, r *http.Request) {
+	if !h.reqLim.Allow(clientKey(r), h.now()) {
+		writeError(w, 429, "rate_limited", "Too many attempts. Try again later.")
+		return
+	}
+	var in accessRequestInput
+	if !decode(w, r, &in) {
+		return
+	}
+	policy, err := h.reg.CurrentPolicy(r.Context())
+	if err != nil {
+		writeError(w, 500, "internal_error", "The request could not be completed.")
+		return
+	}
+	if policy.Name != appreg.PolicyApproval {
+		writeError(w, 403, "registration_approval_required", "Registration by approval is not available.")
+		return
+	}
+	_ = h.reg.SubmitAccessRequest(r.Context(), in.Email) // generic outcome regardless
+	writeJSON(w, 202, map[string]any{"status": "requested"})
+}
+
 func (h *Handler) login(w http.ResponseWriter, r *http.Request) {
 	if !sameOrigin(r) {
 		writeError(w, 403, "origin_denied", "The request origin is not allowed.")
@@ -234,6 +409,125 @@ func (h *Handler) adminRoutes(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	parts := strings.Split(strings.Trim(r.URL.Path, "/"), "/")
+	if r.URL.Path == "/admin/v1/app-registration" && r.Method == http.MethodGet {
+		policy, err := h.reg.CurrentPolicy(r.Context())
+		if err != nil {
+			writeError(w, 500, "internal_error", "The request could not be completed.")
+			return
+		}
+		invitations, _ := h.reg.ListInvitations(r.Context())
+		requests, _ := h.reg.ListAccessRequests(r.Context())
+		pending := 0
+		for _, req := range requests {
+			if req.Status == "pending" {
+				pending++
+			}
+		}
+		writeJSON(w, 200, map[string]any{"policy": policy.Name, "setAt": policy.SetAt, "invitationsOpen": countOpen(invitations), "requestsPending": pending})
+		return
+	}
+	if r.URL.Path == "/admin/v1/app-registration/policy" && r.Method == http.MethodPut {
+		principal, _ := h.admin.Authorize(r, true)
+		var in struct {
+			Policy      string `json:"policy"`
+			ConfirmOpen bool   `json:"confirmOpen"`
+		}
+		if !decode(w, r, &in) {
+			return
+		}
+		policy, err := h.reg.SetPolicy(r.Context(), principal.AdminID, in.Policy, in.ConfirmOpen)
+		if err != nil {
+			writeError(w, 400, err.Error(), "The request could not be applied.")
+			return
+		}
+		writeJSON(w, 200, map[string]any{"policy": policy.Name, "setAt": policy.SetAt})
+		return
+	}
+	if r.URL.Path == "/admin/v1/app-registration/invitations" && r.Method == http.MethodPost {
+		principal, _ := h.admin.Authorize(r, true)
+		var in struct {
+			Kind    string `json:"kind"`
+			Email   string `json:"email"`
+			Request string `json:"requestId"`
+		}
+		if !decode(w, r, &in) {
+			return
+		}
+		inv, err := h.reg.CreateInvitation(r.Context(), principal.AdminID, in.Kind, in.Email, in.Request)
+		if err != nil {
+			code := err.Error()
+			status := 400
+			if code == "user_already_exists" {
+				status = 409
+			}
+			writeError(w, status, code, "The request could not be applied.")
+			return
+		}
+		writeJSON(w, 201, inv)
+		return
+	}
+	if r.URL.Path == "/admin/v1/app-registration/invitations" && r.Method == http.MethodGet {
+		invitations, err := h.reg.ListInvitations(r.Context())
+		if err != nil {
+			writeError(w, 500, "internal_error", "The request could not be completed.")
+			return
+		}
+		writeJSON(w, 200, map[string]any{"items": invitations})
+		return
+	}
+	if r.URL.Path == "/admin/v1/app-registration/requests" && r.Method == http.MethodGet {
+		requests, err := h.reg.ListAccessRequests(r.Context())
+		if err != nil {
+			writeError(w, 500, "internal_error", "The request could not be completed.")
+			return
+		}
+		writeJSON(w, 200, map[string]any{"items": requests})
+		return
+	}
+	if len(parts) == 6 && parts[2] == "app-registration" {
+		switch {
+		case parts[3] == "invitations" && parts[5] == "revoke" && r.Method == http.MethodPost:
+			principal, _ := h.admin.Authorize(r, true)
+			if err := h.reg.RevokeInvitation(r.Context(), principal.AdminID, parts[4]); err != nil {
+				writeError(w, 500, "internal_error", "The request could not be completed.")
+				return
+			}
+			w.WriteHeader(204)
+			return
+		case parts[3] == "requests" && parts[5] == "approve" && r.Method == http.MethodPost:
+			principal, _ := h.admin.Authorize(r, true)
+			inv, err := h.reg.ApproveRequest(r.Context(), principal.AdminID, parts[4])
+			if err != nil {
+				writeError(w, 409, "already_decided", "The request has already been decided.")
+				return
+			}
+			writeJSON(w, 201, inv)
+			return
+		case parts[3] == "requests" && parts[5] == "reject" && r.Method == http.MethodPost:
+			principal, _ := h.admin.Authorize(r, true)
+			if err := h.reg.RejectRequest(r.Context(), principal.AdminID, parts[4]); err != nil {
+				writeError(w, 409, "already_decided", "The request has already been decided.")
+				return
+			}
+			w.WriteHeader(204)
+			return
+		case parts[3] == "requests" && parts[5] == "reissue" && r.Method == http.MethodPost:
+			principal, _ := h.admin.Authorize(r, true)
+			var in struct {
+				Email string `json:"email"`
+			}
+			if !decode(w, r, &in) {
+				return
+			}
+			inv, err := h.reg.ReissueInvitation(r.Context(), principal.AdminID, parts[4], in.Email)
+			if err != nil {
+				writeError(w, 400, err.Error(), "The request could not be applied.")
+				return
+			}
+			writeJSON(w, 201, inv)
+			return
+		}
+	}
 	if len(parts) == 5 && r.Method == http.MethodPost && parts[4] == "disable" {
 		now := h.now().UTC().Format(time.RFC3339Nano)
 		tx, err := h.db.BeginTx(r.Context(), nil)
@@ -352,3 +646,13 @@ func (l *limiter) Allow(key string, now time.Time) bool {
 	return true
 }
 func (l *limiter) Clear(key string) { l.mu.Lock(); delete(l.attempts, key); l.mu.Unlock() }
+
+func countOpen(invitations []appreg.Invitation) int {
+	n := 0
+	for _, it := range invitations {
+		if it.UsedAt == nil && it.RevokedAt == nil {
+			n++
+		}
+	}
+	return n
+}

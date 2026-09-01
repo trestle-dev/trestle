@@ -257,6 +257,7 @@ func canonicalSystem(s PortableSystem) map[string][]map[string]any {
 		"collectionRules": s.CollectionRules, "events": s.Events, "audit": s.Audit,
 		"jobs": s.Jobs, "functions": s.Functions, "files": s.Files, "systemMeta": s.SystemMeta,
 		"webhooks": s.Webhooks, "adminSessions": s.AdminSessions, "appSessions": s.AppSessions,
+		"registrationPolicy": s.RegistrationPolicy, "invitations": s.Invitations, "accessRequests": s.AccessRequests,
 	} {
 		cleaned := make([]map[string]any, 0, len(rows))
 		for _, row := range rows {

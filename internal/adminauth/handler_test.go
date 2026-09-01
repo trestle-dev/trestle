@@ -18,7 +18,7 @@ import (
 func TestSetupGuardBlocksAdministratorCreationUntilDatabaseRestart(t *testing.T) {
 	h := testHandler(t, "sqlite")
 	h.SetSetupGuard(func(context.Context) error { return errors.New("restart required") })
-	r := httptest.NewRequest(http.MethodPost, "/admin/v1/setup", strings.NewReader(`{"email":"admin@example.com","password":"mudblood"}`))
+	r := httptest.NewRequest(http.MethodPost, "/admin/v1/setup", strings.NewReader(`{"email":"admin@example.com","password":"mudblood","applicationRegistrationPolicy":"closed"}`))
 	r.Host = "example.test"
 	r.Header.Set("Origin", "http://example.test")
 	w := httptest.NewRecorder()
@@ -38,7 +38,7 @@ func TestTrustedHTTPSIssuesSecureCookie(t *testing.T) {
 	for _, provider := range storetest.Providers(t) {
 		t.Run(provider, func(t *testing.T) {
 			h := testHandler(t, provider)
-			r := httptest.NewRequest(http.MethodPost, "/admin/v1/setup", strings.NewReader(`{"email":"admin@example.com","password":"mudblood"}`))
+			r := httptest.NewRequest(http.MethodPost, "/admin/v1/setup", strings.NewReader(`{"email":"admin@example.com","password":"mudblood","applicationRegistrationPolicy":"closed"}`))
 			r.Host = "example.test"
 			r.Header.Set("Origin", "https://example.test")
 			r = requestmeta.With(r, "https", "203.0.113.9")
@@ -96,7 +96,7 @@ func TestSetupLoginLogoutLifecycle(t *testing.T) {
 			if !strings.Contains(w.Body.String(), "true") {
 				t.Fatal(w.Body.String())
 			}
-			w = request(t, h, "POST", "/admin/v1/setup", credentials{Email: "Admin@Example.com", Password: "correct horse battery staple"}, nil, "")
+			w = request(t, h, "POST", "/admin/v1/setup", credentials{Email: "Admin@Example.com", Password: "correct horse battery staple", ApplicationRegistrationPolicy: "closed"}, nil, "")
 			if w.Code != 200 {
 				t.Fatalf("setup: %d %s", w.Code, w.Body.String())
 			}
@@ -105,7 +105,7 @@ func TestSetupLoginLogoutLifecycle(t *testing.T) {
 			if err := json.NewDecoder(w.Body).Decode(&session); err != nil {
 				t.Fatal(err)
 			}
-			w = request(t, h, "POST", "/admin/v1/setup", credentials{Email: "other@example.com", Password: "correct horse battery staple"}, nil, "")
+			w = request(t, h, "POST", "/admin/v1/setup", credentials{Email: "other@example.com", Password: "correct horse battery staple", ApplicationRegistrationPolicy: "closed"}, nil, "")
 			if w.Code != 409 {
 				t.Fatalf("second setup: %d", w.Code)
 			}
@@ -143,7 +143,7 @@ func TestCompetingSetupCreatesOneAdministrator(t *testing.T) {
 			for i := 0; i < 8; i++ {
 				go func(n int) {
 					<-start
-					codes <- rawRequest(h, "POST", "/admin/v1/setup", credentials{Email: fmt.Sprintf("admin%d@example.com", n), Password: "correct horse battery staple"})
+					codes <- rawRequest(h, "POST", "/admin/v1/setup", credentials{Email: fmt.Sprintf("admin%d@example.com", n), Password: "correct horse battery staple", ApplicationRegistrationPolicy: "closed"})
 				}(i)
 			}
 			close(start)
@@ -171,11 +171,11 @@ func TestSetupValidationAndOrigin(t *testing.T) {
 	for _, provider := range storetest.Providers(t) {
 		t.Run(provider, func(t *testing.T) {
 			h := testHandler(t, provider)
-			w := request(t, h, "POST", "/admin/v1/setup", credentials{Email: "bad", Password: "short"}, nil, "")
+			w := request(t, h, "POST", "/admin/v1/setup", credentials{Email: "bad", Password: "short", ApplicationRegistrationPolicy: "closed"}, nil, "")
 			if w.Code != 422 {
 				t.Fatalf("got %d", w.Code)
 			}
-			r := httptest.NewRequest("POST", "/admin/v1/setup", strings.NewReader(`{"email":"a@example.com","password":"correct horse battery staple"}`))
+			r := httptest.NewRequest("POST", "/admin/v1/setup", strings.NewReader(`{"email":"a@example.com","password":"correct horse battery staple","applicationRegistrationPolicy":"closed"}`))
 			r.Host = "example.test"
 			r.Header.Set("Origin", "https://evil.test")
 			w = httptest.NewRecorder()

@@ -27,7 +27,7 @@ func setupSecurityFixture(t *testing.T, provider string) securityFixture {
 	t.Helper()
 	database := storetest.Open(t, provider)
 	admin := adminauth.New(database.DB(), string(database.Provider()))
-	setup := invoke(t, admin, session{}, http.MethodPost, "/admin/v1/setup", map[string]any{"email": "admin@example.test", "password": "mudblood"}, nil)
+	setup := invoke(t, admin, session{}, http.MethodPost, "/admin/v1/setup", map[string]any{"email": "admin@example.test", "password": "mudblood", "applicationRegistrationPolicy": "closed"}, nil)
 	var setupBody struct {
 		CSRF string `json:"csrfToken"`
 	}
@@ -39,6 +39,9 @@ func setupSecurityFixture(t *testing.T, provider string) securityFixture {
 		t.Fatalf("collection: %d %s", created.Code, created.Body.String())
 	}
 	users := appauth.New(database.DB(), admin)
+	if _, err := database.DB().Exec("UPDATE _trestle_app_registration_policy SET policy='open' WHERE id=1"); err != nil {
+		t.Fatal(err)
+	}
 	credentials := identities.New(database.DB(), admin)
 	ruleHandler := rules.New(database.DB(), admin)
 	recordHandler := New(database.DB(), admin, credentials)

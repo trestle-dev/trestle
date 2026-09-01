@@ -7,6 +7,7 @@ import (
 	"net/http/httptest"
 	"sync"
 	"testing"
+	"time"
 
 	"github.com/trestle-dev/trestle/internal/storetest"
 )
@@ -29,6 +30,9 @@ func TestRevocationDuringInFlightRequests(t *testing.T) {
 	for _, provider := range storetest.Providers(t) {
 		t.Run(provider, func(t *testing.T) {
 			h := setup(t, provider)
+			// The register rate limit (10/min) would reject the many sequential
+			// registrations this concurrency test performs, so raise it.
+			h.limiter = newLimiter(1000, time.Minute)
 			const iterations = 20
 			const inflight = 8
 			for iter := 0; iter < iterations; iter++ {

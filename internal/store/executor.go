@@ -216,3 +216,17 @@ func NewDialect(provider Provider) Dialect {
 	}
 	return sqliteDialect{}
 }
+
+// WithTx runs fn inside a normal writable transaction and commits on success,
+// rolling back on error.
+func WithTx(ctx context.Context, e Executor, fn func(tx Transaction) error) error {
+	tx, err := e.BeginTx(ctx, nil)
+	if err != nil {
+		return err
+	}
+	defer tx.Rollback()
+	if err := fn(tx); err != nil {
+		return err
+	}
+	return tx.Commit()
+}

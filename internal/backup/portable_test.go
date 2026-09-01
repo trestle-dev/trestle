@@ -21,7 +21,7 @@ import (
 
 func adminCookieCSRF(t *testing.T, admin *adminauth.Handler) (*httptest.ResponseRecorder, string) {
 	t.Helper()
-	body := strings.NewReader(`{"email":"admin@example.com","password":"1234567"}`)
+	body := strings.NewReader(`{"email":"admin@example.com","password":"1234567","applicationRegistrationPolicy":"closed"}`)
 	r := httptest.NewRequest("POST", "http://example.test/admin/v1/setup", body)
 	r.Host = "example.test"
 	r.Header.Set("Origin", "http://example.test")

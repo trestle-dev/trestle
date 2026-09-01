@@ -15,16 +15,17 @@ import (
 	_ "modernc.org/sqlite"
 )
 
-const CurrentVersion = 14
+const CurrentVersion = 15
 
 type Store struct {
-	db            *sql.DB
-	path          string
-	provider      Provider
-	dialect       Dialect
-	executor      Executor
-	schemaVersion int
-	initConn      *sql.Conn
+	db                    *sql.DB
+	path                  string
+	provider              Provider
+	dialect               Dialect
+	executor              Executor
+	schemaVersion         int
+	startingSchemaVersion int
+	initConn              *sql.Conn
 }
 
 // queryer, dbWorker and txBeginner abstract the shared *sql.DB and *sql.Conn
@@ -299,6 +300,35 @@ CREATE TABLE _trestle_file_deletions (
  finalized_at TEXT
 ) STRICT;
 ALTER TABLE _trestle_files ADD COLUMN deleted_at TEXT;
+`}, {15, "application registration policy", `
+CREATE TABLE _trestle_app_registration_policy (
+  id INTEGER PRIMARY KEY CHECK(id = 1),
+  policy TEXT NOT NULL CHECK(policy IN ('open','invite','approval','closed')),
+  set_at TEXT NOT NULL
+) STRICT;
+CREATE TABLE _trestle_app_invitations (
+  id TEXT PRIMARY KEY,
+  kind TEXT NOT NULL CHECK(kind IN ('self_register','activate')),
+  email TEXT NOT NULL,
+  token_hash BLOB NOT NULL UNIQUE,
+  created_at TEXT NOT NULL,
+  expires_at TEXT NOT NULL,
+  used_at TEXT,
+  revoked_at TEXT,
+  created_by_admin_id TEXT,
+  user_id TEXT,
+  access_request_id TEXT
+) STRICT;
+CREATE INDEX _trestle_app_invitations_email ON _trestle_app_invitations(email);
+CREATE TABLE _trestle_app_access_requests (
+  id TEXT PRIMARY KEY,
+  email TEXT NOT NULL,
+  status TEXT NOT NULL CHECK(status IN ('pending','approved','rejected','expired')),
+  created_at TEXT NOT NULL,
+  decided_at TEXT,
+  decided_by_admin_id TEXT
+) STRICT;
+CREATE UNIQUE INDEX _trestle_app_access_requests_pending_email ON _trestle_app_access_requests(email) WHERE status = 'pending';
 `}}
 
 func Open(ctx context.Context, dataDir string) (*Store, error) {
@@ -369,6 +399,7 @@ func (s *Store) initialize(ctx context.Context) error {
 	if err != nil {
 		return err
 	}
+	s.startingSchemaVersion = version
 	for _, m := range migrations {
 		if m.version > version {
 			if err := s.apply(ctx, m); err != nil {
@@ -400,6 +431,7 @@ func (s *Store) initializePostgres(ctx context.Context) error {
 		return err
 	}
 	s.schemaVersion = history.version
+	s.startingSchemaVersion = history.version
 	for _, m := range migrations {
 		if m.version > history.version {
 			if err := s.apply(ctx, m); err != nil {
@@ -544,7 +576,13 @@ func (s *Store) apply(ctx context.Context, m migration) error {
 	if _, err := tx.ExecContext(ctx, sqlText); err != nil {
 		return fmt.Errorf("apply migration %d (%s): %w", m.version, m.name, err)
 	}
-	if _, err := NewExecutorTx(tx, s.dialect).ExecContext(ctx, "INSERT INTO _trestle_schema_migrations(version,name,applied_at) VALUES(?,?,?)", m.version, m.name, time.Now().UTC().Format(time.RFC3339Nano)); err != nil {
+	exec := NewExecutorTx(tx, s.dialect)
+	if m.version == registrationMigrationVersion {
+		if err := seedRegistrationPolicy(ctx, exec, s.startingSchemaVersion, time.Now().UTC().Format(time.RFC3339Nano)); err != nil {
+			return fmt.Errorf("seed application registration policy: %w", err)
+		}
+	}
+	if _, err := exec.ExecContext(ctx, "INSERT INTO _trestle_schema_migrations(version,name,applied_at) VALUES(?,?,?)", m.version, m.name, time.Now().UTC().Format(time.RFC3339Nano)); err != nil {
 		return fmt.Errorf("record migration %d: %w", m.version, err)
 	}
 	if s.provider == SQLite {

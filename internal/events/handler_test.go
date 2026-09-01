@@ -108,7 +108,7 @@ func TestAuthorizedEventVisibility(t *testing.T) {
 				CSRF   string
 			}
 			{
-				r := httptest.NewRequest("POST", "http://example.test/admin/v1/setup", strings.NewReader(`{"email":"admin@example.com","password":"1234567"}`))
+				r := httptest.NewRequest("POST", "http://example.test/admin/v1/setup", strings.NewReader(`{"email":"admin@example.com","password":"1234567","applicationRegistrationPolicy":"closed"}`))
 				r.Host = "example.test"
 				r.Header.Set("Origin", "http://example.test")
 				w := httptest.NewRecorder()

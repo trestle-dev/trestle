@@ -28,8 +28,9 @@ type Handler struct {
 	setupGuard func(context.Context) error
 }
 type credentials struct {
-	Email    string `json:"email"`
-	Password string `json:"password"`
+	Email                         string `json:"email"`
+	Password                      string `json:"password"`
+	ApplicationRegistrationPolicy string `json:"applicationRegistrationPolicy"`
 }
 type sessionResponse struct {
 	Authenticated bool   `json:"authenticated"`
@@ -141,6 +142,22 @@ func (h *Handler) setup(w http.ResponseWriter, r *http.Request) {
 	now := h.now().UTC().Format(time.RFC3339Nano)
 	if _, err := tx.ExecContext(r.Context(), "INSERT INTO _trestle_admins(id,email,password_hash,created_at) VALUES(?,?,?,?)", "adm_"+id, email, hash, now); err != nil {
 		writeError(w, 409, "setup_complete", "Initial setup has already been completed.")
+		return
+	}
+	// The initial application registration policy is selected atomically with
+	// the first administrator. A failed admin insert rolls back the policy and
+	// vice versa, so no partially selected policy can exist.
+	policy := input.ApplicationRegistrationPolicy
+	if policy == "" {
+		writeError(w, 422, "registration_policy_required", "Choose an application registration policy.")
+		return
+	}
+	if !validRegistrationPolicy(policy) {
+		writeError(w, 422, "invalid_registration_policy", "The application registration policy is invalid.")
+		return
+	}
+	if _, err := tx.ExecContext(r.Context(), "UPDATE _trestle_app_registration_policy SET policy=?,set_at=? WHERE id=1", policy, now); err != nil {
+		writeError(w, 500, "internal_error", "The request could not be completed.")
 		return
 	}
 	if err := tx.Commit(); err != nil {
@@ -335,3 +352,11 @@ func (l *limiter) Allow(key string, now time.Time) bool {
 	return true
 }
 func (l *limiter) Clear(key string) { l.mu.Lock(); delete(l.attempts, key); l.mu.Unlock() }
+
+func validRegistrationPolicy(policy string) bool {
+	switch policy {
+	case "open", "invite", "approval", "closed":
+		return true
+	}
+	return false
+}

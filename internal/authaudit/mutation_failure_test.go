@@ -69,7 +69,7 @@ type adminSession struct {
 
 func setupAdmin(t *testing.T, admin *adminauth.Handler) adminSession {
 	t.Helper()
-	body := strings.NewReader(`{"email":"admin@example.com","password":"correct horse battery staple"}`)
+	body := strings.NewReader(`{"email":"admin@example.com","password":"correct horse battery staple","applicationRegistrationPolicy":"closed"}`)
 	r := httptest.NewRequest("POST", "http://example.test/admin/v1/setup", body)
 	r.Host = "example.test"
 	r.Header.Set("Origin", "http://example.test")
@@ -116,6 +116,9 @@ func TestSecuritySensitiveMutationsFailClosed(t *testing.T) {
 			s := storetest.Open(t, provider)
 			admin := adminauth.New(s.DB(), string(s.Provider()))
 			sess := setupAdmin(t, admin)
+			if _, err := s.DB().Exec("UPDATE _trestle_app_registration_policy SET policy='open' WHERE id=1"); err != nil {
+				t.Fatal(err)
+			}
 
 			// 1. Admin logout: a failed revocation must return 500 and leave
 			// the session valid.

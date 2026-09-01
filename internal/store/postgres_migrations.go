@@ -41,4 +41,10 @@ CREATE INDEX _trestle_jobs_claim ON _trestle_jobs(status,available_at,id);`,
 	14: `
 CREATE TABLE _trestle_file_deletions (id TEXT PRIMARY KEY, storage_key TEXT NOT NULL, status TEXT NOT NULL CHECK(status IN ('pending','done')), attempts INTEGER NOT NULL DEFAULT 0, created_at TEXT NOT NULL, finalized_at TEXT);
 ALTER TABLE _trestle_files ADD COLUMN deleted_at TEXT;`,
+	15: `
+CREATE TABLE _trestle_app_registration_policy (id INTEGER PRIMARY KEY CHECK(id = 1), policy TEXT NOT NULL CHECK(policy IN ('open','invite','approval','closed')), set_at TEXT NOT NULL);
+CREATE TABLE _trestle_app_invitations (id TEXT PRIMARY KEY, kind TEXT NOT NULL CHECK(kind IN ('self_register','activate')), email TEXT NOT NULL, token_hash BYTEA NOT NULL UNIQUE, created_at TEXT NOT NULL, expires_at TEXT NOT NULL, used_at TEXT, revoked_at TEXT, created_by_admin_id TEXT, user_id TEXT, access_request_id TEXT);
+CREATE INDEX _trestle_app_invitations_email ON _trestle_app_invitations(email);
+CREATE TABLE _trestle_app_access_requests (id TEXT PRIMARY KEY, email TEXT NOT NULL, status TEXT NOT NULL CHECK(status IN ('pending','approved','rejected','expired')), created_at TEXT NOT NULL, decided_at TEXT, decided_by_admin_id TEXT);
+CREATE UNIQUE INDEX _trestle_app_access_requests_pending_email ON _trestle_app_access_requests(email) WHERE status = 'pending';`,
 }
