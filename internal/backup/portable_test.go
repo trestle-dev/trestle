@@ -4,6 +4,8 @@ import (
 	"archive/zip"
 	"bytes"
 	"context"
+	"crypto/sha256"
+	"database/sql"
 	"encoding/json"
 	"net/http/httptest"
 	"os"
@@ -485,4 +487,168 @@ func digestPostgresTables(t *testing.T, url string) string {
 	var admins int
 	db.DB().QueryRow("SELECT count(*) FROM _trestle_admins").Scan(&admins)
 	return strconv.Itoa(admins)
+}
+
+// TestRestoreRegistrationPolicyAndInvitations proves restore semantics for the
+// registration policy and invitations:
+//   - a v15+ archive restores its saved policy, replacing the fresh-install seed;
+//   - a pre-v15 archive (SchemaVersion < 15) restores open (the historical era);
+//   - restore revokes only genuinely outstanding invitations (used and
+//     already-revoked and expired states are preserved);
+//   - no raw token is ever exported.
+func TestRestoreRegistrationPolicyAndInvitations(t *testing.T) {
+	for _, provider := range storetest.Providers(t) {
+		t.Run(provider, func(t *testing.T) {
+			src := storetest.Open(t, provider)
+			// Set policy to invite and seed one used, one revoked, one expired
+			// and one outstanding invitation.
+			if _, err := src.DB().Exec("UPDATE _trestle_app_registration_policy SET policy='invite' WHERE id=1"); err != nil {
+				t.Fatal(err)
+			}
+			now := time.Now().UTC().Format(time.RFC3339Nano)
+			hash := func(v string) []byte { s := sha256.Sum256([]byte(v)); return s[:] }
+			seed := [][4]string{
+				{"inv_used", "activate", "used@example.com", "2026-01-01T00:00:00Z"}, // used_at set below
+				{"inv_revoked", "activate", "revoked@example.com", ""},
+				{"inv_expired", "activate", "expired@example.com", ""},
+				{"inv_open", "activate", "open@example.com", ""},
+			}
+			for _, row := range seed {
+				if _, err := src.DB().Exec("INSERT INTO _trestle_app_invitations(id,kind,email,token_hash,created_at,expires_at,used_at,revoked_at) VALUES(?,?,?,?,?,?,?,?)",
+					row[0], row[1], row[2], hash(row[0]), now, now, nullRow(row[3]), nullRow(row[3])); err != nil {
+					t.Fatal(err)
+				}
+			}
+			// Mark used and revoked explicitly; expired has expires_at in the past.
+			if _, err := src.DB().Exec("UPDATE _trestle_app_invitations SET used_at=? WHERE id='inv_used'", now); err != nil {
+				t.Fatal(err)
+			}
+			if _, err := src.DB().Exec("UPDATE _trestle_app_invitations SET revoked_at=? WHERE id='inv_revoked'", now); err != nil {
+				t.Fatal(err)
+			}
+			if _, err := src.DB().Exec("UPDATE _trestle_app_invitations SET expires_at='2000-01-01T00:00:00Z' WHERE id='inv_expired'"); err != nil {
+				t.Fatal(err)
+			}
+			// inv_open is genuinely outstanding: future expiry, unused, not
+			// revoked, so restore must revoke it.
+			future := time.Now().UTC().Add(24 * time.Hour).Format(time.RFC3339Nano)
+			if _, err := src.DB().Exec("UPDATE _trestle_app_invitations SET expires_at=? WHERE id='inv_open'", future); err != nil {
+				t.Fatal(err)
+			}
+			// Export the source (raw tokens never appear: none are stored).
+			var buf bytes.Buffer
+			if err := Export(context.Background(), src.DB(), src.Dialect(), &buf); err != nil {
+				t.Fatal(err)
+			}
+			raw := buf.String()
+			for _, tok := range []string{"inv_used", "inv_revoked", "inv_expired", "inv_open"} {
+				if strings.Contains(raw, "raw-token-"+tok) {
+					t.Fatalf("raw token for %s exported", tok)
+				}
+			}
+
+			// Import into a fresh target (migrated to 15, seeded closed).
+			dst := storetest.Open(t, provider)
+			if err := Import(context.Background(), dst.DB(), dst.Dialect(), strings.NewReader(raw)); err != nil {
+				t.Fatal(err)
+			}
+			var policy string
+			if err := dst.DB().QueryRow("SELECT policy FROM _trestle_app_registration_policy WHERE id=1").Scan(&policy); err != nil {
+				t.Fatal(err)
+			}
+			if policy != "invite" {
+				t.Fatalf("restored policy %q, want invite", policy)
+			}
+			var status map[string]string
+			status = map[string]string{}
+			rows, err := dst.DB().Query("SELECT id,used_at,revoked_at,expires_at FROM _trestle_app_invitations")
+			if err != nil {
+				t.Fatal(err)
+			}
+			for rows.Next() {
+				var id, used, revoked, expires sql.NullString
+				if err := rows.Scan(&id, &used, &revoked, &expires); err != nil {
+					t.Fatal(err)
+				}
+				_ = expires
+				switch {
+				case used.Valid:
+					status[id.String] = "used"
+				case revoked.Valid:
+					status[id.String] = "revoked"
+				default:
+					status[id.String] = "outstanding-or-expired"
+				}
+			}
+			rows.Close()
+			if status["inv_used"] != "used" {
+				t.Fatalf("used invitation reclassified: %v", status)
+			}
+			if status["inv_revoked"] != "revoked" {
+				t.Fatalf("revoked invitation lost its original state: %v", status)
+			}
+			if status["inv_expired"] != "outstanding-or-expired" {
+				t.Fatalf("expired invitation changed state: %v", status)
+			}
+			// The genuinely outstanding invitation must have been revoked by
+			// the restore policy.
+			var openRevoked string
+			if err := dst.DB().QueryRow("SELECT revoked_at FROM _trestle_app_invitations WHERE id='inv_open'").Scan(&openRevoked); err != nil || openRevoked == "" {
+				t.Fatalf("outstanding invitation not revoked on restore: %q err=%v", openRevoked, err)
+			}
+		})
+	}
+}
+
+func nullRow(v string) any {
+	if v == "" {
+		return nil
+	}
+	return v
+}
+
+// TestRestorePrePolicyArchiveUsesOpen proves a pre-v15 portable archive (whose
+// era had open registration) restores the historical open policy, replacing the
+// fresh-install closed seed, regardless of any users in the archive.
+func TestRestorePrePolicyArchiveUsesOpen(t *testing.T) {
+	for _, provider := range storetest.Providers(t) {
+		t.Run(provider, func(t *testing.T) {
+			src := storetest.Open(t, provider)
+			// Build a minimal pre-policy archive: no registrationPolicy rows,
+			// SchemaVersion forced below 15.
+			var buf bytes.Buffer
+			if err := Export(context.Background(), src.DB(), src.Dialect(), &buf); err != nil {
+				t.Fatal(err)
+			}
+			var bundle PortableBundle
+			if err := json.Unmarshal(buf.Bytes(), &bundle); err != nil {
+				t.Fatal(err)
+			}
+			bundle.SchemaVersion = 14
+			bundle.System.RegistrationPolicy = nil
+			rewritten, err := json.Marshal(bundle)
+			if err != nil {
+				t.Fatal(err)
+			}
+
+			dst := storetest.Open(t, provider)
+			var seed string
+			if err := dst.DB().QueryRow("SELECT policy FROM _trestle_app_registration_policy WHERE id=1").Scan(&seed); err != nil {
+				t.Fatal(err)
+			}
+			if seed != "closed" {
+				t.Fatalf("fresh seed %q, want closed", seed)
+			}
+			if err := Import(context.Background(), dst.DB(), dst.Dialect(), bytes.NewReader(rewritten)); err != nil {
+				t.Fatal(err)
+			}
+			var policy string
+			if err := dst.DB().QueryRow("SELECT policy FROM _trestle_app_registration_policy WHERE id=1").Scan(&policy); err != nil {
+				t.Fatal(err)
+			}
+			if policy != "open" {
+				t.Fatalf("pre-policy restore policy %q, want open", policy)
+			}
+		})
+	}
 }

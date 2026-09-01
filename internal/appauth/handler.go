@@ -26,13 +26,14 @@ import (
 )
 
 type Handler struct {
-	db      store.Executor
-	admin   *adminauth.Handler
-	reg     *appreg.Service
-	now     func() time.Time
-	limiter *limiter
-	invLim  *limiter
-	reqLim  *limiter
+	db       store.Executor
+	admin    *adminauth.Handler
+	reg      *appreg.Service
+	now      func() time.Time
+	limiter  *limiter
+	invLim   *limiter
+	reqLim   *limiter
+	provider store.Provider
 }
 type credentials struct{ Email, Password string }
 type refreshInput struct {
@@ -41,7 +42,7 @@ type refreshInput struct {
 
 func New(db any, admin *adminauth.Handler) *Handler {
 	exec := store.Adapt(db)
-	return &Handler{db: exec, admin: admin, reg: appreg.New(exec, nil), now: time.Now, limiter: newLimiter(10, time.Minute), invLim: newLimiter(10, time.Minute), reqLim: newLimiter(5, time.Minute)}
+	return &Handler{db: exec, admin: admin, reg: appreg.New(exec, nil), provider: exec.Dialect().Provider(), now: time.Now, limiter: newLimiter(10, time.Minute), invLim: newLimiter(10, time.Minute), reqLim: newLimiter(5, time.Minute)}
 }
 
 func (h *Handler) SetAudit(audit *audit.Handler) { h.reg = appreg.New(h.db, audit) }
@@ -62,7 +63,7 @@ func (h *Handler) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 		h.refresh(w, r)
 	case r.Method == http.MethodPost && r.URL.Path == "/api/v1/auth/logout":
 		h.logout(w, r)
-	case strings.HasPrefix(r.URL.Path, "/admin/v1/app-users"):
+	case strings.HasPrefix(r.URL.Path, "/admin/v1/app-users") || strings.HasPrefix(r.URL.Path, "/admin/v1/app-registration"):
 		h.adminRoutes(w, r)
 	default:
 		http.NotFound(w, r)
@@ -132,11 +133,16 @@ func (h *Handler) register(w http.ResponseWriter, r *http.Request) {
 	writeJSON(w, 201, map[string]any{"id": newID, "email": email, "verificationRequired": true})
 }
 
-// policyForTx reads the singleton policy row on the caller's transaction, after
-// the caller has acquired the serialization lock (for PostgreSQL this is the
-// SELECT ... FOR UPDATE that must precede this read; callers are expected to
-// lock first). This guarantees the read observes the locked policy state.
+// policyForTx reads the singleton policy row on the caller's transaction after
+// acquiring the serialization lock. On PostgreSQL the read locks the row with
+// SELECT ... FOR UPDATE; on SQLite the BEGIN IMMEDIATE write lock already
+// serializes, so a plain read observes the locked state.
 func (h *Handler) policyForTx(ctx context.Context, tx store.Transaction) (string, error) {
+	if h.provider == store.Postgres {
+		if _, err := tx.ExecContext(ctx, "SELECT id FROM _trestle_app_registration_policy WHERE id=1 FOR UPDATE"); err != nil {
+			return "", err
+		}
+	}
 	var policy string
 	if err := tx.QueryRowContext(ctx, "SELECT policy FROM _trestle_app_registration_policy WHERE id=1").Scan(&policy); err != nil {
 		return "", err
@@ -176,15 +182,15 @@ func (h *Handler) inviteAccept(w http.ResponseWriter, r *http.Request) {
 		// unused, not revoked and not expired. On PostgreSQL the serialized
 		// transaction plus this read contend on the token row; on SQLite the
 		// BEGIN IMMEDIATE write lock serializes consumers.
-		var id, kind, boundEmail, userID string
+		var id, kind, boundEmail string
 		var expires string
-		var used, revoked sql.NullString
+		var used, revoked, existingUser sql.NullString
 		row := tx.QueryRowContext(r.Context(), `SELECT id,kind,email,expires_at,used_at,revoked_at,user_id FROM _trestle_app_invitations WHERE token_hash=?`, tokenHash[:])
-		if err := row.Scan(&id, &kind, &boundEmail, &expires, &used, &revoked, &userID); err != nil {
+		if err := row.Scan(&id, &kind, &boundEmail, &expires, &used, &revoked, &existingUser); err != nil {
 			return errors.New("invalid_invitation")
 		}
 		expiry, perr := time.Parse(time.RFC3339Nano, expires)
-		if perr != nil || used.Valid || revoked.Valid || !expiry.After(h.now()) || userID != "" {
+		if perr != nil || used.Valid || revoked.Valid || !expiry.After(h.now()) || existingUser.Valid {
 			return errors.New("invalid_invitation")
 		}
 		if kind == "self_register" {
@@ -656,3 +662,7 @@ func countOpen(invitations []appreg.Invitation) int {
 	}
 	return n
 }
+
+// SetRequestLimit adjusts the access-request rate limiter (used by tests and
+// by deployments that need a different abuse threshold).
+func (h *Handler) SetRequestLimit(n int) { h.reqLim = newLimiter(n, time.Minute) }
