@@ -462,20 +462,24 @@ async function renderBackups(){document.getElementById("overview-content").hidde
 const dashboardRenderers={overview:()=>{document.getElementById("view-content").hidden=true;document.getElementById("overview-content").hidden=false;document.getElementById("retry").hidden=false;check()},collections:renderCollections,users:renderUsers,settings:renderRules,files:renderFiles,realtime:renderRealtime,audit:renderAudit,jobs:renderJobs,integrations:renderIntegrations,api:renderAPIExplorer,backups:renderBackups};
 function discardToken(){pendingToken=false;const panel=document.querySelector(".provision-result");if(panel)panel.innerHTML=""}
 // Indexed history-state contract: every Trestle-owned entry carries a
-// monotonic position in history.state. Ordinary route navigation uses pushState
-// (adding an entry with the next position) so in-app back/forward history
-// matches the rendered views. On a browser traversal (writeHistory=false) the
-// delta between the traversed-to entry's position and the rendered position is
-// computed; an accepted traversal renders the entry the browser moved to
-// without writing history, and a rejected traversal returns to the rendered
-// entry with history.go(-delta), suppressing exactly the resulting restorative
-// popstate - never adding, replacing, duplicating or truncating entries.
+// position in history.state equal to its stack distance from the initial
+// entry, so positions remain contiguous with the actual history indexes even
+// after the browser truncates a forward branch when a new route is pushed.
+// Ordinary route navigation derives the next position from the rendered
+// position (renderedPosition+1) rather than a global high-water mark, so a
+// one-entry Back after branching is still delta -1. On a browser traversal
+// (writeHistory=false) the delta between the traversed-to entry's position and
+// the rendered position is computed; an accepted traversal renders the entry
+// the browser moved to without writing history, and a rejected traversal
+// returns to the rendered entry with history.go(-delta), suppressing exactly
+// the resulting restorative popstate - never adding, replacing, duplicating or
+// truncating entries, and never requesting an out-of-range history.go because
+// the target entry always exists.
 const positionKey="trestle:position";
-let positionCounter=history.state&&typeof history.state[positionKey]==="number"?history.state[positionKey]:0;
 let renderedPosition=history.state&&typeof history.state[positionKey]==="number"?history.state[positionKey]:0;
 let suppressPopstate=false;
 function entryPosition(state){return state&&typeof state[positionKey]==="number"?state[positionKey]:0}
-function selectDashboardRoute(route,title,href,writeHistory=true,traversalDelta=0,...renderArgs){if(pendingToken){if(!confirm("An activation token has not been dismissed yet. Leave this view? The token cannot be shown again.")){if(traversalDelta!==0){suppressPopstate=true;history.go(-traversalDelta)}return}discardToken()}window.dispatchEvent(new Event("trestle:viewchange"));document.querySelectorAll("[data-route]").forEach(item=>{const active=item.dataset.route===route;item.classList.toggle("active",active);if(active)item.setAttribute("aria-current","page");else item.removeAttribute("aria-current")});document.querySelector("#view-title").textContent=title;rail.classList.remove("open");mobile.setAttribute("aria-expanded","false");if(href){if(writeHistory){positionCounter+=1;history.pushState({[positionKey]:positionCounter},"",href);renderedPosition=positionCounter}else{renderedPosition=entryPosition(history.state)}}const render=dashboardRenderers[route]||dashboardRenderers.overview;render(...renderArgs)}
+function selectDashboardRoute(route,title,href,writeHistory=true,traversalDelta=0,...renderArgs){if(pendingToken){if(!confirm("An activation token has not been dismissed yet. Leave this view? The token cannot be shown again.")){if(traversalDelta!==0){suppressPopstate=true;history.go(-traversalDelta)}return}discardToken()}window.dispatchEvent(new Event("trestle:viewchange"));document.querySelectorAll("[data-route]").forEach(item=>{const active=item.dataset.route===route;item.classList.toggle("active",active);if(active)item.setAttribute("aria-current","page");else item.removeAttribute("aria-current")});document.querySelector("#view-title").textContent=title;rail.classList.remove("open");mobile.setAttribute("aria-expanded","false");if(href){if(writeHistory){const nextPosition=renderedPosition+1;history.pushState({[positionKey]:nextPosition},"",href);renderedPosition=nextPosition}else{renderedPosition=entryPosition(history.state)}}const render=dashboardRenderers[route]||dashboardRenderers.overview;render(...renderArgs)}
 function openCollectionRoute(collection,writeHistory=true){selectDashboardRoute("collections",collection,writeHistory?`/collections/${encodeURIComponent(collection)}`:null,writeHistory,0,collection)}
 function restoreDashboardRoute(){if(suppressPopstate){suppressPopstate=false;return}const delta=entryPosition(history.state)-renderedPosition;const parts=location.pathname.split("/").filter(Boolean);if(parts[0]==="collections"&&parts.length===2){let collection="";try{collection=decodeURIComponent(parts[1])}catch{}if(/^[a-z][a-z0-9_]{0,62}$/.test(collection)){selectDashboardRoute("collections",collection,location.pathname,false,delta,collection);return}}const route=parts.length===1?parts[0]:"overview";const link=document.querySelector(`[data-route="${CSS.escape(route)}"]`)||document.querySelector('[data-route="overview"]');selectDashboardRoute(route,link?link.textContent:route,location.pathname,false,delta)}
 window.addEventListener("trestle:authenticated",restoreDashboardRoute);window.addEventListener("popstate",restoreDashboardRoute);

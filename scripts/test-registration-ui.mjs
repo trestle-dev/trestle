@@ -121,6 +121,7 @@ const document = {
 const fetched = [];
 const locationObj = { origin: "http://localhost", pathname: "/", assign(url) { assignCalls.push(String(url)); } };
 const historyStack = { entries: [{ url: "/", state: null }], index: 0, popstateCount: 0 };
+const traverseLog = [];
 function historyPush(state, url) {
   historyStack.entries = historyStack.entries.slice(0, historyStack.index + 1);
   historyStack.entries.push({ url: String(url), state: state ?? null });
@@ -132,11 +133,16 @@ function historyReplace(state, url) {
   locationObj.pathname = String(url);
 }
 function historyTraverse(d) {
+  const idxBefore = historyStack.index;
   const ni = Math.max(0, Math.min(historyStack.entries.length - 1, historyStack.index + d));
-  if (ni === historyStack.index) return;
+  if (ni === historyStack.index) {
+    traverseLog.push({ requested: d, actual: 0, moved: false, inRange: d === 0 });
+    return;
+  }
   historyStack.index = ni;
   locationObj.pathname = historyStack.entries[ni].url;
   historyStack.popstateCount++;
+  traverseLog.push({ requested: d, actual: ni - idxBefore, moved: true, inRange: ni - idxBefore === d });
   windowEmit("popstate");
 }
 const sandboxHistory = {
@@ -207,6 +213,8 @@ const sandbox = {
   __uiHistoryIndex: () => historyStack.index,
   __uiPopstateCount: () => historyStack.popstateCount,
   __uiHistoryState: () => ({ entries: historyStack.entries.map((e) => ({ url: e.url, state: e.state })), index: historyStack.index }),
+  __uiLastTraverse: () => traverseLog[traverseLog.length - 1] || null,
+  __uiTraverseLog: () => traverseLog.slice(),
 };
 vm.createContext(sandbox);
 
@@ -413,6 +421,78 @@ const harness = `
   __uiBack(); await settle();
   assert(__uiConfirmCalls() === confirmAtTraversal, "no phantom warning after the token was cleared");
 
+  // (d2) Branching: after accepting Back, pushing a new route truncates the old
+  // forward branch. Positions must stay equal to stack distance (derived from
+  // renderedPosition+1, not a global high-water mark), so the traversal delta
+  // stays exact and no out-of-range restorative history.go is ever requested.
+  const snapshot2 = () => __uiHistoryState();
+  selectDashboardRoute("backups", "Backups", "/backups");
+  await settle();
+  assert(__uiHistoryIndex() === 3 && __uiPathname() === "/backups", "a new route after Back must truncate the old forward branch");
+  let st = snapshot2();
+  assert(st.entries.length === 4 && st.entries[3].url === "/backups", "the old /settings forward entry must be truncated");
+  assert(st.entries.map((e) => (e.state && e.state["trestle:position"]) ?? 0).join() === "0,1,2,3", "positions must equal stack distance after the first branch");
+
+  // Reject Back from the new route: exact restoration, in-range history.go,
+  // suppression not left armed.
+  showToken(host, "Branch token", "BRANCHTOKEN");
+  __uiSetConfirm(false);
+  const beforeReject = snapshot2();
+  __uiBack();
+  await settle();
+  const lastT = __uiLastTraverse();
+  assert(lastT !== null && lastT.moved && lastT.inRange && lastT.requested === 1, "the restorative history.go after branching must be in-range and move");
+  assert(JSON.stringify(snapshot2()) === JSON.stringify(beforeReject), "rejected Back after branching must not change entries or index");
+  assert(__uiPathname() === "/backups" && document.getElementById("view-title").textContent === "Backups", "rejected Back after branching must keep the rendered view and URL");
+  assert(pendingToken === true && panel().indexOf("BRANCHTOKEN") !== -1, "rejected Back after branching must keep the token");
+  assert(suppressPopstate === false, "suppression must not be left armed after restoration");
+
+  // Accept that Back afterward: renders the traversed-to entry, no history write.
+  __uiSetConfirm(true);
+  const histBeforeAccept = __uiHistoryCalls().length;
+  __uiBack();
+  await settle();
+  assert(pendingToken === false && panel() === "", "accepted Back after branching must clear the token");
+  assert(__uiPathname() === "/collections" && __uiHistoryIndex() === 2, "accepted Back after branching must land on the traversed entry");
+  assert(__uiHistoryCalls().length === histBeforeAccept, "accepted traversal after branching must not write history");
+
+  // Reject Forward afterward: exact restore, no duplicate, suppression cleared.
+  showToken(host, "Branch token", "BRANCHTOKEN");
+  __uiSetConfirm(false);
+  const beforeForward = snapshot2();
+  __uiForward();
+  await settle();
+  const lastTF = __uiLastTraverse();
+  assert(lastTF !== null && lastTF.moved && lastTF.inRange && lastTF.requested === -1, "rejected Forward after branching must use an in-range history.go");
+  assert(JSON.stringify(snapshot2()) === JSON.stringify(beforeForward), "rejected Forward after branching must not change entries or index");
+  assert(__uiPathname() === "/collections" && __uiHistoryIndex() === 2, "rejected Forward after branching must restore the rendered entry");
+  assert(pendingToken === true && panel().indexOf("BRANCHTOKEN") !== -1, "rejected Forward after branching must keep the token");
+  assert(suppressPopstate === false, "suppression must not be left armed after rejected Forward");
+
+  // Repeat branching more than once.
+  __uiSetConfirm(true);
+  __uiBack();
+  await settle();
+  assert(__uiPathname() === "/users" && __uiHistoryIndex() === 1, "repeated branching: accepted back to /users");
+  selectDashboardRoute("files", "Files", "/files");
+  await settle();
+  st = snapshot2();
+  assert(st.entries.length === 3 && st.entries[2].url === "/files" && st.entries[2].state["trestle:position"] === 2, "second branch must truncate and keep positions equal to index");
+  assert(st.entries.map((e) => (e.state && e.state["trestle:position"]) ?? 0).join() === "0,1,2", "second branch positions must equal stack distance");
+  showToken(host, "Branch token", "BRANCHTOKEN");
+  __uiSetConfirm(false);
+  __uiBack();
+  await settle();
+  assert(__uiPathname() === "/files" && __uiHistoryIndex() === 2 && suppressPopstate === false, "repeated branching rejected back must restore exactly");
+  assert(pendingToken === true && panel().indexOf("BRANCHTOKEN") !== -1, "repeated branching rejected back must keep the token");
+  __uiSetConfirm(true);
+  __uiBack();
+  await settle();
+  assert(__uiPathname() === "/users" && __uiHistoryIndex() === 1, "repeated branching accepted back");
+  __uiForward();
+  await settle();
+  assert(__uiPathname() === "/files" && __uiHistoryIndex() === 2 && snapshot2().entries.length === 3, "repeated branching accepted forward must preserve the array");
+
   // (e) openCollectionRoute cannot bypass the guard.
   showToken(host, "Collection token", "COLTOKEN");
   __uiSetConfirm(false);
@@ -544,7 +624,7 @@ if (!/policyForm\.addEventListener\(["']submit["'][^;]*?ev\.preventDefault\(\)/.
 if (jsSource.indexOf('data-dismiss-token') === -1) failures.push("one-time panel must have an explicit Dismiss action");
 if (jsSource.indexOf('function canIssueToken') === -1) failures.push("token-minting actions must be blocked while a token is pending");
 if (!/function selectDashboardRoute\(route,title,href/.test(jsSource)) failures.push("route navigation must flow through one guarded function");
-if (!/history\.pushState\(\{\[positionKey\]:positionCounter\},"",href\)/.test(jsSource)) failures.push("ordinary route navigation must push a position-carrying history entry");
+if (!/history\.pushState\(\{\[positionKey\]:nextPosition\},"",href\)/.test(jsSource)) failures.push("ordinary route navigation must push a position-carrying history entry");
 if (!/history\.go\(-traversalDelta\)/.test(jsSource)) failures.push("rejected traversal must return via history.go(-delta) without writing entries");
 if (!/function entryPosition/.test(jsSource)) failures.push("history positions must be tracked in history.state");
 if (/data-route="users"\][^;]*addEventListener\("click",renderUsers/.test(jsSource)) failures.push("independent render listeners must be removed (single navigation path)");
