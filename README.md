@@ -139,6 +139,24 @@ installed listen, data directory and environment file unless a flag is given
 explicitly. `service install --system` (system-wide units) is a documented
 follow-up and is not yet supported; user mode is the default.
 
+### Persistence and lingering
+
+Once installed, the service runs independently of the terminal that launched
+it: closing the terminal does not stop it. A systemd user service is tied to
+your OS user's user manager, so it normally starts when that user manager
+starts (for example at your first login after boot). Unattended boot or
+continuing to run after you log out may require lingering for your user:
+
+```sh
+loginctl show-user "$USER" -p Linger
+loginctl enable-linger "$USER"   # explicit host-level choice
+```
+
+Enable lingering deliberately: it keeps your user's services running without a
+login session and changes what runs unattended. The unit records the absolute
+path of the `trestle` executable at install time; moving or deleting that
+binary will break the service.
+
 ## Install a release
 
 Two verified download paths are available. Both fetch the exact release archive
