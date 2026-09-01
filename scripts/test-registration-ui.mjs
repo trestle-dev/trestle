@@ -79,7 +79,7 @@ function listFor(sel) {
 for (const r of ["overview", "collections", "users", "settings", "files", "realtime", "audit", "jobs", "integrations", "api", "backups"]) {
   const link = makeEl("a");
   link.dataset.route = r;
-  link.textContent = r;
+  link.textContent = r[0].toUpperCase() + r.slice(1);
   link.href = "/" + r;
   listFor("[data-route]").push(link);
 }
@@ -120,25 +120,29 @@ const document = {
 };
 const fetched = [];
 const locationObj = { origin: "http://localhost", pathname: "/", assign(url) { assignCalls.push(String(url)); } };
-const historyStack = { entries: ["/"], index: 0, popstateCount: 0 };
-function historyPush(url) {
+const historyStack = { entries: [{ url: "/", state: null }], index: 0, popstateCount: 0 };
+function historyPush(state, url) {
   historyStack.entries = historyStack.entries.slice(0, historyStack.index + 1);
-  historyStack.entries.push(String(url));
+  historyStack.entries.push({ url: String(url), state: state ?? null });
   historyStack.index = historyStack.entries.length - 1;
   locationObj.pathname = String(url);
 }
-function historyReplace(url) { historyStack.entries[historyStack.index] = String(url); locationObj.pathname = String(url); }
+function historyReplace(state, url) {
+  historyStack.entries[historyStack.index] = { url: String(url), state: state ?? null };
+  locationObj.pathname = String(url);
+}
 function historyTraverse(d) {
   const ni = Math.max(0, Math.min(historyStack.entries.length - 1, historyStack.index + d));
   if (ni === historyStack.index) return;
   historyStack.index = ni;
-  locationObj.pathname = historyStack.entries[ni];
+  locationObj.pathname = historyStack.entries[ni].url;
   historyStack.popstateCount++;
   windowEmit("popstate");
 }
 const sandboxHistory = {
-  pushState(_s, _t, url) { historyPush(url); historyCalls.push("push " + String(url)); },
-  replaceState(_s, _t, url) { historyReplace(url); historyCalls.push("replace " + String(url)); },
+  pushState(state, _t, url) { historyPush(state, url); historyCalls.push("push " + String(url)); },
+  replaceState(state, _t, url) { historyReplace(state, url); historyCalls.push("replace " + String(url)); },
+  get state() { return historyStack.entries[historyStack.index].state; },
   back() { historyTraverse(-1); },
   forward() { historyTraverse(1); },
   go(d) { historyTraverse(d); },
@@ -158,7 +162,7 @@ const sandbox = {
     let body;
     if (u === "/admin/v1/app-registration/invitations" && method === "POST") body = { id: "inv_1", kind: "activate", email: "x@example.com", expiresAt: "2027-01-01T00:00:00Z", token: "TOKEN123" };
     else if (u.includes("/approve") || u.includes("/reissue")) body = { id: "inv_1", kind: "activate", email: "x@example.com", expiresAt: "2027-01-01T00:00:00Z", token: "TOKEN123" };
-    else if (u === "/admin/v1/app-registration/activation-base-url" && method === "PUT") body = { activationBaseUrl: JSON.parse(opt.body || "{}").activationBaseUrl || "" };
+    else if (u === "/admin/v1/app-registration/activation-base-url" && method === "PUT") body = { activationBaseUrl: (JSON.parse(opt.body || "{}").activationBaseUrl || "").trim() };
     else if (u === "/admin/v1/app-registration/invitations" && method === "GET") body = { items: [{ id: "inv_1", kind: "activate", email: "x@example.com", createdAt: "2026-01-01T00:00:00Z", expiresAt: "2027-01-01T00:00:00Z" }] };
     else if (u === "/admin/v1/app-registration/requests" && method === "GET") body = { items: [{ id: "req_1", email: "x@example.com", status: "pending", createdAt: "2026-01-01T00:00:00Z" }] };
     else body = { items: [], policy: "closed", setAt: "2026-01-01T00:00:00Z", activationBaseUrl: "" };
@@ -182,6 +186,7 @@ const sandbox = {
   MutationObserver: class { observe() {} },
   AbortController,
   Event: class Event { constructor(type) { this.type = type; } },
+  URL,
   TextDecoder, TextEncoder,
   setTimeout, clearTimeout, setInterval, clearInterval,
   console,
@@ -201,6 +206,7 @@ const sandbox = {
   __uiPathname: () => locationObj.pathname,
   __uiHistoryIndex: () => historyStack.index,
   __uiPopstateCount: () => historyStack.popstateCount,
+  __uiHistoryState: () => ({ entries: historyStack.entries.map((e) => ({ url: e.url, state: e.state })), index: historyStack.index }),
 };
 vm.createContext(sandbox);
 
@@ -338,45 +344,73 @@ const harness = `
   assert(pendingToken === false, "no phantom token state after navigation");
   assert(panel() === "", "no phantom token panel after navigation");
 
-  // (d) Real browser back/forward: the traversal changes the history index and
-  // location.pathname BEFORE popstate, and restoreDashboardRoute runs.
-  // The stack is ["/","/users","/collections"] at index 2 (lastRenderedUrl
-  // "/collections") from the earlier navigations.
+  // (d) Indexed history-state contract. Real browser back/forward changes the
+  // history index and location.pathname BEFORE popstate; restoreDashboardRoute
+  // computes the position delta. A rejected traversal returns to the rendered
+  // entry via history.go(-delta) with the restorative popstate suppressed, and
+  // the complete entry array and index must never change. Build a forward
+  // stack first: "/" -> "/users" -> "/collections" -> "/settings".
+  selectDashboardRoute("settings", "Settings", "/settings");
+  await settle();
+  assert(__uiPathname() === "/settings" && __uiHistoryIndex() === 3, "forward stack must reach /settings");
+  __uiSetConfirm(true);
+  __uiBack();
+  await settle();
+  assert(__uiPathname() === "/collections" && __uiHistoryIndex() === 2, "setup back to /collections");
+  const snapshot = () => __uiHistoryState();
+  const snap = snapshot();
+
+  // 1. Rejected Back from the end: entries and index unchanged, no confirm
+  //    re-fire during the restorative popstate.
   showToken(host, "Back-forward token", "BFTOKEN");
-  assert(pendingToken === true, "token must be pending before back/forward");
-  const popBefore = __uiPopstateCount();
-  const histBF = __uiHistoryCalls().length;
+  const callsAt = __uiConfirmCalls();
   __uiSetConfirm(false);
   __uiBack();
   await settle();
-  // Rejected traversal: the URL and view must be consistent again - the
-  // previously rendered "/collections" URL is restored, the collections view
-  // stays, the token stays, and the restore push never fires another popstate.
-  assert(__uiPathname() === "/collections", "rejected back must restore the rendered URL");
-  assert(document.getElementById("view-title").textContent === "Collections", "rejected back must keep the current view");
-  assert(panel().indexOf("BFTOKEN") !== -1 && pendingToken === true, "rejected back must keep the token");
-  assert(__uiHistoryCalls().length === histBF + 1, "rejected back restores via exactly one pushState");
-  assert(__uiPopstateCount() === popBefore + 1, "restoring a rejected traversal must not re-fire popstate");
+  assert(JSON.stringify(snapshot()) === JSON.stringify(snap), "rejected Back must not change history entries or index");
+  assert(__uiPathname() === "/collections" && document.getElementById("view-title").textContent === "Collections", "rejected Back must keep the rendered view and URL");
+  assert(pendingToken === true && panel().indexOf("BFTOKEN") !== -1, "rejected Back must keep the token");
+  assert(__uiConfirmCalls() === callsAt + 1, "the restorative popstate must not re-confirm");
+
+  // 2. Rejected Back with existing forward history: /settings must survive.
+  __uiBack();
+  await settle();
+  assert(JSON.stringify(snapshot()) === JSON.stringify(snap), "rejected Back with forward history must not truncate entries");
+  assert(__uiPathname() === "/collections" && __uiHistoryIndex() === 2, "rejected Back must return to the rendered entry");
+
+  // 3. Rejected Forward: no duplicate entry appended.
+  __uiForward();
+  await settle();
+  assert(JSON.stringify(snapshot()) === JSON.stringify(snap), "rejected Forward must not append a duplicate entry");
+  assert(__uiPathname() === "/collections" && __uiHistoryIndex() === 2, "rejected Forward must return to the rendered entry");
+
+  // 4. Repeated rejected traversals (back/forward/back): still unchanged.
+  __uiBack(); await settle();
+  __uiForward(); await settle();
+  __uiBack(); await settle();
+  assert(JSON.stringify(snapshot()) === JSON.stringify(snap), "repeated rejected traversals must leave the stack unchanged");
+  assert(pendingToken === true && panel().indexOf("BFTOKEN") !== -1, "repeated rejections must keep the token");
+  assert(__uiHistoryIndex() === 2, "repeated rejections must return to the rendered entry");
+
+  // 5. Accepted Back and Forward after a rejection: render the traversed-to
+  //    entry without writing history, then the preserved forward chain works.
   __uiSetConfirm(true);
   const histOK = __uiHistoryCalls().length;
-  const usersRendersBefore = renderCalls.users;
   __uiBack();
   await settle();
-  // Accepted traversal renders the entry the browser moved to ("/users", the
-  // entry before the restored "/collections") without creating or replacing an
-  // unrelated history entry, and discards the token.
-  assert(pendingToken === false, "accepted back must clear the token");
-  assert(panel() === "", "accepted back must clear the token panel");
-  assert(__uiPathname() === "/users", "accepted back must land on the traversed entry");
-  assert(__uiHistoryIndex() === 1, "accepted traversal must not create or replace an entry");
+  assert(pendingToken === false && panel() === "", "accepted Back after rejection must clear the token");
+  assert(__uiPathname() === "/users" && __uiHistoryIndex() === 1, "accepted Back must land on the traversed entry");
   assert(__uiHistoryCalls().length === histOK, "accepted traversal must not write history");
-  assert(renderCalls.users === usersRendersBefore + 1, "accepted traversal must render the destination once");
+  __uiForward();
+  await settle();
+  assert(__uiPathname() === "/collections" && document.getElementById("view-title").textContent === "Collections", "accepted Forward must render the existing entry");
+  __uiForward();
+  await settle();
+  assert(__uiPathname() === "/settings", "forward history preserved through all rejection scenarios");
+  assert(snapshot().entries.length === snap.entries.length, "the complete entry array must be preserved");
   // No phantom warning on a later traversal.
   const confirmAtTraversal = __uiConfirmCalls();
-  __uiBack();
-  await settle();
-  assert(__uiPathname() === "/", "later traversal must reach the previous entry");
-  assert(renderCalls.overview >= 1, "later traversal must render through the guarded path");
+  __uiBack(); await settle();
   assert(__uiConfirmCalls() === confirmAtTraversal, "no phantom warning after the token was cleared");
 
   // (e) openCollectionRoute cannot bypass the guard.
@@ -469,6 +503,18 @@ const harness = `
   await settle();
   assert(panel().indexOf("https://app.example.com/register#invite=TOKEN123") !== -1, "a token issued after set must use the new base URL");
   dismissToken(host);
+  // Whitespace-padded input: the server normalizes and returns the trimmed
+  // canonical value (the mock trims rather than echoing the body, so a
+  // concatenation of the raw input would fail this assertion).
+  baseForm.elements = { baseurl: { value: "  https://new.example.com/reg  " } };
+  baseForm.dispatch("submit", { preventDefault() {} });
+  await settle();
+  assert(activationBaseUrl === "https://new.example.com/reg", "the server-normalized value must be adopted (whitespace trimmed)");
+  provForm.dispatch("submit", { preventDefault() {} });
+  await settle();
+  assert(panel().indexOf("https://new.example.com/reg#invite=TOKEN123") !== -1, "a token issued after a normalized set must use the canonical base URL");
+  assert(panel().indexOf("  https://") === -1, "the token link must not contain raw whitespace");
+  dismissToken(host);
   baseForm.elements = { baseurl: { value: "https://new.example.com/reg" } };
   baseForm.dispatch("submit", { preventDefault() {} });
   await settle();
@@ -498,7 +544,9 @@ if (!/policyForm\.addEventListener\(["']submit["'][^;]*?ev\.preventDefault\(\)/.
 if (jsSource.indexOf('data-dismiss-token') === -1) failures.push("one-time panel must have an explicit Dismiss action");
 if (jsSource.indexOf('function canIssueToken') === -1) failures.push("token-minting actions must be blocked while a token is pending");
 if (!/function selectDashboardRoute\(route,title,href/.test(jsSource)) failures.push("route navigation must flow through one guarded function");
-if (!/history\.pushState\(null,"",href\)/.test(jsSource)) failures.push("ordinary route navigation must use pushState to build in-app history");
+if (!/history\.pushState\(\{\[positionKey\]:positionCounter\},"",href\)/.test(jsSource)) failures.push("ordinary route navigation must push a position-carrying history entry");
+if (!/history\.go\(-traversalDelta\)/.test(jsSource)) failures.push("rejected traversal must return via history.go(-delta) without writing entries");
+if (!/function entryPosition/.test(jsSource)) failures.push("history positions must be tracked in history.state");
 if (/data-route="users"\][^;]*addEventListener\("click",renderUsers/.test(jsSource)) failures.push("independent render listeners must be removed (single navigation path)");
 if (jsSource.indexOf('pendingToken=false;const button=document.getElementById("logout")') !== -1) failures.push("logout must not clear pendingToken before the request succeeds");
 

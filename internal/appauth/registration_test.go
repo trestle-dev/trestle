@@ -1374,3 +1374,103 @@ func (e *auditFailExecutor) ExecContext(ctx context.Context, q string, args ...a
 func (e *auditFailExecutor) Exec(q string, args ...any) (sql.Result, error) {
 	return e.ExecContext(context.Background(), q, args...)
 }
+
+// TestActivationBaseURLNormalization proves the activation base URL is trimmed
+// and canonicalized before storage and that the PUT response returns the
+// normalized stored value (never the raw request input), for set, replace and
+// clear, followed by correct fragment-link construction.
+func TestActivationBaseURLNormalization(t *testing.T) {
+	for _, provider := range storetest.Providers(t) {
+		t.Run(provider, func(t *testing.T) {
+			s, h := setupReg(t, provider)
+			admin := adminauth.New(s.DB(), string(s.Provider()))
+			cookie, csrf := adminSetup(t, s, admin)
+
+			set := func(value string) string {
+				w := adminCall(h, cookie, csrf, "PUT", "/admin/v1/app-registration/activation-base-url", `{"activationBaseUrl":"`+value+`"}`)
+				if w.Code != 200 {
+					t.Fatalf("set %d %s", w.Code, w.Body.String())
+				}
+				var out struct {
+					ActivationBaseURL string `json:"activationBaseUrl"`
+				}
+				json.Unmarshal(w.Body.Bytes(), &out)
+				return out.ActivationBaseURL
+			}
+			get := func() string {
+				w := adminCall(h, cookie, csrf, "GET", "/admin/v1/app-registration/activation-base-url", "")
+				var out struct {
+					ActivationBaseURL string `json:"activationBaseUrl"`
+				}
+				json.Unmarshal(w.Body.Bytes(), &out)
+				return out.ActivationBaseURL
+			}
+
+			// Whitespace-padded input is trimmed before storage and the PUT
+			// returns the canonical value, not the raw request body.
+			if got := set("  https://app.example.com/register  "); got != "https://app.example.com/register" {
+				t.Fatalf("normalized set returned %q", got)
+			}
+			if got := get(); got != "https://app.example.com/register" {
+				t.Fatalf("GET returned %q, want normalized", got)
+			}
+			link, err := appreg.ActivationLink("https://app.example.com/register", "tok123")
+			if err != nil || link != "https://app.example.com/register#invite=tok123" {
+				t.Fatalf("link %q err=%v", link, err)
+			}
+
+			// Replace.
+			if got := set("https://new.example.com/reg"); got != "https://new.example.com/reg" {
+				t.Fatalf("replace returned %q", got)
+			}
+			// Clear.
+			if got := set("   "); got != "" {
+				t.Fatalf("clear returned %q, want empty", got)
+			}
+			if got := get(); got != "" {
+				t.Fatalf("GET after clear returned %q", got)
+			}
+		})
+	}
+}
+
+// TestActivationBaseURLSurvivesReopen proves the normalized value is what is
+// durably persisted: it survives a full store close and reopen (server
+// restart/reload) on the SQLite file backend.
+func TestActivationBaseURLSurvivesReopen(t *testing.T) {
+	dir := t.TempDir()
+	s, err := store.Open(context.Background(), dir)
+	if err != nil {
+		t.Fatal(err)
+	}
+	admin := adminauth.New(s.DB(), "sqlite")
+	cookie, csrf := adminSetup(t, s, admin)
+	h := New(s.DB(), admin)
+	h.SetAudit(audit.New(s.DB(), admin, "sqlite"))
+	w := adminCall(h, cookie, csrf, "PUT", "/admin/v1/app-registration/activation-base-url", `{"activationBaseUrl":"  https://app.example.com/register  "}`)
+	if w.Code != 200 {
+		t.Fatalf("set %d %s", w.Code, w.Body.String())
+	}
+	var out struct {
+		ActivationBaseURL string `json:"activationBaseUrl"`
+	}
+	json.Unmarshal(w.Body.Bytes(), &out)
+	if out.ActivationBaseURL != "https://app.example.com/register" {
+		t.Fatalf("set returned %q", out.ActivationBaseURL)
+	}
+	if err := s.Close(); err != nil {
+		t.Fatal(err)
+	}
+	s2, err := store.Open(context.Background(), dir)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer s2.Close()
+	var stored string
+	if err := s2.DB().QueryRow("SELECT value FROM _trestle_system_meta WHERE key='app_activation_base_url'").Scan(&stored); err != nil {
+		t.Fatal(err)
+	}
+	if stored != "https://app.example.com/register" {
+		t.Fatalf("persisted value after reopen %q, want normalized", stored)
+	}
+}

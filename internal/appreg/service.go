@@ -530,30 +530,36 @@ func (s *Service) ActivationBaseURL(ctx context.Context) (string, error) {
 	return value, err
 }
 
-// SetActivationBaseURL validates and stores the activation base URL. It must
-// be absolute, https (or http for loopback hosts in local development), free
-// of username/password, fragments and query strings, bounded in length, and
-// free of control characters. Empty clears the setting.
-func (s *Service) SetActivationBaseURL(ctx context.Context, adminID, value string) error {
+// SetActivationBaseURL validates, normalizes and stores the activation base
+// URL, returning the canonical serialized value that was persisted (or "" when
+// cleared). It must be absolute, https (or http for loopback hosts in local
+// development), free of username/password, fragments and query strings, bounded
+// in length, and free of control characters; surrounding whitespace is trimmed
+// and the canonical serialization is stored so the value returned to clients
+// always matches what the link builder uses.
+func (s *Service) SetActivationBaseURL(ctx context.Context, adminID, value string) (string, error) {
 	if strings.TrimSpace(value) == "" {
-		return store.WithTx(ctx, s.store, func(tx store.Transaction) error {
+		err := store.WithTx(ctx, s.store, func(tx store.Transaction) error {
 			if _, err := tx.ExecContext(ctx, "DELETE FROM _trestle_system_meta WHERE key='app_activation_base_url'"); err != nil {
 				return err
 			}
 			return s.audit.Emit(ctx, tx, "admin", adminID, "app_registration.activation_base_url.clear", "", "success", requestID(ctx), nil)
 		})
+		return "", err
 	}
-	if _, err := ValidateActivationBaseURL(value); err != nil {
-		return err
+	parsed, err := ValidateActivationBaseURL(value)
+	if err != nil {
+		return "", err
 	}
+	canonical := parsed.String()
 	now := s.now().UTC().Format(time.RFC3339Nano)
-	err := store.WithTx(ctx, s.store, func(tx store.Transaction) error {
-		if _, err := tx.ExecContext(ctx, "INSERT INTO _trestle_system_meta(key,value,updated_at) VALUES('app_activation_base_url',?,?) ON CONFLICT(key) DO UPDATE SET value=excluded.value, updated_at=excluded.updated_at", value, now); err != nil {
+	err = store.WithTx(ctx, s.store, func(tx store.Transaction) error {
+		if _, err := tx.ExecContext(ctx, "INSERT INTO _trestle_system_meta(key,value,updated_at) VALUES('app_activation_base_url',?,?) ON CONFLICT(key) DO UPDATE SET value=excluded.value, updated_at=excluded.updated_at", canonical, now); err != nil {
 			return err
 		}
 		return s.audit.Emit(ctx, tx, "admin", adminID, "app_registration.activation_base_url.set", "", "success", requestID(ctx), nil)
 	})
-	return err
+	return canonical, err
 }
 
 // ActivationLink builds a fragment-only activation link from the configured

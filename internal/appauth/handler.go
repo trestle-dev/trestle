@@ -520,13 +520,14 @@ func (h *Handler) adminRoutes(w http.ResponseWriter, r *http.Request) {
 		if !decode(w, r, &in) {
 			return
 		}
-		if err := h.reg.SetActivationBaseURL(r.Context(), principal.AdminID, in.ActivationBaseURL); err != nil {
+		normalized, err := h.reg.SetActivationBaseURL(r.Context(), principal.AdminID, in.ActivationBaseURL)
+		if err != nil {
 			writeError(w, 400, err.Error(), "The request could not be applied.")
 			return
 		}
-		// The stored value equals the validated input; returning it lets the
-		// client adopt the exact configured value (empty when cleared).
-		writeJSON(w, 200, map[string]any{"activationBaseUrl": in.ActivationBaseURL})
+		// Return the canonical serialized value that was persisted ("" when
+		// cleared) so the client adopts exactly what the link builder uses.
+		writeJSON(w, 200, map[string]any{"activationBaseUrl": normalized})
 		return
 	}
 	if r.URL.Path == "/admin/v1/app-registration/invitations" && r.Method == http.MethodPost {
