@@ -9,6 +9,27 @@ Every release is an evidence gate (see `HANDOVER.md`). If `install.sh`,
 reviewed versions must be deployed and byte-verified on the website BEFORE this
 runbook starts (public-script parity gate: `scripts/test-public-scripts.sh`).
 
+## Version under release
+
+Set and validate the exact tag being released before any command in this
+runbook; every example uses it:
+
+```sh
+export VERSION="0.1.1"        # MAJOR.MINOR.PATCH, optionally -prerelease.suffix
+printf '%s' "$VERSION" | LC_ALL=C grep -Eq '^[0-9][0-9]*\.[0-9][0-9]*\.[0-9][0-9]*([-.][0-9A-Za-z][0-9A-Za-z.]*)?$' \
+  || { echo "invalid VERSION '$VERSION'" >&2; exit 1; }
+case "$VERSION" in
+  *-*) echo "releasing prerelease tag v$VERSION (GitHub prerelease)" ;;
+  *)   echo "releasing stable tag v$VERSION (normal GitHub release, stable public preview)" ;;
+esac
+```
+
+The tag is always `v$VERSION`. A stable `vMAJOR.MINOR.PATCH` tag is a normal
+GitHub release with stable public-preview product maturity; it is never itself
+a release candidate and makes no production-proven or battle-proven claim. A
+tag containing a `-` suffix (for example `v0.1.0-rc.1`) is a GitHub prerelease
+that honestly describes itself as a preview / release candidate.
+
 ## Preconditions
 
 - Application CI is green on `main` (PostgreSQL 16/17/18 suites and the gate).
@@ -46,7 +67,7 @@ Record that exact commit in the release evidence. After creating the annotated
 tag and before pushing it:
 
 ```sh
-git rev-list -n 1 v0.1.0
+git rev-list -n 1 "v${VERSION}"
 ```
 
 must equal the recorded reviewed commit.
@@ -58,21 +79,24 @@ must equal the recorded reviewed commit.
 Create the annotated tag locally and push it:
 
 ```sh
-git tag -a v0.1.0 -m "Trestle v0.1.0 (stable public preview)"
-git push origin v0.1.0
+git tag -a "v${VERSION}" -m "Trestle v${VERSION} (stable public preview)"
+git push origin "v${VERSION}"
 ```
 
 Pushing a `v*` tag triggers `.github/workflows/release.yml` only. No other
 action happens automatically.
 
-### 1b. Normal-release decision (recorded)
+### 1b. Release-kind decision (recorded)
 
-Trestle v0.1.0 is a **preview** product: it is a release candidate, not a
-stable release, and compatibility freezes only when a stable version is
-published. The GitHub release is deliberately created as a **normal,
-non-prerelease** release - solely because it is the first publicly installable
-preview and `/releases/latest` selects normal releases. It is never described
-as a GitHub prerelease anywhere.
+A stable semver tag (`vMAJOR.MINOR.PATCH`) is released as a **normal,
+non-prerelease** GitHub release so `/releases/latest` selects it, and its
+release body leads with "stable public preview". Stable public-preview maturity
+means the release establishes the normal installable download channel and the
+initial public compatibility contract; it is not a production-proven or
+battle-proven claim, and a stable tag is never itself described as a release
+candidate. A prerelease tag (`vX.Y.Z-*`) is a GitHub prerelease that honestly
+calls itself a preview / release candidate. This matches the release-note
+wording validation in `.github/workflows/release.yml`.
 
 ### 2. Actions completion (observe, do not cut short)
 
@@ -95,7 +119,7 @@ successfully. The workflow:
 
 Verify on the release page or via the API:
 
-- All six archives and `SHA256SUMS` are attached to `v0.1.0`.
+- All six archives and `SHA256SUMS` are attached to `v${VERSION}`.
 - `SHA256SUMS -c` passes against the downloaded archives.
 - Each `.tar.gz` contains exactly `trestle_<version>_<os>_<arch>/trestle`.
 - The release is a normal release (`draft=false`, `prerelease=false`), so
@@ -124,8 +148,8 @@ curl -fsSL https://trestle.cv/download.sh | sh
 Also verify a pinned install and an update from the real release:
 
 ```sh
-curl -fsSL https://trestle.cv/install.sh | sh -s -- --version v0.1.0
-curl -fsSL https://trestle.cv/update.sh | sh -s -- --version v0.1.0
+curl -fsSL https://trestle.cv/install.sh | sh -s -- --version "v${VERSION}"
+curl -fsSL https://trestle.cv/update.sh | sh -s -- --version "v${VERSION}"
 ```
 
 ### 5. Rollback (human)
@@ -133,7 +157,7 @@ curl -fsSL https://trestle.cv/update.sh | sh -s -- --version v0.1.0
 If the release is defective:
 
 1. Delete the GitHub release (keeps the tag) or the tag itself
-   (`git tag -d v0.1.0 && git push origin :refs/tags/v0.1.0`).
+   (`git tag -d "v${VERSION}" && git push origin ":refs/tags/v${VERSION}"`).
 2. For operators who already updated: `update.sh --rollback` restores the
    previous executable (binary-only; data schema upgrades are one-way and
    must be recovered with a pre-upgrade backup/restore).
@@ -149,7 +173,7 @@ release exists:**
   until another normal release exists. Do not imply that deleting a first
   release restores a usable public download channel.
 - Deleting a published release also makes its **pinned** asset URLs
-  (`/releases/download/v0.1.0/...`) unavailable, so `--version v0.1.0` fails
+  (`/releases/download/v${VERSION}/...`) unavailable, so `--version v${VERSION}` fails
   too.
 - Existing installations can still use their retained local binary rollback
   (`update.sh --rollback`), but that is a local binary-only operation: schema

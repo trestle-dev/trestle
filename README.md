@@ -12,13 +12,15 @@ For a complete external application, see
 application users, collection rules, typed records, realtime SSE and files
 without importing Trestle packages or opening the SQLite database.
 
-The repository is currently a release candidate. Checkpoints CP00-CP22 and all
+Trestle v0.1.1 is the current stable public-preview release: checkpoints CP00-CP22 and all
 ten CP23 hardening campaigns are implemented,
 covering the process and SQLite foundation, embedded administration, typed
 collections and records, authentication and access rules, local and
 S3-compatible files, realtime events, audit, durable jobs, webhooks, AWS Lambda,
 OpenAPI, reference clients, backup/recovery, and whole-product dogfooding.
-Deployment, release automation and the release-candidate matrix are implemented.
+Deployment and release automation are implemented. The stable public-preview
+label means the release establishes a normal, installable download channel; it
+is not a production-proven or battle-proven claim.
 
 A separate PostgreSQL parity campaign (PG00-PG11) is complete. PostgreSQL is an
 available external-database option for deployments needing its operational
@@ -27,14 +29,15 @@ corpus, migration safety and recovery semantics are exercised against
 PostgreSQL 16, 17 and 18 in CI and PostgreSQL 18.6 locally. See
 `POSTGRES-CHECKPOINTS.md`.
 
-An active public-preview campaign (`PREVIEW-CHECKPOINTS.md`) is hardening the
-whole product for an honest preview. It adds a machine-readable PostgreSQL
-readiness contract, a single reproducible PostgreSQL gate
+An active public-preview campaign (`PREVIEW-CHECKPOINTS.md`) hardens the whole
+product for an honest preview. It adds a machine-readable PostgreSQL readiness
+contract, a single reproducible PostgreSQL gate
 (`scripts/test-postgres-gate.sh`), and proceeds through recovery, parity,
-release, domain and publish/no-publish checkpoints. Trestle is an early preview
-for evaluation and prototypes; it is not presented as battle-proven or
-production-immune. Nothing is published until the campaign's publish gate
-authorizes it.
+release, domain and publish/no-publish checkpoints. Trestle is an early public
+preview for evaluation and prototypes; it is not presented as battle-proven or
+production-immune. Each stable semver tag is a stable GitHub release with
+stable public-preview maturity — it is not itself a release candidate, and it
+makes no production-proven or battle-proven claim.
 
 ## Requirements
 
@@ -196,7 +199,7 @@ curl -fsSL https://trestle.cv/download.sh | sh
 to overwrite an existing file:
 
 ```sh
-curl -fsSL https://trestle.cv/download.sh | sh -s -- --version v0.1.0
+curl -fsSL https://trestle.cv/download.sh | sh -s -- --version v0.1.1
 curl -fsSL https://trestle.cv/download.sh | sh -s -- --output ./some-name
 ```
 
