@@ -7,6 +7,8 @@ import (
 	"fmt"
 	"strings"
 	"time"
+
+	"github.com/lib/pq"
 )
 
 // Application registration policy names and the migration that introduces the
@@ -123,20 +125,25 @@ func (t *serialConnTx) Rollback() error {
 }
 
 // IsLockBusy reports whether err is a transient lock/serialization failure the
-// caller may retry: SQLite SQLITE_BUSY/SQLITE_LOCKED and PostgreSQL
-// serialization_failure (40001) / deadlock_detected (40P01).
+// caller may retry: PostgreSQL serialization_failure (40001) and
+// deadlock_detected (40P01) via the typed *pq.Error code, and SQLite
+// SQLITE_BUSY/SQLITE_LOCKED via its error text (the modernc driver exposes
+// these as text).
 func IsLockBusy(err error) bool {
 	if err == nil {
+		return false
+	}
+	var pgErr *pq.Error
+	if errors.As(err, &pgErr) {
+		switch pgErr.Code {
+		case "40001", "40P01":
+			return true
+		}
 		return false
 	}
 	lower := strings.ToLower(err.Error())
 	if strings.Contains(lower, "sqlite_busy") || strings.Contains(lower, "sqlite_locked") ||
 		strings.Contains(lower, "database is locked") || strings.Contains(lower, "database table is locked") {
-		return true
-	}
-	// lib/pq surfaces PostgreSQL SQLSTATE as the "pq: ..." message; match the
-	// standard SQLSTATE codes embedded in the driver error text.
-	if strings.Contains(err.Error(), "40001") || strings.Contains(err.Error(), "40P01") {
 		return true
 	}
 	return false

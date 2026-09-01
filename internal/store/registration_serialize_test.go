@@ -12,6 +12,8 @@ import (
 	"sync/atomic"
 	"testing"
 	"time"
+
+	"github.com/lib/pq"
 )
 
 // openRawSQLite opens a raw modernc sqlite database with the same pragmas the
@@ -349,5 +351,33 @@ func TestErrLockExhausted(t *testing.T) {
 	}
 	if !strings.Contains(err.Error(), "database is locked") {
 		t.Fatalf("exhausted error should retain the last cause: %v", err)
+	}
+}
+
+// TestIsLockBusyTypedPostgres proves PostgreSQL retry classification uses the
+// typed *pq.Error code, not text matching: 40001 and 40P01 are retryable, a
+// non-retryable PostgreSQL error is not, and the SQLite textual fallback still
+// works.
+func TestIsLockBusyTypedPostgres(t *testing.T) {
+	retryable := []*pq.Error{{Code: "40001"}, {Code: "40P01"}}
+	for _, e := range retryable {
+		if !IsLockBusy(e) {
+			t.Fatalf("code %s not classified retryable", e.Code)
+		}
+	}
+	nonRetryable := []*pq.Error{{Code: "23505"}, {Code: "42P01"}, {Code: "00000"}}
+	for _, e := range nonRetryable {
+		if IsLockBusy(e) {
+			t.Fatalf("code %s incorrectly classified retryable", e.Code)
+		}
+	}
+	if !IsLockBusy(errors.New("database is locked (5) (SQLITE_BUSY)")) {
+		t.Fatal("sqlite busy text not classified retryable")
+	}
+	if IsLockBusy(errors.New("network is unreachable")) {
+		t.Fatal("unrelated error classified retryable")
+	}
+	if IsLockBusy(nil) {
+		t.Fatal("nil classified retryable")
 	}
 }

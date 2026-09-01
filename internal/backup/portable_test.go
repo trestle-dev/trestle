@@ -498,17 +498,17 @@ func digestPostgresTables(t *testing.T, url string) string {
 //   - no raw token is ever exported.
 func TestRestoreRegistrationPolicyAndInvitations(t *testing.T) {
 	for _, provider := range storetest.Providers(t) {
-		t.Run(provider, func(t *testing.T) {
+		provider := provider
+		var raw string
+		t.Run("export-"+provider, func(t *testing.T) {
 			src := storetest.Open(t, provider)
-			// Set policy to invite and seed one used, one revoked, one expired
-			// and one outstanding invitation.
 			if _, err := src.DB().Exec("UPDATE _trestle_app_registration_policy SET policy='invite' WHERE id=1"); err != nil {
 				t.Fatal(err)
 			}
 			now := time.Now().UTC().Format(time.RFC3339Nano)
-			hash := func(v string) []byte { s := sha256.Sum256([]byte(v)); return s[:] }
+			hash := func(v string) []byte { h := sha256.Sum256([]byte(v)); return h[:] }
 			seed := [][4]string{
-				{"inv_used", "activate", "used@example.com", "2026-01-01T00:00:00Z"}, // used_at set below
+				{"inv_used", "activate", "used@example.com", "2026-01-01T00:00:00Z"},
 				{"inv_revoked", "activate", "revoked@example.com", ""},
 				{"inv_expired", "activate", "expired@example.com", ""},
 				{"inv_open", "activate", "open@example.com", ""},
@@ -519,7 +519,6 @@ func TestRestoreRegistrationPolicyAndInvitations(t *testing.T) {
 					t.Fatal(err)
 				}
 			}
-			// Mark used and revoked explicitly; expired has expires_at in the past.
 			if _, err := src.DB().Exec("UPDATE _trestle_app_invitations SET used_at=? WHERE id='inv_used'", now); err != nil {
 				t.Fatal(err)
 			}
@@ -529,25 +528,22 @@ func TestRestoreRegistrationPolicyAndInvitations(t *testing.T) {
 			if _, err := src.DB().Exec("UPDATE _trestle_app_invitations SET expires_at='2000-01-01T00:00:00Z' WHERE id='inv_expired'"); err != nil {
 				t.Fatal(err)
 			}
-			// inv_open is genuinely outstanding: future expiry, unused, not
-			// revoked, so restore must revoke it.
 			future := time.Now().UTC().Add(24 * time.Hour).Format(time.RFC3339Nano)
 			if _, err := src.DB().Exec("UPDATE _trestle_app_invitations SET expires_at=? WHERE id='inv_open'", future); err != nil {
 				t.Fatal(err)
 			}
-			// Export the source (raw tokens never appear: none are stored).
 			var buf bytes.Buffer
 			if err := Export(context.Background(), src.DB(), src.Dialect(), &buf); err != nil {
 				t.Fatal(err)
 			}
-			raw := buf.String()
+			raw = buf.String()
 			for _, tok := range []string{"inv_used", "inv_revoked", "inv_expired", "inv_open"} {
 				if strings.Contains(raw, "raw-token-"+tok) {
 					t.Fatalf("raw token for %s exported", tok)
 				}
 			}
-
-			// Import into a fresh target (migrated to 15, seeded closed).
+		})
+		t.Run(provider, func(t *testing.T) {
 			dst := storetest.Open(t, provider)
 			if err := Import(context.Background(), dst.DB(), dst.Dialect(), strings.NewReader(raw)); err != nil {
 				t.Fatal(err)
@@ -559,8 +555,7 @@ func TestRestoreRegistrationPolicyAndInvitations(t *testing.T) {
 			if policy != "invite" {
 				t.Fatalf("restored policy %q, want invite", policy)
 			}
-			var status map[string]string
-			status = map[string]string{}
+			status := map[string]string{}
 			rows, err := dst.DB().Query("SELECT id,used_at,revoked_at,expires_at FROM _trestle_app_invitations")
 			if err != nil {
 				t.Fatal(err)
@@ -590,8 +585,6 @@ func TestRestoreRegistrationPolicyAndInvitations(t *testing.T) {
 			if status["inv_expired"] != "outstanding-or-expired" {
 				t.Fatalf("expired invitation changed state: %v", status)
 			}
-			// The genuinely outstanding invitation must have been revoked by
-			// the restore policy.
 			var openRevoked string
 			if err := dst.DB().QueryRow("SELECT revoked_at FROM _trestle_app_invitations WHERE id='inv_open'").Scan(&openRevoked); err != nil || openRevoked == "" {
 				t.Fatalf("outstanding invitation not revoked on restore: %q err=%v", openRevoked, err)
@@ -600,22 +593,12 @@ func TestRestoreRegistrationPolicyAndInvitations(t *testing.T) {
 	}
 }
 
-func nullRow(v string) any {
-	if v == "" {
-		return nil
-	}
-	return v
-}
-
-// TestRestorePrePolicyArchiveUsesOpen proves a pre-v15 portable archive (whose
-// era had open registration) restores the historical open policy, replacing the
-// fresh-install closed seed, regardless of any users in the archive.
 func TestRestorePrePolicyArchiveUsesOpen(t *testing.T) {
 	for _, provider := range storetest.Providers(t) {
-		t.Run(provider, func(t *testing.T) {
+		provider := provider
+		var rewritten []byte
+		t.Run("export-"+provider, func(t *testing.T) {
 			src := storetest.Open(t, provider)
-			// Build a minimal pre-policy archive: no registrationPolicy rows,
-			// SchemaVersion forced below 15.
 			var buf bytes.Buffer
 			if err := Export(context.Background(), src.DB(), src.Dialect(), &buf); err != nil {
 				t.Fatal(err)
@@ -626,11 +609,13 @@ func TestRestorePrePolicyArchiveUsesOpen(t *testing.T) {
 			}
 			bundle.SchemaVersion = 14
 			bundle.System.RegistrationPolicy = nil
-			rewritten, err := json.Marshal(bundle)
+			var err error
+			rewritten, err = json.Marshal(bundle)
 			if err != nil {
 				t.Fatal(err)
 			}
-
+		})
+		t.Run(provider, func(t *testing.T) {
 			dst := storetest.Open(t, provider)
 			var seed string
 			if err := dst.DB().QueryRow("SELECT policy FROM _trestle_app_registration_policy WHERE id=1").Scan(&seed); err != nil {
@@ -652,3 +637,14 @@ func TestRestorePrePolicyArchiveUsesOpen(t *testing.T) {
 		})
 	}
 }
+
+func nullRow(v string) any {
+	if v == "" {
+		return nil
+	}
+	return v
+}
+
+// TestRestorePrePolicyArchiveUsesOpen proves a pre-v15 portable archive (whose
+// era had open registration) restores the historical open policy, replacing the
+// fresh-install closed seed, regardless of any users in the archive.

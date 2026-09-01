@@ -8,6 +8,7 @@ import (
 	"encoding/base64"
 	"errors"
 	"net/mail"
+	"net/url"
 	"strings"
 	"time"
 
@@ -258,20 +259,37 @@ func (s *Service) ListAccessRequests(ctx context.Context) ([]AccessRequest, erro
 	return items, rows.Err()
 }
 
-// ApproveRequest approves a pending request atomically, creating an activate
+// ApproveRequest approves a pending request exactly once, creating an activate
 // invitation (with access_request_id) and auditing, all in one transaction.
-// Returns the new raw activation token exactly once.
+// The request row is locked (PostgreSQL SELECT ... FOR UPDATE) and the
+// conditional update must affect exactly one row, so two concurrent approvals
+// yield exactly one winner and one activation invitation. Returns the new raw
+// activation token exactly once.
 func (s *Service) ApproveRequest(ctx context.Context, adminID, id string) (Invitation, error) {
-	now := s.now().UTC()
-	decided := now.Format(time.RFC3339Nano)
+	decided := s.now().UTC().Format(time.RFC3339Nano)
 	var inv Invitation
 	err := store.WithTx(ctx, s.store, func(tx store.Transaction) error {
 		var email string
-		if err := tx.QueryRowContext(ctx, "SELECT email FROM _trestle_app_access_requests WHERE id=? AND status='pending'", id).Scan(&email); err != nil {
+		var status string
+		if s.store.Dialect().Provider() == store.Postgres {
+			if err := tx.QueryRowContext(ctx, "SELECT email,status FROM _trestle_app_access_requests WHERE id=? FOR UPDATE", id).Scan(&email, &status); err != nil {
+				return errors.New("already_decided")
+			}
+		} else {
+			if err := tx.QueryRowContext(ctx, "SELECT email,status FROM _trestle_app_access_requests WHERE id=?", id).Scan(&email, &status); err != nil {
+				return errors.New("already_decided")
+			}
+		}
+		if status != "pending" {
 			return errors.New("already_decided")
 		}
-		if _, err := tx.ExecContext(ctx, "UPDATE _trestle_app_access_requests SET status='approved',decided_at=?,decided_by_admin_id=? WHERE id=? AND status='pending'", decided, adminID, id); err != nil {
+		result, err := tx.ExecContext(ctx, "UPDATE _trestle_app_access_requests SET status='approved',decided_at=?,decided_by_admin_id=? WHERE id=? AND status='pending'", decided, adminID, id)
+		if err != nil {
 			return err
+		}
+		affected, _ := result.RowsAffected()
+		if affected != 1 {
+			return errors.New("already_decided")
 		}
 		created, err := s.createInvitationTx(ctx, tx, adminID, "activate", email, id)
 		if err != nil {
@@ -286,8 +304,9 @@ func (s *Service) ApproveRequest(ctx context.Context, adminID, id string) (Invit
 	return inv, nil
 }
 
-// RejectRequest rejects a pending request atomically and audits it. No user or
-// invitation is created.
+// RejectRequest rejects a pending request exactly once and audits it. The
+// conditional update must affect exactly one row, so concurrent decisions have
+// one winner. No user or invitation is created.
 func (s *Service) RejectRequest(ctx context.Context, adminID, id string) error {
 	now := s.now().UTC().Format(time.RFC3339Nano)
 	return store.WithTx(ctx, s.store, func(tx store.Transaction) error {
@@ -304,33 +323,38 @@ func (s *Service) RejectRequest(ctx context.Context, adminID, id string) error {
 }
 
 // ReissueInvitation issues a replacement activate invitation for an approved
-// email, revoking any still-valid older activate invitations in the same
-// transaction, and auditing the reissue. The request stays approved.
-func (s *Service) ReissueInvitation(ctx context.Context, adminID, accessReqID, email string) (Invitation, error) {
-	email, ok := NormalizeEmail(email)
-	if !ok {
-		return Invitation{}, errors.New("invalid_email")
-	}
-	var status string
-	if err := s.store.QueryRowContext(ctx, "SELECT status FROM _trestle_app_access_requests WHERE id=?", accessReqID).Scan(&status); err != nil {
-		return Invitation{}, errors.New("request_not_found")
-	}
-	if status != "approved" {
-		return Invitation{}, errors.New("request_not_approved")
-	}
-	var userCount int
-	if err := s.store.QueryRowContext(ctx, "SELECT count(*) FROM _trestle_app_users WHERE email=?", email).Scan(&userCount); err != nil {
-		return Invitation{}, err
-	}
-	if userCount != 0 {
-		return Invitation{}, errors.New("user_already_exists")
-	}
+// request, deriving the email exclusively from the locked request row. The
+// caller cannot substitute a different email. It revokes genuinely outstanding
+// activation invitations for that email in the same transaction, creates
+// exactly one replacement, and audits the reissue. The request stays approved.
+func (s *Service) ReissueInvitation(ctx context.Context, adminID, accessReqID string) (Invitation, error) {
 	now := s.now().UTC().Format(time.RFC3339Nano)
 	raw := randomToken(32)
 	sum := sha256.Sum256([]byte(raw))
 	id := "inv_" + randomToken(18)
 	expires := s.now().UTC().Add(InvitationLifetime).Format(time.RFC3339Nano)
+	var inv Invitation
 	err := store.WithTx(ctx, s.store, func(tx store.Transaction) error {
+		var email, status string
+		if s.store.Dialect().Provider() == store.Postgres {
+			if err := tx.QueryRowContext(ctx, "SELECT email,status FROM _trestle_app_access_requests WHERE id=? FOR UPDATE", accessReqID).Scan(&email, &status); err != nil {
+				return errors.New("request_not_found")
+			}
+		} else {
+			if err := tx.QueryRowContext(ctx, "SELECT email,status FROM _trestle_app_access_requests WHERE id=?", accessReqID).Scan(&email, &status); err != nil {
+				return errors.New("request_not_found")
+			}
+		}
+		if status != "approved" {
+			return errors.New("request_not_approved")
+		}
+		var userCount int
+		if err := tx.QueryRowContext(ctx, "SELECT count(*) FROM _trestle_app_users WHERE email=?", email).Scan(&userCount); err != nil {
+			return err
+		}
+		if userCount != 0 {
+			return errors.New("user_already_exists")
+		}
 		if _, err := tx.ExecContext(ctx, "UPDATE _trestle_app_invitations SET revoked_at=? WHERE email=? AND kind='activate' AND used_at IS NULL AND revoked_at IS NULL", now, email); err != nil {
 			return err
 		}
@@ -338,34 +362,39 @@ func (s *Service) ReissueInvitation(ctx context.Context, adminID, accessReqID, e
 			id, "activate", email, sum[:], now, expires, adminID, accessReqID); err != nil {
 			return err
 		}
+		inv = Invitation{ID: id, Kind: "activate", Email: email, CreatedAt: now, ExpiresAt: expires, RawToken: raw, AccessReqID: &accessReqID}
 		return s.audit.Emit(ctx, tx, "admin", adminID, "app_registration.invitation.reissue", id, "success", requestID(ctx), map[string]any{"email": email})
 	})
 	if err != nil {
 		return Invitation{}, err
 	}
-	return Invitation{ID: id, Kind: "activate", Email: email, CreatedAt: now, ExpiresAt: expires, RawToken: raw, AccessReqID: &accessReqID}, nil
+	return inv, nil
 }
 
-// sweepExpired transitions pending requests past their TTL to expired and
-// purges expired/rejected requests beyond the retention window, in bounded
-// batches. Runs only during access-request-related operations.
+// sweepExpired transitions expired pending requests to the terminal `expired`
+// state and purges expired/rejected requests beyond the retention window, in
+// bounded batches of at most CleanupBatch rows per trigger with deterministic
+// ordering. It runs only during access-request-related operations, so a single
+// public request never drains the whole backlog.
 func (s *Service) sweepExpired(ctx context.Context, now time.Time) error {
-	nowStr := now.Format(time.RFC3339Nano)
 	expiredCutoff := now.Add(-AccessRequestPendingTTL).Format(time.RFC3339Nano)
 	retentionCutoff := now.Add(-AccessRequestRetentionTTL).Format(time.RFC3339Nano)
-	if _, err := s.store.ExecContext(ctx, "UPDATE _trestle_app_access_requests SET status='expired' WHERE status='pending' AND created_at <= ?", expiredCutoff); err != nil {
+	if _, err := s.store.ExecContext(ctx, "UPDATE _trestle_app_access_requests SET status='expired' WHERE id IN (SELECT id FROM _trestle_app_access_requests WHERE status='pending' AND created_at <= ? ORDER BY id LIMIT ?)", expiredCutoff, CleanupBatch); err != nil {
 		return err
 	}
-	if _, err := s.store.ExecContext(ctx, "DELETE FROM _trestle_app_access_requests WHERE status IN ('expired','rejected') AND (decided_at IS NOT NULL AND decided_at <= ? OR decided_at IS NULL AND created_at <= ?)", retentionCutoff, retentionCutoff); err != nil {
+	if _, err := s.store.ExecContext(ctx, "DELETE FROM _trestle_app_access_requests WHERE id IN (SELECT id FROM _trestle_app_access_requests WHERE status IN ('expired','rejected') AND (decided_at IS NOT NULL AND decided_at <= ? OR decided_at IS NULL AND created_at <= ?) ORDER BY id LIMIT ?)", retentionCutoff, retentionCutoff, CleanupBatch); err != nil {
 		return err
 	}
-	_ = nowStr
 	return nil
 }
 
 // createInvitationTx inserts an invitation row on the caller's transaction
 // without returning the raw token (used inside decision transactions). It does
 // not audit; the caller audits.
+func (s *Service) SweepDebug() string {
+	return s.now().UTC().Add(-AccessRequestPendingTTL).Format(time.RFC3339Nano)
+}
+
 func (s *Service) createInvitationTx(ctx context.Context, tx store.Transaction, adminID, kind, email, accessReqID string) (Invitation, error) {
 	raw := randomToken(32)
 	sum := sha256.Sum256([]byte(raw))
@@ -412,4 +441,86 @@ func requestID(ctx context.Context) string {
 		return v
 	}
 	return ""
+}
+
+// ActivationBaseURL is the optional administrator-configured application URL
+// used to build fragment-only activation links. It is stored in system_meta
+// key app_activation_base_url.
+func (s *Service) ActivationBaseURL(ctx context.Context) (string, error) {
+	var value string
+	err := s.store.QueryRowContext(ctx, "SELECT value FROM _trestle_system_meta WHERE key='app_activation_base_url'").Scan(&value)
+	if errors.Is(err, sql.ErrNoRows) {
+		return "", nil
+	}
+	return value, err
+}
+
+// SetActivationBaseURL validates and stores the activation base URL. It must
+// be absolute, https (or http for loopback hosts in local development), free
+// of username/password, fragments and query strings, bounded in length, and
+// free of control characters. Empty clears the setting.
+func (s *Service) SetActivationBaseURL(ctx context.Context, adminID, value string) error {
+	if strings.TrimSpace(value) == "" {
+		return store.WithTx(ctx, s.store, func(tx store.Transaction) error {
+			if _, err := tx.ExecContext(ctx, "DELETE FROM _trestle_system_meta WHERE key='app_activation_base_url'"); err != nil {
+				return err
+			}
+			return s.audit.Emit(ctx, tx, "admin", adminID, "app_registration.activation_base_url.clear", "", "success", requestID(ctx), nil)
+		})
+	}
+	if _, err := ValidateActivationBaseURL(value); err != nil {
+		return err
+	}
+	now := s.now().UTC().Format(time.RFC3339Nano)
+	err := store.WithTx(ctx, s.store, func(tx store.Transaction) error {
+		if _, err := tx.ExecContext(ctx, "INSERT INTO _trestle_system_meta(key,value,updated_at) VALUES('app_activation_base_url',?,?) ON CONFLICT(key) DO UPDATE SET value=excluded.value, updated_at=excluded.updated_at", value, now); err != nil {
+			return err
+		}
+		return s.audit.Emit(ctx, tx, "admin", adminID, "app_registration.activation_base_url.set", "", "success", requestID(ctx), nil)
+	})
+	return err
+}
+
+// ActivationLink builds a fragment-only activation link from the configured
+// base URL and a raw token, using URL construction rather than string
+// concatenation. The token never appears in the path, query or fragment of an
+// HTTP request target; it is placed in the fragment so the browser reads it
+// client-side and submits it in the POST body.
+func ActivationLink(baseURL, rawToken string) (string, error) {
+	parsed, err := ValidateActivationBaseURL(baseURL)
+	if err != nil {
+		return "", err
+	}
+	parsed.Fragment = "invite=" + rawToken
+	return parsed.String(), nil
+}
+
+// ValidateActivationBaseURL validates and normalizes an activation base URL.
+func ValidateActivationBaseURL(value string) (*url.URL, error) {
+	value = strings.TrimSpace(value)
+	if len(value) > 2048 {
+		return nil, errors.New("activation_base_url_too_long")
+	}
+	for i := 0; i < len(value); i++ {
+		if value[i] < 0x20 || value[i] == 0x7f {
+			return nil, errors.New("activation_base_url_invalid")
+		}
+	}
+	parsed, err := url.Parse(value)
+	if err != nil || !parsed.IsAbs() || parsed.Host == "" {
+		return nil, errors.New("activation_base_url_invalid")
+	}
+	if parsed.User != nil {
+		return nil, errors.New("activation_base_url_invalid")
+	}
+	if parsed.Fragment != "" || parsed.RawQuery != "" {
+		return nil, errors.New("activation_base_url_invalid")
+	}
+	if parsed.Scheme != "https" {
+		host := parsed.Hostname()
+		if parsed.Scheme != "http" || !(host == "localhost" || strings.HasPrefix(host, "127.") || host == "::1") {
+			return nil, errors.New("activation_base_url_invalid")
+		}
+	}
+	return parsed, nil
 }

@@ -194,8 +194,9 @@ func (h *Handler) inviteAccept(w http.ResponseWriter, r *http.Request) {
 			return errors.New("invalid_invitation")
 		}
 		if kind == "self_register" {
-			var policy string
-			if err := tx.QueryRowContext(r.Context(), "SELECT policy FROM _trestle_app_registration_policy WHERE id=1").Scan(&policy); err != nil {
+			// Serialize against policy changes on the singleton policy row.
+			policy, err := h.policyForTx(r.Context(), tx)
+			if err != nil {
 				return err
 			}
 			if policy != appreg.PolicyInvite {
@@ -449,6 +450,30 @@ func (h *Handler) adminRoutes(w http.ResponseWriter, r *http.Request) {
 		writeJSON(w, 200, map[string]any{"policy": policy.Name, "setAt": policy.SetAt})
 		return
 	}
+	if r.URL.Path == "/admin/v1/app-registration/activation-base-url" && r.Method == http.MethodGet {
+		value, err := h.reg.ActivationBaseURL(r.Context())
+		if err != nil {
+			writeError(w, 500, "internal_error", "The request could not be completed.")
+			return
+		}
+		writeJSON(w, 200, map[string]any{"activationBaseUrl": value})
+		return
+	}
+	if r.URL.Path == "/admin/v1/app-registration/activation-base-url" && r.Method == http.MethodPut {
+		principal, _ := h.admin.Authorize(r, true)
+		var in struct {
+			ActivationBaseURL string `json:"activationBaseUrl"`
+		}
+		if !decode(w, r, &in) {
+			return
+		}
+		if err := h.reg.SetActivationBaseURL(r.Context(), principal.AdminID, in.ActivationBaseURL); err != nil {
+			writeError(w, 400, err.Error(), "The request could not be applied.")
+			return
+		}
+		writeJSON(w, 200, map[string]any{"ok": true})
+		return
+	}
 	if r.URL.Path == "/admin/v1/app-registration/invitations" && r.Method == http.MethodPost {
 		principal, _ := h.admin.Authorize(r, true)
 		var in struct {
@@ -519,13 +544,9 @@ func (h *Handler) adminRoutes(w http.ResponseWriter, r *http.Request) {
 			return
 		case parts[3] == "requests" && parts[5] == "reissue" && r.Method == http.MethodPost:
 			principal, _ := h.admin.Authorize(r, true)
-			var in struct {
-				Email string `json:"email"`
-			}
-			if !decode(w, r, &in) {
-				return
-			}
-			inv, err := h.reg.ReissueInvitation(r.Context(), principal.AdminID, parts[4], in.Email)
+			// The email is derived from the approved request row; the caller
+			// cannot substitute a different email.
+			inv, err := h.reg.ReissueInvitation(r.Context(), principal.AdminID, parts[4])
 			if err != nil {
 				writeError(w, 400, err.Error(), "The request could not be applied.")
 				return

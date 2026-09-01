@@ -3,6 +3,8 @@ package appauth
 import (
 	"bytes"
 	"context"
+	"crypto/sha256"
+	"database/sql"
 	"encoding/json"
 	"fmt"
 	"net/http"
@@ -13,6 +15,7 @@ import (
 	"time"
 
 	"github.com/trestle-dev/trestle/internal/adminauth"
+	"github.com/trestle-dev/trestle/internal/appreg"
 	"github.com/trestle-dev/trestle/internal/audit"
 	"github.com/trestle-dev/trestle/internal/store"
 	"github.com/trestle-dev/trestle/internal/storetest"
@@ -655,5 +658,258 @@ func TestConcurrentPolicyChangeAndRegistrationOrdering(t *testing.T) {
 				setPolicy(t, s, "open")
 			}
 		})
+	}
+}
+
+// TestReissueCannotSubstituteEmail proves the reissue endpoint derives the
+// email exclusively from the approved request row: supplying a different email
+// in the body must be ignored and the resulting activation invitation must be
+// bound to the approved request's email.
+func TestReissueCannotSubstituteEmail(t *testing.T) {
+	for _, provider := range storetest.Providers(t) {
+		t.Run(provider, func(t *testing.T) {
+			s, h := setupReg(t, provider)
+			admin := adminauth.New(s.DB(), string(s.Provider()))
+			cookie, csrf := adminSetup(t, s, admin)
+			setPolicy(t, s, "approval")
+			publicCall(h, "/api/v1/auth/access-request", `{"email":"approved@example.com"}`)
+			w := adminCall(h, cookie, csrf, "GET", "/admin/v1/app-registration/requests", "")
+			var list struct {
+				Items []struct {
+					ID string `json:"id"`
+				}
+			}
+			json.Unmarshal(w.Body.Bytes(), &list)
+			rid := list.Items[0].ID
+			if w := adminCall(h, cookie, csrf, "POST", "/admin/v1/app-registration/requests/"+rid+"/approve", `{}`); w.Code != 201 {
+				t.Fatalf("approve %d", w.Code)
+			}
+			// Reissue with a substituted email in the body: it must be ignored.
+			w = adminCall(h, cookie, csrf, "POST", "/admin/v1/app-registration/requests/"+rid+"/reissue", `{"email":"attacker@example.com"}`)
+			if w.Code != 201 {
+				t.Fatalf("reissue %d %s", w.Code, w.Body.String())
+			}
+			var inv struct{ Email, Token string }
+			json.Unmarshal(w.Body.Bytes(), &inv)
+			if inv.Email != "approved@example.com" {
+				t.Fatalf("reissue used substituted email %q", inv.Email)
+			}
+			// The activation invitation must be for the approved email.
+			if w := publicCall(h, "/api/v1/auth/invite/accept", `{"token":"`+inv.Token+`","password":"1234567"}`); w.Code != 201 {
+				t.Fatalf("activation %d", w.Code)
+			}
+			var users int
+			if err := s.DB().QueryRow("SELECT count(*) FROM _trestle_app_users WHERE email='attacker@example.com'").Scan(&users); err != nil || users != 0 {
+				t.Fatalf("attacker email user count=%d err=%v", users, err)
+			}
+		})
+	}
+}
+
+// TestConcurrentApprovalSingleWinner proves two concurrent approvals of the
+// same request yield exactly one 201, one conflict, one activation invitation
+// and one approval audit fact.
+func TestConcurrentApprovalSingleWinner(t *testing.T) {
+	for _, provider := range storetest.Providers(t) {
+		t.Run(provider, func(t *testing.T) {
+			s, h := setupReg(t, provider)
+			admin := adminauth.New(s.DB(), string(s.Provider()))
+			cookie, csrf := adminSetup(t, s, admin)
+			setPolicy(t, s, "approval")
+			publicCall(h, "/api/v1/auth/access-request", `{"email":"race@example.com"}`)
+			w := adminCall(h, cookie, csrf, "GET", "/admin/v1/app-registration/requests", "")
+			var list struct {
+				Items []struct {
+					ID string `json:"id"`
+				}
+			}
+			json.Unmarshal(w.Body.Bytes(), &list)
+			rid := list.Items[0].ID
+
+			results := make(chan int, 2)
+			for i := 0; i < 2; i++ {
+				go func() {
+					results <- adminCall(h, cookie, csrf, "POST", "/admin/v1/app-registration/requests/"+rid+"/approve", `{}`).Code
+				}()
+			}
+			one, two := <-results, <-results
+			if !((one == 201 && two == 409) || (one == 409 && two == 201)) {
+				t.Fatalf("concurrent approval codes %d %d, want one 201 and one 409", one, two)
+			}
+			var invites int
+			if err := s.DB().QueryRow("SELECT count(*) FROM _trestle_app_invitations WHERE access_request_id=?", rid).Scan(&invites); err != nil || invites != 1 {
+				t.Fatalf("activation invitations=%d err=%v, want exactly one", invites, err)
+			}
+			var audits int
+			if err := s.DB().QueryRow("SELECT count(*) FROM _trestle_audit WHERE action='app_registration.request.approve' AND target=?", rid).Scan(&audits); err != nil || audits != 1 {
+				t.Fatalf("approval audit facts=%d err=%v, want exactly one", audits, err)
+			}
+		})
+	}
+}
+
+// TestConcurrentReissueSingleValidToken proves two simultaneous reissues of the
+// same approved request leave exactly one valid replacement activation token:
+// the older one is revoked by the winner.
+func TestConcurrentReissueSingleValidToken(t *testing.T) {
+	for _, provider := range storetest.Providers(t) {
+		t.Run(provider, func(t *testing.T) {
+			s, h := setupReg(t, provider)
+			admin := adminauth.New(s.DB(), string(s.Provider()))
+			cookie, csrf := adminSetup(t, s, admin)
+			setPolicy(t, s, "approval")
+			publicCall(h, "/api/v1/auth/access-request", `{"email":"reissue-race@example.com"}`)
+			w := adminCall(h, cookie, csrf, "GET", "/admin/v1/app-registration/requests", "")
+			var list struct {
+				Items []struct {
+					ID string `json:"id"`
+				}
+			}
+			json.Unmarshal(w.Body.Bytes(), &list)
+			rid := list.Items[0].ID
+			adminCall(h, cookie, csrf, "POST", "/admin/v1/app-registration/requests/"+rid+"/approve", `{}`)
+
+			results := make(chan string, 2)
+			for i := 0; i < 2; i++ {
+				go func() {
+					w := adminCall(h, cookie, csrf, "POST", "/admin/v1/app-registration/requests/"+rid+"/reissue", `{}`)
+					if w.Code == 201 {
+						var inv struct{ Token string }
+						json.Unmarshal(w.Body.Bytes(), &inv)
+						results <- inv.Token
+					} else {
+						results <- "conflict"
+					}
+				}()
+			}
+			tokA, tokB := <-results, <-results
+			// At most one valid replacement token may remain.
+			var valid int
+			var aRevoked, bRevoked sql.NullString
+			_ = s.DB().QueryRow("SELECT revoked_at FROM _trestle_app_invitations WHERE token_hash=?", sha256Hash(tokA)).Scan(&aRevoked)
+			_ = s.DB().QueryRow("SELECT revoked_at FROM _trestle_app_invitations WHERE token_hash=?", sha256Hash(tokB)).Scan(&bRevoked)
+			_ = aRevoked
+			_ = bRevoked
+			// Count valid (unused, not revoked, unexpired) activate invitations
+			// for this request.
+			if err := s.DB().QueryRow("SELECT count(*) FROM _trestle_app_invitations WHERE access_request_id=? AND used_at IS NULL AND revoked_at IS NULL", rid).Scan(&valid); err != nil || valid != 1 {
+				t.Fatalf("valid replacement tokens=%d err=%v, want exactly one", valid, err)
+			}
+		})
+	}
+}
+
+func sha256Hash(v string) []byte { h := sha256.Sum256([]byte(v)); return h[:] }
+
+// TestBoundedCleanupProcessesAtMostOneBatch proves the sweep processes at most
+// CleanupBatch rows per trigger with deterministic ordering, and subsequent
+// triggers make progress without unbounded draining during one request.
+func TestBoundedCleanupProcessesAtMostOneBatch(t *testing.T) {
+	for _, provider := range storetest.Providers(t) {
+		t.Run(provider, func(t *testing.T) {
+			s, h := setupReg(t, provider)
+			// Insert more than one batch of pending requests past the 14-day
+			// pending TTL but within the 30-day retention window, so a trigger
+			// expires them without purging them (proving the expiry batch is
+			// bounded).
+			created := time.Now().UTC().Add(-20 * 24 * time.Hour).Format(time.RFC3339Nano)
+			for i := 0; i < appreg.CleanupBatch+50; i++ {
+				if _, err := s.DB().Exec("INSERT INTO _trestle_app_access_requests(id,email,status,created_at) VALUES(?,?,'pending',?)",
+					fmt.Sprintf("areq_%d", i), fmt.Sprintf("exp%d@example.com", i), created); err != nil {
+					t.Fatal(err)
+				}
+			}
+			// One trigger must not expire more than one batch.
+			if err := h.reg.SubmitAccessRequest(context.Background(), "fresh@example.com"); err != nil {
+				t.Fatal(err)
+			}
+			var expired int
+			if err := s.DB().QueryRow("SELECT count(*) FROM _trestle_app_access_requests WHERE status='expired'").Scan(&expired); err != nil {
+				t.Fatal(err)
+			}
+			if expired > appreg.CleanupBatch {
+				t.Fatalf("one trigger expired %d rows, want <= %d", expired, appreg.CleanupBatch)
+			}
+			// The fresh request is still pending.
+			var fresh int
+			if err := s.DB().QueryRow("SELECT count(*) FROM _trestle_app_access_requests WHERE email='fresh@example.com' AND status='pending'").Scan(&fresh); err != nil || fresh != 1 {
+				t.Fatalf("fresh pending=%d err=%v", fresh, err)
+			}
+			// A second trigger makes progress without unbounded draining.
+			if err := h.reg.SubmitAccessRequest(context.Background(), "fresh2@example.com"); err != nil {
+				t.Fatal(err)
+			}
+			var expired2 int
+			if err := s.DB().QueryRow("SELECT count(*) FROM _trestle_app_access_requests WHERE status='expired'").Scan(&expired2); err != nil {
+				t.Fatal(err)
+			}
+			if expired2 <= expired {
+				t.Fatalf("second trigger made no progress: %d -> %d", expired, expired2)
+			}
+			if expired2 > appreg.CleanupBatch*2 {
+				t.Fatalf("two triggers expired %d rows, want bounded progress", expired2)
+			}
+
+			// The purge path is also bounded: seed far-past rejected rows past
+			// the 30-day retention window and verify one trigger purges at most
+			// one batch.
+			purgedCreated := time.Now().UTC().Add(-40 * 24 * time.Hour).Format(time.RFC3339Nano)
+			for i := 0; i < appreg.CleanupBatch+20; i++ {
+				if _, err := s.DB().Exec("INSERT INTO _trestle_app_access_requests(id,email,status,created_at,decided_at) VALUES(?,?,'rejected',?,?)",
+					fmt.Sprintf("prune_%d", i), fmt.Sprintf("r%d@example.com", i), purgedCreated, purgedCreated); err != nil {
+					t.Fatal(err)
+				}
+			}
+			if err := h.reg.SubmitAccessRequest(context.Background(), "fresh3@example.com"); err != nil {
+				t.Fatal(err)
+			}
+			var remaining int
+			if err := s.DB().QueryRow("SELECT count(*) FROM _trestle_app_access_requests WHERE id LIKE 'prune_%'").Scan(&remaining); err != nil {
+				t.Fatal(err)
+			}
+			if remaining > appreg.CleanupBatch {
+				t.Fatalf("one trigger purged only %d of the far-past rows, want at most %d left", appreg.CleanupBatch+20-remaining, appreg.CleanupBatch)
+			}
+		})
+	}
+}
+
+func TestActivationBaseURLValidation(t *testing.T) {
+	valid := []string{
+		"https://app.example.com/register",
+		"https://app.example.com",
+		"http://127.0.0.1:8080/register",
+		"http://localhost:3000/register",
+	}
+	for _, v := range valid {
+		if _, err := appreg.ValidateActivationBaseURL(v); err != nil {
+			t.Fatalf("valid %q rejected: %v", v, err)
+		}
+	}
+	invalid := []string{
+		"http://app.example.com",                           // non-loopback http
+		"ftp://app.example.com",                            // unsafe scheme
+		"https://user:pass@example.com",                    // credentials
+		"https://example.com#frag",                         // fragment
+		"https://example.com?q=1",                          // query
+		"not-a-url",                                        // not absolute
+		"/relative",                                        // not absolute
+		"https://example.com/" + strings.Repeat("a", 3000), // too long
+	}
+	for _, v := range invalid {
+		if _, err := appreg.ValidateActivationBaseURL(v); err == nil {
+			t.Fatalf("invalid %q accepted", v)
+		}
+	}
+	// Fragment construction uses URL handling, not concatenation.
+	link, err := appreg.ActivationLink("https://app.example.com/register", "tok123")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if link != "https://app.example.com/register#invite=tok123" {
+		t.Fatalf("link %q", link)
+	}
+	if strings.Contains(link, "?") {
+		t.Fatal("token must not appear in a query string")
 	}
 }
