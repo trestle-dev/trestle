@@ -238,14 +238,30 @@ else
     printf '%s' "$good" | LC_ALL=C grep -Eq "$ver_re" || fail "VERSION validation rejected valid form: $good"
   done
   for bad in 0.1.1- 0.1.1-. 0.1.1-rc. 0.1 0.1.1.2 abc 1.2.3-beta..4 ''; do
-    if [ -n "$bad" ] && printf '%s' "$bad" | LC_ALL=C grep -Eq "$ver_re"; then
+    if printf '%s' "$bad" | LC_ALL=C grep -Eq "$ver_re"; then
       fail "VERSION validation accepted malformed form: $bad"
     fi
   done
+fi
+
+# 7. The runbook must retain both release-kind contracts: the tag annotation
+#    follows the release kind (stable vs prerelease) and the asset-inspection
+#    prerelease requirement is conditional, so a stable release requires
+#    prerelease=false and a prerelease requires prerelease=true.
+runbook="$root/docs/release-runbook.md"
+if grep -qF 'annotation="Trestle v${VERSION} (preview / release candidate)"' "$runbook" \
+   && grep -qF 'annotation="Trestle v${VERSION} (stable public preview)"' "$runbook"; then
+  :
+else
+  fail "runbook tag annotation is not conditional on the release kind"
+fi
+if ! grep -q 'stable version is a normal release' "$runbook" \
+   || ! grep -q 'prerelease version is .*prerelease=true' "$runbook"; then
+  fail "runbook asset-inspection prerelease requirement is not conditional"
 fi
 
 if [ "$failures" -gt 0 ]; then
   echo "release-contract regression: $failures failure(s)" >&2
   exit 1
 fi
-echo "release-contract regression passed: workflow wiring, release-notes body (stable/prerelease maturity), asset contract, script agreement, prerelease tag semantics, release-verify policy, runbook VERSION validation"
+echo "release-contract regression passed: workflow wiring, release-notes body (stable/prerelease maturity), asset contract, script agreement, prerelease tag semantics, release-verify policy, runbook VERSION validation (including empty), runbook release-kind contracts"
