@@ -24,6 +24,7 @@ jobs:
           cache: true
       - name: Verify
         run: |
+          test -z "$(gofmt -l .)"
           go test ./...
           go vet ./...
           node --check internal/web/public/assets/js/script.js

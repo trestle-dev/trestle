@@ -16,7 +16,7 @@ runbook; every example uses it:
 
 ```sh
 export VERSION="0.1.1"        # MAJOR.MINOR.PATCH, optionally -prerelease.suffix
-printf '%s' "$VERSION" | LC_ALL=C grep -Eq '^[0-9][0-9]*\.[0-9][0-9]*\.[0-9][0-9]*([-.][0-9A-Za-z][0-9A-Za-z.]*)?$' \
+printf '%s' "$VERSION" | LC_ALL=C grep -Eq '^[0-9]+[.][0-9]+[.][0-9]+(-[0-9A-Za-z]+([.][0-9A-Za-z]+)*)?$' \
   || { echo "invalid VERSION '$VERSION'" >&2; exit 1; }
 case "$VERSION" in
   *-*) echo "releasing prerelease tag v$VERSION (GitHub prerelease)" ;;
@@ -24,11 +24,15 @@ case "$VERSION" in
 esac
 ```
 
-The tag is always `v$VERSION`. A stable `vMAJOR.MINOR.PATCH` tag is a normal
-GitHub release with stable public-preview product maturity; it is never itself
-a release candidate and makes no production-proven or battle-proven claim. A
-tag containing a `-` suffix (for example `v0.1.0-rc.1`) is a GitHub prerelease
-that honestly describes itself as a preview / release candidate.
+The validation accepts exactly a stable `MAJOR.MINOR.PATCH` or a prerelease
+`MAJOR.MINOR.PATCH-<identifier>` (with optional dot-separated identifiers). It
+rejects malformed values including a trailing separator, an empty prerelease
+identifier, or anything after the numeric core other than a `-`-prefixed
+identifier. The tag is always `v$VERSION`. A stable `vMAJOR.MINOR.PATCH` tag is
+a normal GitHub release with stable public-preview product maturity; it is never
+itself a release candidate and makes no production-proven or battle-proven
+claim. A tag containing a `-` suffix (for example `v0.1.0-rc.1`) is a GitHub
+prerelease that honestly describes itself as a preview / release candidate.
 
 ## Preconditions
 
@@ -76,10 +80,17 @@ must equal the recorded reviewed commit.
 
 ### 1. Tag (human)
 
-Create the annotated tag locally and push it:
+Create the annotated tag locally and push it. The annotation follows the
+release kind determined above: a stable version is tagged as a stable public
+preview, a prerelease version is tagged honestly as a preview / release
+candidate:
 
 ```sh
-git tag -a "v${VERSION}" -m "Trestle v${VERSION} (stable public preview)"
+case "$VERSION" in
+  *-*) annotation="Trestle v${VERSION} (preview / release candidate)" ;;
+  *)   annotation="Trestle v${VERSION} (stable public preview)" ;;
+esac
+git tag -a "v${VERSION}" -m "$annotation"
 git push origin "v${VERSION}"
 ```
 
@@ -122,9 +133,11 @@ Verify on the release page or via the API:
 - All six archives and `SHA256SUMS` are attached to `v${VERSION}`.
 - `SHA256SUMS -c` passes against the downloaded archives.
 - Each `.tar.gz` contains exactly `trestle_<version>_<os>_<arch>/trestle`.
-- The release is a normal release (`draft=false`, `prerelease=false`), so
-  `/releases/latest` will select it. A draft or prerelease would be excluded
-  from `latest` resolution.
+- The release kind matches the tag: a stable version is a normal release
+  (`draft=false`, `prerelease=false`) so `/releases/latest` selects it; a
+  prerelease version is `draft=false`, `prerelease=true` so it stays out of
+  `latest` resolution and must be selected explicitly by version. A draft
+  would be excluded from `latest` in either case.
 
 ### 4. Hosted-script verification (human)
 

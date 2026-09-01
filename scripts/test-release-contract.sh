@@ -77,6 +77,9 @@ if not gen_notes_ok: checks.append("publish step has no generate_release_notes")
 if not package_ok: checks.append("build job does not run package-release.sh")
 if not files_ok: checks.append("publish step does not upload dist/*")
 if not subject_ok: checks.append("attest step does not attest dist/*")
+verify_runs = " ".join(s.get("run") or "" for s in steps if s.get("name") == "Verify")
+if "test -z \"$(gofmt -l .)\"" not in verify_runs:
+    checks.append("release workflow Verify step no longer enforces gofmt (`test -z \"$(gofmt -l .)\"`)")
 for c in checks: print("workflow issue:", c)
 if checks: sys.exit(1)
 PY
@@ -223,8 +226,26 @@ print("release-verify workflow is manual-only, read-only, required-input, real-a
 PY
 [ "$?" -eq 0 ] || fail "release-verify workflow structure"
 
+# 6. The runbook's VERSION validation must be present and must accept exactly
+#    the intended stable and prerelease forms while rejecting malformed values
+#    (trailing separators, empty prerelease identifiers, extra numeric parts).
+if ! grep -qF "grep -Eq '^[0-9]+[.][0-9]+[.][0-9]+(-[0-9A-Za-z]+([.][0-9A-Za-z]+)*)?\$'" \
+      "$root/docs/release-runbook.md"; then
+  fail "runbook VERSION validation regex is missing or malformed"
+else
+  ver_re='^[0-9]+[.][0-9]+[.][0-9]+(-[0-9A-Za-z]+([.][0-9A-Za-z]+)*)?$'
+  for good in 0.1.1 0.1.0-rc.1 1.2.3-beta.2.4; do
+    printf '%s' "$good" | LC_ALL=C grep -Eq "$ver_re" || fail "VERSION validation rejected valid form: $good"
+  done
+  for bad in 0.1.1- 0.1.1-. 0.1.1-rc. 0.1 0.1.1.2 abc 1.2.3-beta..4 ''; do
+    if [ -n "$bad" ] && printf '%s' "$bad" | LC_ALL=C grep -Eq "$ver_re"; then
+      fail "VERSION validation accepted malformed form: $bad"
+    fi
+  done
+fi
+
 if [ "$failures" -gt 0 ]; then
   echo "release-contract regression: $failures failure(s)" >&2
   exit 1
 fi
-echo "release-contract regression passed: workflow wiring, release-notes body (stable/prerelease maturity), asset contract, script agreement, prerelease tag semantics, release-verify policy"
+echo "release-contract regression passed: workflow wiring, release-notes body (stable/prerelease maturity), asset contract, script agreement, prerelease tag semantics, release-verify policy, runbook VERSION validation"
