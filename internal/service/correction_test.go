@@ -425,3 +425,279 @@ func TestRecoveryTimeMarkerProvesTiming(t *testing.T) {
 		}
 	}
 }
+
+type mutationCounters struct {
+	account bool
+	mkdir   bool
+	chmod   bool
+	chown   bool
+}
+
+func watchMutations(t *testing.T) *mutationCounters {
+	t.Helper()
+	c := &mutationCounters{}
+	oldAccount, oldMkdir, oldChmod, oldChown := ensureAccount, mkdirData, chmodPath, chownData
+	ensureAccount = func() error { c.account = true; return nil }
+	mkdirData = func(string, os.FileMode) error { c.mkdir = true; return nil }
+	chmodPath = func(string, os.FileMode) error { c.chmod = true; return nil }
+	chownData = func(string) error { c.chown = true; return nil }
+	t.Cleanup(func() { ensureAccount, mkdirData, chmodPath, chownData = oldAccount, oldMkdir, oldChmod, oldChown })
+	return c
+}
+
+func (c *mutationCounters) any() bool { return c.account || c.mkdir || c.chmod || c.chown }
+
+func lifecycleMutation(log []string) bool {
+	for _, call := range log {
+		if strings.HasPrefix(call, "systemctl enable ") || strings.HasPrefix(call, "systemctl disable ") ||
+			strings.HasPrefix(call, "systemctl start ") || strings.HasPrefix(call, "systemctl stop ") ||
+			strings.HasPrefix(call, "systemctl restart ") || call == "systemctl daemon-reload" {
+			return true
+		}
+	}
+	return false
+}
+
+func TestInstallRefusalCausesZeroMutation(t *testing.T) {
+	cases := []struct{ name string }{
+		{"foreign-unit"}, {"tampered-unit"}, {"unsupported-enabled-state"},
+		{"unsupported-active-state"}, {"state-query-failure"}, {"invalid-incoming-executable"},
+		{"invalid-env-file"}, {"unacceptable-data-dir"},
+	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			r := newStrictService(t)
+			c := watchMutations(t)
+			installManagedUnit(t)
+			exe := filepath.Join(t.TempDir(), "tr")
+			os.WriteFile(exe, []byte("#!/bin/sh\nexit 0\n"), 0o755)
+			dataDir := "/var/lib/trestle"
+			envfile := ""
+			switch tc.name {
+			case "foreign-unit":
+				writeFileAtomic(UnitPath, []byte("[Unit]\nDescription=admin\n[Service]\nExecStart=/usr/bin/x\n[Install]\nWantedBy=multi-user.target\n"), 0o644)
+			case "tampered-unit":
+				u := string(mustRead(t, UnitPath))
+				writeFileAtomic(UnitPath, []byte(strings.Replace(u, "127.0.0.1:8090", "127.0.0.1:9999", 1)), 0o644)
+			case "unsupported-enabled-state":
+				setState(r, "masked", "inactive")
+			case "unsupported-active-state":
+				setState(r, "enabled", "reloading")
+			case "state-query-failure":
+				r.script["systemctl is-enabled trestle.service"] = fakeResult{out: "", code: 1, err: fmt.Errorf("query failed")}
+			case "invalid-incoming-executable":
+				os.Remove(exe)
+			case "invalid-env-file":
+				bad := filepath.Join(t.TempDir(), "bad.env")
+				os.WriteFile(bad, []byte("X=1\n"), 0o644)
+				envfile = bad
+			case "unacceptable-data-dir":
+				dataDir = filepath.Join(t.TempDir(), "existing")
+				os.MkdirAll(dataDir, 0o755)
+				oldOwned := requireServiceOwned
+				requireServiceOwned = func(string) error { return fmt.Errorf("owned by UID 1000") }
+				t.Cleanup(func() { requireServiceOwned = oldOwned })
+			}
+			beforeBin, _ := os.ReadFile(BinaryPath)
+			if e := Install(exe, dataDir, "127.0.0.1:9090", envfile); e == nil {
+				t.Fatalf("refusal case %s unexpectedly succeeded", tc.name)
+			}
+			if c.any() {
+				t.Fatalf("refusal case %s mutated account/mkdir/chmod/chown: %+v", tc.name, c)
+			}
+			afterBin, _ := os.ReadFile(BinaryPath)
+			if !bytes.Equal(beforeBin, afterBin) {
+				t.Fatalf("refusal case %s mutated the binary", tc.name)
+			}
+			if lifecycleMutation(r.log) {
+				t.Fatalf("refusal case %s performed a lifecycle mutation: %v", tc.name, r.log)
+			}
+		})
+	}
+}
+
+func TestDataDirRefusesAncestorSymlinkEscape(t *testing.T) {
+	r := newStrictService(t)
+	base := t.TempDir()
+	protected := filepath.Join(base, "protected")
+	os.MkdirAll(protected, 0o755)
+	link := filepath.Join(base, "link")
+	if e := os.Symlink(protected, link); e != nil {
+		t.Fatal(e)
+	}
+	exe := filepath.Join(t.TempDir(), "tr")
+	os.WriteFile(exe, []byte("#!/bin/sh\nexit 0\n"), 0o755)
+	dataDir := filepath.Join(link, "project")
+	if e := Install(exe, dataDir, "127.0.0.1:8090", ""); e == nil {
+		t.Fatal("install followed an ancestor symlink escape")
+	}
+	if _, e := os.Lstat(filepath.Join(protected, "project")); !os.IsNotExist(e) {
+		t.Fatalf("leaf created at resolved protected target: %v", e)
+	}
+	if lifecycleMutation(r.log) {
+		t.Fatalf("ancestor-symlink install mutated lifecycle: %v", r.log)
+	}
+}
+
+func TestDataDirChmodFailure(t *testing.T) {
+	// New leaf.
+	{
+		newStrictService(t)
+		parent := t.TempDir()
+		newData := filepath.Join(parent, "tr-data")
+		exe := filepath.Join(t.TempDir(), "tr")
+		os.WriteFile(exe, []byte("#!/bin/sh\nexit 0\n"), 0o755)
+		oldMkdir, oldChmod := mkdirData, chmodPath
+		mkdirData = func(p string, mode os.FileMode) error { return os.Mkdir(p, mode) }
+		chmodPath = func(string, os.FileMode) error { return fmt.Errorf("chmod failed") }
+		defer func() { mkdirData, chmodPath = oldMkdir, oldChmod }()
+		if e := Install(exe, newData, "127.0.0.1:8090", ""); e == nil {
+			t.Fatal("install succeeded despite new-leaf chmod failure")
+		}
+		if _, e := os.Lstat(newData); !os.IsNotExist(e) {
+			t.Fatalf("partial leaf left behind: %v", e)
+		}
+	}
+	// Existing leaf.
+	{
+		newStrictService(t)
+		dir := t.TempDir()
+		existing := filepath.Join(dir, "existing")
+		os.MkdirAll(existing, 0o755)
+		oldChmod := chmodPath
+		chmodPath = func(string, os.FileMode) error { return fmt.Errorf("chmod failed") }
+		defer func() { chmodPath = oldChmod }()
+		exe := filepath.Join(t.TempDir(), "tr")
+		os.WriteFile(exe, []byte("#!/bin/sh\nexit 0\n"), 0o755)
+		if e := Install(exe, existing, "127.0.0.1:8090", ""); e == nil {
+			t.Fatal("install succeeded despite existing-leaf chmod failure")
+		}
+	}
+}
+
+func TestInstallRollbackSurfacesNeutralizationFailures(t *testing.T) {
+	// Forward failure + rollback stop failure.
+	{
+		r := newStrictService(t)
+		installManagedUnit(t)
+		setState(r, "enabled", "active")
+		exe := filepath.Join(t.TempDir(), "tr")
+		os.WriteFile(exe, []byte("#!/bin/sh\nexit 0\n"), 0o755)
+		r.script["systemctl daemon-reload"] = fakeResult{}
+		r.script["systemctl disable trestle.service"] = fakeResult{}
+		r.script["systemctl enable trestle.service"] = fakeResult{}
+		r.script["systemctl restart trestle.service"] = fakeResult{out: "activation failed", code: 1}
+		r.script["systemctl stop trestle.service"] = fakeResult{out: "cannot stop", code: 1}
+		e := Install(exe, "/var/lib/trestle", "127.0.0.1:9090", "")
+		if e == nil {
+			t.Fatal("install succeeded despite forward failure")
+		}
+		if !strings.Contains(e.Error(), "neutralize stop") {
+			t.Fatalf("rollback stop failure not surfaced: %v", e)
+		}
+		if !strings.Contains(e.Error(), "rollback incomplete") {
+			t.Fatalf("rollback incomplete not reported: %v", e)
+		}
+	}
+	// Forward failure + rollback disable failure.
+	{
+		r := newStrictService(t)
+		installManagedUnit(t)
+		setState(r, "enabled", "inactive")
+		exe := filepath.Join(t.TempDir(), "tr")
+		os.WriteFile(exe, []byte("#!/bin/sh\nexit 0\n"), 0o755)
+		r.script["systemctl daemon-reload"] = fakeResult{}
+		r.script["systemctl disable trestle.service"] = fakeResult{out: "cannot disable", code: 1}
+		r.script["systemctl enable trestle.service"] = fakeResult{}
+		r.script["systemctl stop trestle.service"] = fakeResult{}
+		e := Install(exe, "/var/lib/trestle", "127.0.0.1:9090", "")
+		if e == nil {
+			t.Fatal("install succeeded despite forward failure")
+		}
+		if !strings.Contains(e.Error(), "neutralize disable") {
+			t.Fatalf("rollback disable failure not surfaced: %v", e)
+		}
+	}
+}
+
+func TestUnchangedReinstallPreservesPriorState(t *testing.T) {
+	matrix := []stateMatrixEntry{
+		{name: "enabled+active", enabled: "enabled", active: "active", wantEnableSeq: []string{"systemctl enable trestle.service"}, wantActive: "restart"},
+		{name: "enabled+inactive", enabled: "enabled", active: "inactive", wantEnableSeq: []string{"systemctl enable trestle.service"}, wantActive: "stop"},
+		{name: "enabled-runtime+active", enabled: "enabled-runtime", active: "active", wantEnableSeq: []string{"systemctl enable --runtime trestle.service"}, wantActive: "restart"},
+		{name: "enabled-runtime+inactive", enabled: "enabled-runtime", active: "inactive", wantEnableSeq: []string{"systemctl enable --runtime trestle.service"}, wantActive: "stop"},
+		{name: "disabled+active", enabled: "disabled", active: "active", wantEnableSeq: []string{}, wantActive: "restart"},
+		{name: "disabled+inactive", enabled: "disabled", active: "inactive", wantEnableSeq: []string{}, wantActive: "stop"},
+	}
+	for _, tc := range matrix {
+		t.Run(tc.name, func(t *testing.T) {
+			r := newStrictService(t)
+			installManagedUnit(t)
+			setState(r, tc.enabled, tc.active)
+			exe := filepath.Join(t.TempDir(), "tr2")
+			os.WriteFile(exe, mustRead(t, BinaryPath), 0o755)
+			r.script["systemctl enable trestle.service"] = fakeResult{}
+			r.script["systemctl enable --runtime trestle.service"] = fakeResult{}
+			r.script["systemctl disable trestle.service"] = fakeResult{}
+			r.script["systemctl restart trestle.service"] = fakeResult{}
+			r.script["systemctl stop trestle.service"] = fakeResult{}
+			if e := Install(exe, "/var/lib/trestle", "127.0.0.1:8090", ""); e != nil {
+				t.Fatalf("unchanged reinstall failed: %v", e)
+			}
+			if tc.enabled == "enabled" && tc.active == "active" {
+				if lifecycleMutation(r.log) {
+					t.Fatalf("unchanged enabled+active reinstall performed a lifecycle mutation: %v", r.log)
+				}
+				return
+			}
+			for _, want := range tc.wantEnableSeq {
+				if !contains(r.log, want) {
+					t.Fatalf("unchanged reinstall did not apply enablement %q: log=%v", tc.enabled, r.log)
+				}
+			}
+			if tc.enabled == "enabled-runtime" {
+				if contains(r.log, "systemctl enable trestle.service") {
+					t.Fatalf("enabled-runtime prior converted to persistent enable: log=%v", r.log)
+				}
+			}
+			if tc.enabled == "disabled" {
+				if contains(r.log, "systemctl enable trestle.service") || contains(r.log, "systemctl enable --runtime trestle.service") {
+					t.Fatalf("disabled prior enabled by unchanged reinstall: log=%v", r.log)
+				}
+			}
+			if tc.wantActive == "restart" && !contains(r.log, "systemctl restart trestle.service") {
+				t.Fatalf("active prior not restarted: log=%v", r.log)
+			}
+			if tc.wantActive == "stop" && !contains(r.log, "systemctl stop trestle.service") {
+				t.Fatalf("inactive prior not stopped: log=%v", r.log)
+			}
+		})
+	}
+}
+
+func TestNoOpRepairsMissingDataLeaf(t *testing.T) {
+	r := newStrictService(t)
+	dataDir := filepath.Join(t.TempDir(), "tr-data")
+	if e := writeFileAtomic(UnitPath, []byte(Unit(dataDir, "127.0.0.1:8090", "")), 0o644); e != nil {
+		t.Fatal(e)
+	}
+	setState(r, "enabled", "active")
+	exe := filepath.Join(t.TempDir(), "tr2")
+	os.WriteFile(exe, mustRead(t, BinaryPath), 0o755)
+	created := ""
+	oldMkdir := mkdirData
+	mkdirData = func(p string, mode os.FileMode) error {
+		created = p
+		return os.Mkdir(p, mode)
+	}
+	defer func() { mkdirData = oldMkdir }()
+	if e := Install(exe, dataDir, "127.0.0.1:8090", ""); e != nil {
+		t.Fatalf("repair install failed: %v", e)
+	}
+	if created != dataDir {
+		t.Fatalf("missing data leaf not repaired: created=%q want %q", created, dataDir)
+	}
+	if lifecycleMutation(r.log) {
+		t.Fatalf("repair install performed a lifecycle mutation: %v", r.log)
+	}
+}
