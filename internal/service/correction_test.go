@@ -987,3 +987,46 @@ func TestDataDirParentSafety(t *testing.T) {
 		t.Fatalf("non-root parent install touched systemctl: %v", r.log)
 	}
 }
+
+// TestDataDirParentPathnameSymlinkSwapRefused proves the parent-consistency
+// check re-walks the current pathname with O_NOFOLLOW instead of following newly
+// introduced symlinks: renaming the parent between inspection and establishment
+// and replacing its pathname with a symlink pointing back to the renamed
+// original is refused before any leaf/binary/unit/systemd mutation.
+func TestDataDirParentPathnameSymlinkSwapRefused(t *testing.T) {
+	r := newStrictService(t)
+	useRealDataDirSeams(t)
+	simulateSafeParent(t)
+	parent := t.TempDir()
+	leaf := filepath.Join(parent, "trestle-data")
+	// Between inspection (parent descriptor retained) and establishment the
+	// parent is renamed away and its pathname replaced with a symlink pointing
+	// back to the renamed original.
+	ensureAccount = func() error {
+		if e := os.Rename(parent, parent+"-original"); e != nil {
+			return e
+		}
+		return os.Symlink(parent+"-original", parent)
+	}
+	t.Cleanup(func() { os.RemoveAll(parent + "-original"); os.Remove(parent) })
+	binBefore := mustRead(t, BinaryPath)
+	exe := filepath.Join(t.TempDir(), "tr")
+	os.WriteFile(exe, []byte("#!/bin/sh\nexit 0\n"), 0o755)
+	if e := Install(exe, leaf, "127.0.0.1:8090", ""); e == nil {
+		t.Fatal("install proceeded after the parent pathname became a symlink")
+	} else if !strings.Contains(e.Error(), "parent") {
+		t.Fatalf("refusal did not identify the parent pathname: %v", e)
+	}
+	if _, e := os.Stat(filepath.Join(parent+"-original", "trestle-data")); !os.IsNotExist(e) {
+		t.Fatal("leaf created through the symlinked parent pathname")
+	}
+	if got := mustRead(t, BinaryPath); !bytes.Equal(got, binBefore) {
+		t.Fatal("binary mutated despite the parent-pathname refusal")
+	}
+	if _, e := os.Stat(UnitPath); !os.IsNotExist(e) {
+		t.Fatal("unit written despite the parent-pathname refusal")
+	}
+	if hasMutatingSystemctl(r.log) {
+		t.Fatalf("systemctl mutated despite the parent-pathname refusal: %v", r.log)
+	}
+}
