@@ -2,8 +2,11 @@ package service
 
 import (
 	"bytes"
+	"crypto/sha256"
+	"encoding/hex"
 	"fmt"
 	"io"
+	"net"
 	"net/http"
 	"net/http/httptest"
 	"os"
@@ -843,4 +846,280 @@ func TestRollbackEnforcesManagedUnitBeforeBinary(t *testing.T) {
 	if !bytes.Equal(before, after) {
 		t.Fatal("update/rollback mutated binary before the managed-unit check")
 	}
+}
+
+func TestUnitExplicitRendering(t *testing.T) {
+	setupService(t)
+	// A default install resolves to 127.0.0.1:7333 and must record it through
+	// --host/--port so it survives login, restart and reboot.
+	def := UnitExplicit(DefaultDataDir, "127.0.0.1", "7333", "")
+	for _, want := range []string{`"--host" "127.0.0.1"`, `"--port" "7333"`, `# trestle-listen: 127.0.0.1:7333`, `# trestle-listen-mode: explicit`, "NoNewPrivileges=true", "ProtectSystem=strict", "ReadWritePaths=\"/var/lib/trestle\""} {
+		if !strings.Contains(def, want) {
+			t.Fatalf("default explicit unit missing %q\n%s", want, def)
+		}
+	}
+	if strings.Contains(def, "--listen") {
+		t.Fatal("default explicit unit must use --host/--port, not legacy --listen")
+	}
+	if _, err := readManagedUnitBytes(t, []byte(def)); err != nil {
+		t.Fatalf("default explicit unit should validate: %v", err)
+	}
+	// An explicit 0.0.0.0:7403 install records that exact listener.
+	wide := UnitExplicit(DefaultDataDir, "0.0.0.0", "7403", "")
+	for _, want := range []string{`"--host" "0.0.0.0"`, `"--port" "7403"`, `# trestle-listen: 0.0.0.0:7403`} {
+		if !strings.Contains(wide, want) {
+			t.Fatalf("wide explicit unit missing %q\n%s", want, wide)
+		}
+	}
+	if _, err := readManagedUnitBytes(t, []byte(wide)); err != nil {
+		t.Fatalf("wide explicit unit should validate: %v", err)
+	}
+}
+
+func readManagedUnitBytes(t *testing.T, data []byte) (unitMeta, error) {
+	t.Helper()
+	path := filepath.Join(t.TempDir(), "trestle.service")
+	if err := os.WriteFile(path, data, 0644); err != nil {
+		return unitMeta{}, err
+	}
+	return readManagedUnitFile(path)
+}
+
+func TestUnitLegacyBootstrapRendering(t *testing.T) {
+	setupService(t)
+	u := Unit(DefaultDataDir, "127.0.0.1:8080", "")
+	for _, want := range []string{`"--listen" "127.0.0.1:8080"`, `# trestle-listen: 127.0.0.1:8080`, `# trestle-listen-mode: bootstrap`} {
+		if !strings.Contains(u, want) {
+			t.Fatalf("legacy unit missing %q\n%s", want, u)
+		}
+	}
+	if strings.Contains(u, "--host") || strings.Contains(u, "--port") {
+		t.Fatal("legacy unit must keep the single-address --listen form")
+	}
+	if _, err := readManagedUnitBytes(t, []byte(u)); err != nil {
+		t.Fatalf("legacy unit should validate: %v", err)
+	}
+}
+
+func TestListenModeMarkerValidation(t *testing.T) {
+	setupService(t)
+	explicit := UnitExplicit(DefaultDataDir, "127.0.0.1", "7333", "")
+	meta, err := readManagedUnitBytes(t, []byte(explicit))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if meta.listenMode != ListenModeExplicit || meta.listen != "127.0.0.1:7333" {
+		t.Fatalf("explicit meta = %+v", meta)
+	}
+	legacy := Unit(DefaultDataDir, "127.0.0.1:8080", "")
+	meta, err = readManagedUnitBytes(t, []byte(legacy))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if meta.listenMode != ListenModeBootstrap {
+		t.Fatalf("legacy meta mode = %q want bootstrap", meta.listenMode)
+	}
+	// A hostile mode value is rejected.
+	bad := strings.Replace(legacy, "# trestle-listen-mode: bootstrap", "# trestle-listen-mode: attacker", 1)
+	if _, err := readManagedUnitBytes(t, []byte(bad)); err == nil {
+		t.Fatal("invalid listen-mode accepted")
+	}
+	// Old units predating the marker default to bootstrap.
+	body := unitBody(unitSpec{dataDir: DefaultDataDir, listen: "127.0.0.1:8080", listenMode: ListenModeBootstrap})
+	oldContent := "# trestle-listen: 127.0.0.1:8080\n# trestle-data: " + DefaultDataDir + "\n# trestle-health: " + trestleHealthPath + "\n" + body
+	sum := sha256.Sum256([]byte(oldContent))
+	old := trestleUnitMarker + "\n" + trestleManagedPrefix + "v1 sha256=" + hex.EncodeToString(sum[:]) + "\n" + oldContent
+	meta, err = readManagedUnitBytes(t, []byte(old))
+	if err != nil {
+		t.Fatalf("legacy unit without marker should default to bootstrap: %v", err)
+	}
+	if meta.listenMode != ListenModeBootstrap {
+		t.Fatalf("no-marker unit mode = %q want bootstrap", meta.listenMode)
+	}
+}
+
+func TestUnitExplicitCanonicalValues(t *testing.T) {
+	// Whitespace-surrounded host/port must never leak into the unit metadata or
+	// ExecStart; only the canonical trimmed values are recorded.
+	u := buildUnit(unitSpec{dataDir: "/config", host: "  127.0.0.1  ", port: "  7403  ", listenMode: ListenModeExplicit})
+	for _, want := range []string{`"--host" "127.0.0.1"`, `"--port" "7403"`, `# trestle-listen: 127.0.0.1:7403`} {
+		if !strings.Contains(u, want) {
+			t.Fatalf("canonical explicit unit missing %q\n%s", want, u)
+		}
+	}
+	for _, bad := range []string{`"  127.0.0.1  "`, `"  7403  "`, `# trestle-listen:   127.0.0.1:7403`} {
+		if strings.Contains(u, bad) {
+			t.Fatalf("unit leaked untrimmed value %q\n%s", bad, u)
+		}
+	}
+}
+
+func TestInstallExplicitFreshAndChanged(t *testing.T) {
+	t.Run("fresh explicit install publishes and starts", func(t *testing.T) {
+		r := setupService(t)
+		exe := filepath.Join(t.TempDir(), "tr")
+		os.WriteFile(exe, []byte("#!/bin/sh\nexit 0\n"), 0o755)
+		r.script["systemctl daemon-reload"] = fakeResult{}
+		r.script["systemctl enable trestle.service"] = fakeResult{}
+		r.script["systemctl restart trestle.service"] = fakeResult{}
+		if e := InstallExplicit(exe, "/var/lib/trestle", "127.0.0.1", "7403", ""); e != nil {
+			t.Fatal(e)
+		}
+		unit := mustRead(t, UnitPath)
+		for _, want := range []string{`"--host" "127.0.0.1"`, `"--port" "7403"`, `# trestle-listen-mode: explicit`} {
+			if !strings.Contains(string(unit), want) {
+				t.Fatalf("installed explicit unit missing %q\n%s", want, unit)
+			}
+		}
+		for _, want := range []string{"systemctl daemon-reload", "systemctl enable trestle.service", "systemctl restart trestle.service"} {
+			if !contains(r.log, want) {
+				t.Fatalf("fresh explicit install did not call %q\nlog: %v", want, r.log)
+			}
+		}
+	})
+
+	t.Run("changed explicit listener restarts the service", func(t *testing.T) {
+		r := setupService(t)
+		exe := filepath.Join(t.TempDir(), "tr")
+		os.WriteFile(exe, []byte("#!/bin/sh\nexit 0\n"), 0o755)
+		r.script["systemctl daemon-reload"] = fakeResult{}
+		r.script["systemctl enable trestle.service"] = fakeResult{}
+		r.script["systemctl restart trestle.service"] = fakeResult{}
+		if e := InstallExplicit(exe, "/var/lib/trestle", "127.0.0.1", "7403", ""); e != nil {
+			t.Fatal(e)
+		}
+		setState(r, "enabled", "active")
+		r.script["systemctl daemon-reload"] = fakeResult{}
+		r.script["systemctl disable trestle.service"] = fakeResult{}
+		r.script["systemctl enable trestle.service"] = fakeResult{}
+		r.script["systemctl restart trestle.service"] = fakeResult{}
+		r.log = nil
+		if e := InstallExplicit(exe, "/var/lib/trestle", "127.0.0.1", "7404", ""); e != nil {
+			t.Fatal(e)
+		}
+		unit := mustRead(t, UnitPath)
+		if !strings.Contains(string(unit), `"--port" "7404"`) {
+			t.Fatalf("reinstall did not record 7404:\n%s", unit)
+		}
+		if !strings.Contains(string(unit), `# trestle-listen-mode: explicit`) {
+			t.Fatalf("reinstall unit must remain explicit mode:\n%s", unit)
+		}
+		if !contains(r.log, "systemctl restart trestle.service") {
+			t.Fatalf("changed listener must restart the service\nlog: %v", r.log)
+		}
+	})
+
+	t.Run("identical explicit reinstall is a genuine no-op", func(t *testing.T) {
+		r := setupService(t)
+		exe := filepath.Join(t.TempDir(), "tr")
+		os.WriteFile(exe, mustRead(t, BinaryPath), 0o755)
+		if e := InstallExplicit(exe, "/var/lib/trestle", "127.0.0.1", "7333", ""); e != nil {
+			t.Fatal(e)
+		}
+		setState(r, "enabled", "active")
+		r.log = nil
+		if e := InstallExplicit(exe, "/var/lib/trestle", "127.0.0.1", "7333", ""); e != nil {
+			t.Fatal(e)
+		}
+		if hasMutatingSystemctl(r.log) {
+			t.Fatalf("identical explicit reinstall mutated systemd\nlog: %v", r.log)
+		}
+	})
+}
+
+func TestInstallExplicitFailureRestoresPriorUnit(t *testing.T) {
+	r := setupService(t)
+	exe := filepath.Join(t.TempDir(), "tr")
+	os.WriteFile(exe, []byte("#!/bin/sh\nexit 0\n"), 0o755)
+	r.script["systemctl daemon-reload"] = fakeResult{}
+	r.script["systemctl enable trestle.service"] = fakeResult{}
+	r.script["systemctl restart trestle.service"] = fakeResult{}
+	if e := InstallExplicit(exe, "/var/lib/trestle", "127.0.0.1", "7403", ""); e != nil {
+		t.Fatal(e)
+	}
+	priorUnit := mustRead(t, UnitPath)
+	setState(r, "enabled", "active")
+	r.script["systemctl daemon-reload"] = fakeResult{}
+	r.script["systemctl disable trestle.service"] = fakeResult{}
+	r.script["systemctl enable trestle.service"] = fakeResult{out: "failed to enable", code: 3}
+	r.script["systemctl restart trestle.service"] = fakeResult{}
+	r.script["systemctl stop trestle.service"] = fakeResult{}
+	if e := InstallExplicit(exe, "/var/lib/trestle", "127.0.0.1", "7404", ""); e == nil {
+		t.Fatal("failed explicit reinstall returned nil")
+	}
+	got := mustRead(t, UnitPath)
+	if string(got) != string(priorUnit) {
+		t.Fatal("failed explicit reinstall did not restore the prior unit")
+	}
+}
+
+func TestStatusExplicitUsesRecordedListener(t *testing.T) {
+	// A new explicit host/port unit records an authoritative listener; status
+	// must report and health-check it as the runtime listener.
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.Header().Set("Content-Type", "application/json")
+		w.WriteHeader(200)
+		w.Write([]byte(`{"status":"ok"}`))
+	}))
+	defer srv.Close()
+	listen := strings.TrimPrefix(srv.URL, "http://")
+	host, port := splitListen(t, listen)
+	r := setupService(t)
+	writeFileAtomic(UnitPath, []byte(UnitExplicit(DefaultDataDir, host, port, "")), 0o644)
+	setState(r, "enabled", "active")
+	r.script["systemctl show -p MainPID --value trestle.service"] = fakeResult{out: "99", code: 0}
+	var buf bytes.Buffer
+	if e := Status(&buf); e != nil {
+		t.Fatal(e)
+	}
+	if !strings.Contains(buf.String(), "listen:  "+listen) {
+		t.Fatalf("explicit unit status must use the recorded listener:\n%s", buf.String())
+	}
+	if !strings.Contains(buf.String(), "health:  ok") {
+		t.Fatalf("explicit unit health check failed:\n%s", buf.String())
+	}
+}
+
+func TestStatusLegacyBootstrapUsesRecordedListener(t *testing.T) {
+	// A legacy --listen unit's recorded listener IS the runtime listener
+	// (ExecStart flag beats the durable environment), so status reports it.
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.Header().Set("Content-Type", "application/json")
+		w.WriteHeader(200)
+		w.Write([]byte(`{"status":"ok"}`))
+	}))
+	defer srv.Close()
+	listen := strings.TrimPrefix(srv.URL, "http://")
+	r := setupService(t)
+	writeFileAtomic(UnitPath, []byte(Unit(DefaultDataDir, listen, "")), 0o644)
+	setState(r, "enabled", "active")
+	r.script["systemctl show -p MainPID --value trestle.service"] = fakeResult{out: "99", code: 0}
+	var buf bytes.Buffer
+	if e := Status(&buf); e != nil {
+		t.Fatal(e)
+	}
+	if !strings.Contains(buf.String(), "listen:  "+listen) {
+		t.Fatalf("legacy unit status must use its recorded listener:\n%s", buf.String())
+	}
+	if !strings.Contains(buf.String(), "health:  ok") {
+		t.Fatalf("legacy unit health check failed:\n%s", buf.String())
+	}
+}
+
+func TestTrestleEffectiveListen(t *testing.T) {
+	if got, err := trestleEffectiveListen("", "127.0.0.1:8080"); err != nil || got != "127.0.0.1:8080" {
+		t.Fatalf("fallback = %q, %v", got, err)
+	}
+	if got, err := trestleEffectiveListen("/etc/trestle/trestle.env", "127.0.0.1:8080"); err != nil || got != "127.0.0.1:8080" {
+		t.Fatalf("durable resolution = %q, %v", got, err)
+	}
+}
+
+func splitListen(t *testing.T, addr string) (string, string) {
+	t.Helper()
+	h, p, err := net.SplitHostPort(addr)
+	if err != nil {
+		t.Fatal(err)
+	}
+	return h, p
 }

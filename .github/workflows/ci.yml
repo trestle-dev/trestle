@@ -114,7 +114,7 @@ jobs:
           DATA=/var/lib/trestle
           wait_health() {
             for _ in $(seq 1 60); do
-              if curl -fsS http://127.0.0.1:8090/system/health >/dev/null 2>&1; then
+              if curl -fsS http://127.0.0.1:7333/system/health >/dev/null 2>&1; then
                 return 0
               fi
               sleep 0.5
@@ -173,7 +173,7 @@ jobs:
           set -euxo pipefail
           wait_health() {
             for _ in $(seq 1 60); do
-              if curl -fsS http://127.0.0.1:8090/system/health >/dev/null 2>&1; then
+              if curl -fsS http://127.0.0.1:7333/system/health >/dev/null 2>&1; then
                 return 0
               fi
               sleep 0.5

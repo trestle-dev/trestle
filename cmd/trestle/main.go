@@ -7,6 +7,7 @@ import (
 	"flag"
 	"fmt"
 	"log/slog"
+	"net"
 	"net/http"
 	"os"
 	"os/signal"
@@ -39,7 +40,7 @@ import (
 )
 
 // defaultListen matches the config default recorded for new installations.
-const defaultListen = "127.0.0.1:8090"
+const defaultListen = "127.0.0.1:7333"
 
 func main() {
 	// Service-management commands must remain usable even when the application
@@ -117,10 +118,27 @@ func main() {
 		return
 	}
 
+	// Resolve the requested listener (CLI --host/--port/--listen, then
+	// TRESTLE_HOST/TRESTLE_PORT/TRESTLE_LISTEN, then defaults) before loading the
+	// durable config, so explicit host/port selection can genuinely override the
+	// durable config listener in memory below.
+	listenerHost, listenerPort, listenerListen, hostSet, portSet, listenSet := listenerFlagsFromArgs(os.Args[1:])
+	resolvedListen, listenerErr := resolveListener(listenerHost, listenerPort, listenerListen, hostSet, portSet, listenSet)
+	if listenerErr != nil {
+		slog.Error("invalid listener configuration", "error", listenerErr)
+		os.Exit(2)
+	}
 	cfg, err := config.FromOS(os.Args[1:])
 	if err != nil {
 		slog.Error("invalid configuration", "error", err)
 		os.Exit(2)
+	}
+	// An explicitly selected --host/--port (CLI or TRESTLE_HOST/TRESTLE_PORT)
+	// overrides the durable config listener in memory, so the advertised override
+	// controls the runtime listener. A bare invocation or a legacy --listen
+	// selection keeps the durable config listener.
+	if listenerOverrideSelected(hostSet, portSet) {
+		cfg.Listen = resolvedListen
 	}
 	logger := slog.New(slog.NewJSONHandler(os.Stderr, &slog.HandlerOptions{}))
 	databaseContext, cancelDatabase := context.WithTimeout(context.Background(), cfg.DatabaseConnectTimeout)
@@ -247,7 +265,9 @@ func main() {
 	select {
 	case err = <-errCh:
 		if !errors.Is(err, http.ErrServerClosed) {
-			logger.Error("server failed", "error", err)
+			// Retain the OS bind error and identify the requested listener so a
+			// failed bind is attributable to the exact host/port selection.
+			logger.Error("server failed", "error", err, "listener", cfg.Listen)
 			os.Exit(1)
 		}
 		return
@@ -267,13 +287,25 @@ func printMigrateUsage() {
 	fmt.Fprintln(os.Stderr, "usage: trestle migrate --from-provider sqlite|postgres --from-dir DIR|--from-url URL --to-provider sqlite|postgres --to-dir DIR|--to-url URL [--dry-run] [--confirm-migration]")
 }
 
+// serviceFlagTakesValue reports whether a `trestle service` flag consumes the
+// following argv token as its value. The install family (--data, --listen,
+// --host, --port, --env-file) does; --follow and the lifecycle commands do not.
+func serviceFlagTakesValue(name string) bool {
+	switch name {
+	case "--data", "--listen", "--host", "--port", "--env-file":
+		return true
+	}
+	return false
+}
+
 // runService dispatches `trestle service <command>` operating the Trestle
 // systemd **system** unit. Exit codes: 0 success, 1 operational failure, 2
 // usage error (canonical Web Fleet convention).
 func runService(args []string) int {
 	cmd := "status"
 	var flags, positional []string
-	for _, a := range args {
+	for i := 0; i < len(args); i++ {
+		a := args[i]
 		if a != "" && !strings.HasPrefix(a, "-") {
 			if cmd == "status" && len(positional) == 0 {
 				cmd = a
@@ -283,6 +315,12 @@ func runService(args []string) int {
 			continue
 		}
 		flags = append(flags, a)
+		// A value-taking flag consumes the next token as its value so the value
+		// is not misclassified as a positional argument.
+		if serviceFlagTakesValue(a) && i+1 < len(args) && !strings.HasPrefix(args[i+1], "-") {
+			i++
+			flags = append(flags, args[i])
+		}
 	}
 	usage := func(msg string) int {
 		fmt.Fprintf(os.Stderr, "trestle service %s: %s\n", cmd, msg)
@@ -304,6 +342,18 @@ func runService(args []string) int {
 						i++
 					} else {
 						return usage("--listen requires an address")
+					}
+				case "--host":
+					if i+1 < len(flags) {
+						i++
+					} else {
+						return usage("--host requires an address")
+					}
+				case "--port":
+					if i+1 < len(flags) {
+						i++
+					} else {
+						return usage("--port requires a value")
 					}
 				case "--env-file":
 					if i+1 < len(flags) {
@@ -328,8 +378,10 @@ func runService(args []string) int {
 		if len(positional) != 0 {
 			return usage("install takes no positional arguments")
 		}
-		data, listen := service.DefaultDataDir, service.DefaultListen
+		data := service.DefaultDataDir
 		envfile := ""
+		var hostVal, portVal, listenVal string
+		var hostSet, portSet, listenSet bool
 		for i := 0; i < len(flags); i++ {
 			switch flags[i] {
 			case "--data":
@@ -340,7 +392,17 @@ func runService(args []string) int {
 			case "--listen":
 				if i+1 < len(flags) {
 					i++
-					listen = flags[i]
+					listenVal, listenSet = flags[i], true
+				}
+			case "--host":
+				if i+1 < len(flags) {
+					i++
+					hostVal, hostSet = flags[i], true
+				}
+			case "--port":
+				if i+1 < len(flags) {
+					i++
+					portVal, portSet = flags[i], true
 				}
 			case "--env-file":
 				if i+1 < len(flags) {
@@ -349,9 +411,35 @@ func runService(args []string) int {
 				}
 			}
 		}
-		if err := service.Install(service.Executable(), data, listen, envfile); err != nil {
-			fmt.Fprintln(os.Stderr, "trestle service install:", err)
-			return 1
+		// Only `service install` resolves listener flags and environment: a
+		// malformed TRESTLE_HOST/TRESTLE_PORT in the invoking shell must never
+		// break start/stop/restart/status/logs/uninstall.
+		addr, resolveErr := resolveListener(hostVal, portVal, listenVal, hostSet, portSet, listenSet)
+		if resolveErr != nil {
+			fmt.Fprintln(os.Stderr, "trestle service install:", resolveErr)
+			return 2
+		}
+		legacy := listenSet
+		if !legacy {
+			if _, hasListen := os.LookupEnv("TRESTLE_LISTEN"); hasListen && !hostSet && !portSet {
+				legacy = true
+			}
+		}
+		if legacy {
+			if err := service.Install(service.Executable(), data, addr, envfile); err != nil {
+				fmt.Fprintln(os.Stderr, "trestle service install:", err)
+				return 1
+			}
+		} else {
+			host, port, err := net.SplitHostPort(addr)
+			if err != nil {
+				fmt.Fprintln(os.Stderr, "trestle service install:", err)
+				return 2
+			}
+			if err := service.InstallExplicit(service.Executable(), data, host, port, envfile); err != nil {
+				fmt.Fprintln(os.Stderr, "trestle service install:", err)
+				return 1
+			}
 		}
 		fmt.Fprintln(os.Stdout, "trestle.service installed and active.")
 		return 0

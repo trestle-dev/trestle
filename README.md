@@ -80,7 +80,7 @@ go run ./cmd/trestle
 The default address is:
 
 ```text
-http://127.0.0.1:8090
+http://127.0.0.1:7333
 ```
 
 On first run, open that address and create the first administrator. The setup
@@ -103,7 +103,7 @@ running unattended and boot-safely on a systemd host, install it as a system
 service:
 
 ```sh
-sudo trestle service install            # optional --listen, --data-dir, --env-file
+sudo trestle service install            # optional --host/--port, --listen, --data-dir, --env-file
 trestle service status
 trestle service logs                # or: trestle service logs --follow
 sudo trestle service restart
@@ -153,10 +153,19 @@ surface both the update and recovery failures when both occur.
 
 ### Configuration and secrets
 
-`service install` records `--listen` (default `127.0.0.1:8090`) and `--data-dir`
-(default `/var/lib/trestle`) in the unit. Because the machine service does not
-inherit the shell environment, supply the remaining `TRESTLE_*` configuration
-(including `TRESTLE_DATABASE_URL` for PostgreSQL and
+`service install` records the canonical `--host`/`--port` listener (default
+`127.0.0.1:7333`) and `--data-dir` (default `/var/lib/trestle`) in the unit, so
+the recorded listener is the runtime listener across restart and reboot:
+
+```sh
+sudo trestle service install --host 127.0.0.1 --port 7403
+```
+
+The legacy single-address `--listen` form (and `TRESTLE_LISTEN`) is retained for
+compatibility; it cannot be combined with `--host`/`--port`, and it records a
+bootstrap listener that is resolved through the durable configuration. Because
+the machine service does not inherit the shell environment, supply the remaining
+`TRESTLE_*` configuration (including `TRESTLE_DATABASE_URL` for PostgreSQL and
 `TRESTLE_S3_*`/`TRESTLE_AWS_*` credentials) through a root-protected environment
 file:
 
@@ -251,7 +260,9 @@ Flags override environment variables, which override defaults:
 
 | Flag | Environment | Default |
 | --- | --- | --- |
-| `--listen` | `TRESTLE_LISTEN` | `127.0.0.1:8090` |
+| `--host` | `TRESTLE_HOST` | `127.0.0.1` |
+| `--port` | `TRESTLE_PORT` | `7333` |
+| `--listen` | `TRESTLE_LISTEN` | none (legacy single-address form; alternative to `--host`/`--port`) |
 | `--data-dir` | `TRESTLE_DATA_DIR` | `./data` |
 | `--shutdown-timeout` | `TRESTLE_SHUTDOWN_TIMEOUT` | `10s` |
 | `--log-level` | `TRESTLE_LOG_LEVEL` | `info` |
@@ -267,6 +278,35 @@ Flags override environment variables, which override defaults:
 | `--database-max-idle` | `TRESTLE_DATABASE_MAX_IDLE` | `2` |
 | `--database-connect-timeout` | `TRESTLE_DATABASE_CONNECT_TIMEOUT` | `10s` |
 | `--database-conn-max-lifetime` | `TRESTLE_DATABASE_CONN_MAX_LIFETIME` | `30m` |
+
+### Listener
+
+The bind host and port follow the shared precedence **CLI flag > environment
+variable > default**, with `127.0.0.1:7333` as the default:
+
+```sh
+./trestle                            # 127.0.0.1:7333
+TRESTLE_PORT=7403 ./trestle          # 127.0.0.1:7403 (host defaulted)
+./trestle --host 0.0.0.0 --port 7403 # CLI wins over environment and defaults
+```
+
+The port must be an integer from 1 through 65535; malformed, empty, zero,
+negative or oversized values fail rather than falling back. Surrounding
+whitespace is trimmed, and IPv6 hosts are bracketed (`--host ::1` binds
+`[::1]:7333`). The legacy single-address `--listen` (and `TRESTLE_LISTEN`) is
+retained for compatibility and is mutually exclusive with `--host`/`--port`; an
+explicit host/port selection overrides `TRESTLE_LISTEN`, while a conflict
+between `TRESTLE_LISTEN` and `TRESTLE_HOST`/`TRESTLE_PORT` environment variables
+fails clearly. Explicit `--host`/`--port` (CLI or environment) overrides an
+existing durable config listener in memory, so the advertised override controls
+the runtime listener; a bare invocation or legacy `--listen` keeps the durable
+config.
+
+The default loopback binding is the recommended deployment: keep Trestle private
+and terminate TLS with a reverse proxy on the same host (see
+`deploy/caddy/Caddyfile` and `deploy/nginx/nginx.conf`). Binding `0.0.0.0`
+exposes Trestle on all IPv4 interfaces with no authentication bypass; pair it
+with explicit trusted-proxy configuration and TLS termination.
 
 ### Database providers
 

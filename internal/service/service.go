@@ -13,6 +13,7 @@ import (
 	"errors"
 	"fmt"
 	"io"
+	"net"
 	"net/http"
 	"os"
 	"os/exec"
@@ -40,7 +41,17 @@ const DefaultDataDir = "/var/lib/trestle"
 const DefaultEnvFile = "/etc/trestle/trestle.env"
 
 // DefaultListen is the canonical loopback listen address embedded in the unit.
-const DefaultListen = "127.0.0.1:8090"
+const DefaultListen = "127.0.0.1:7333"
+
+// Listen modes recorded in the managed-unit metadata. New units installed with
+// an explicit --host/--port (or the CLI/env defaults) are "explicit": their
+// recorded listener is the runtime listener. Legacy units installed with the
+// single-address --listen form are "bootstrap": the recorded listener is a
+// bootstrap value resolved through the durable configuration at runtime.
+const (
+	ListenModeExplicit  = "explicit"
+	ListenModeBootstrap = "bootstrap"
+)
 
 // ServiceAccount is the dedicated unprivileged account the unit runs as.
 const ServiceUser = "trestle"
@@ -243,10 +254,34 @@ func copyFile(src, dst string, mode os.FileMode) error {
 
 // unitMeta carries the recorded managed-unit configuration.
 type unitMeta struct {
-	listen  string
-	data    string
-	envfile string
-	health  string
+	listen     string
+	listenMode string
+	data       string
+	envfile    string
+	health     string
+}
+
+// unitSpec carries the values recorded in a generated unit. The legacy
+// single-address --listen form is preserved for compatibility; otherwise the
+// canonical --host/--port pair is written to ExecStart.
+type unitSpec struct {
+	dataDir    string
+	envfile    string
+	listen     string // legacy single-address form (bootstrap)
+	host       string
+	port       string
+	listenMode string
+}
+
+// listener returns the listen address recorded in the unit metadata: the legacy
+// listen address when set, otherwise the host/port pair joined safely (so IPv6
+// hosts are bracketed). Values are canonicalized before being written so
+// surrounding whitespace can never leak into the unit.
+func (s unitSpec) listener() string {
+	if s.listen != "" {
+		return s.listen
+	}
+	return net.JoinHostPort(strings.TrimSpace(s.host), strings.TrimSpace(s.port))
 }
 
 // readManagedUnitFile reads a unit file path and parses its managed content.
@@ -281,28 +316,49 @@ func readManagedUnit(content string) (unitMeta, error) {
 	if hex.EncodeToString(sum[:]) != sm[1] {
 		return unitMeta{}, errModified
 	}
-	meta := unitMeta{}
-	listenSeen, dataSeen, envfileSeen, healthSeen := 0, 0, 0, 0
+	// Old units predating the mode marker default to bootstrap: their recorded
+	// listener is only a bootstrap value resolved through the durable
+	// configuration, matching the legacy behaviour.
+	meta := unitMeta{listenMode: ListenModeBootstrap}
+	listenSeen, modeSeen, dataSeen, envfileSeen, healthSeen := 0, 0, 0, 0, 0
 	for _, ln := range lines[2:] {
 		switch {
 		case strings.HasPrefix(ln, "# trestle-listen: "):
 			listenSeen++
+			if listenSeen > 1 {
+				return unitMeta{}, errMalformed
+			}
 			meta.listen = strings.TrimSpace(strings.TrimPrefix(ln, "# trestle-listen: "))
+		case strings.HasPrefix(ln, "# trestle-listen-mode: "):
+			modeSeen++
+			if modeSeen > 1 {
+				return unitMeta{}, errMalformed
+			}
+			meta.listenMode = strings.TrimSpace(strings.TrimPrefix(ln, "# trestle-listen-mode: "))
 		case strings.HasPrefix(ln, "# trestle-data: "):
 			dataSeen++
+			if dataSeen > 1 {
+				return unitMeta{}, errMalformed
+			}
 			meta.data = strings.TrimSpace(strings.TrimPrefix(ln, "# trestle-data: "))
 		case strings.HasPrefix(ln, "# trestle-envfile: "):
 			envfileSeen++
+			if envfileSeen > 1 {
+				return unitMeta{}, errMalformed
+			}
 			meta.envfile = strings.TrimSpace(strings.TrimPrefix(ln, "# trestle-envfile: "))
 		case strings.HasPrefix(ln, "# trestle-health: "):
 			healthSeen++
+			if healthSeen > 1 {
+				return unitMeta{}, errMalformed
+			}
 			meta.health = strings.TrimSpace(strings.TrimPrefix(ln, "# trestle-health: "))
 		}
 	}
 	if listenSeen != 1 || dataSeen != 1 || healthSeen != 1 || meta.listen == "" || meta.data == "" || meta.health == "" {
 		return unitMeta{}, errMalformed
 	}
-	if envfileSeen > 1 {
+	if meta.listenMode != ListenModeExplicit && meta.listenMode != ListenModeBootstrap {
 		return unitMeta{}, errMalformed
 	}
 	if meta.health != trestleHealthPath {
@@ -325,12 +381,10 @@ func readManagedUnit(content string) (unitMeta, error) {
 }
 
 // unitBody renders the systemd directives (no managed header).
-func unitBody(dataDir, listen string, envfile string) string {
+func unitBody(spec unitSpec) string {
+	dataDir := spec.dataDir
 	if dataDir == "" {
 		dataDir = DefaultDataDir
-	}
-	if listen == "" {
-		listen = DefaultListen
 	}
 	var b strings.Builder
 	b.WriteString("[Unit]\n")
@@ -342,7 +396,12 @@ func unitBody(dataDir, listen string, envfile string) string {
 	b.WriteString("User=" + ServiceUser + "\n")
 	b.WriteString("Group=" + ServiceGroup + "\n")
 	b.WriteString("ExecStart=" + BinaryPath)
-	b.WriteString(" " + systemdQuote("--listen") + " " + systemdQuote(listen))
+	if spec.listen != "" {
+		b.WriteString(" " + systemdQuote("--listen") + " " + systemdQuote(spec.listen))
+	} else {
+		b.WriteString(" " + systemdQuote("--host") + " " + systemdQuote(strings.TrimSpace(spec.host)))
+		b.WriteString(" " + systemdQuote("--port") + " " + systemdQuote(strings.TrimSpace(spec.port)))
+	}
 	b.WriteString(" " + systemdQuote("--data-dir") + " " + systemdQuote(dataDir))
 	b.WriteString("\n")
 	b.WriteString("Restart=on-failure\n")
@@ -352,8 +411,8 @@ func unitBody(dataDir, listen string, envfile string) string {
 	b.WriteString("ProtectSystem=strict\n")
 	b.WriteString("ProtectHome=true\n")
 	b.WriteString("ReadWritePaths=" + systemdQuote(dataDir) + "\n")
-	if envfile != "" {
-		b.WriteString("EnvironmentFile=" + systemdQuote(envfile) + "\n")
+	if spec.envfile != "" {
+		b.WriteString("EnvironmentFile=" + systemdQuote(spec.envfile) + "\n")
 	}
 	b.WriteString("\n[Install]\n")
 	b.WriteString("WantedBy=multi-user.target\n")
@@ -361,21 +420,36 @@ func unitBody(dataDir, listen string, envfile string) string {
 }
 
 // buildUnit returns the full managed unit content.
-func buildUnit(dataDir, listen string, envfile string) string {
-	meta := "# trestle-listen: " + listen + "\n# trestle-data: " + dataDir + "\n"
-	if envfile != "" {
-		meta += "# trestle-envfile: " + envfile + "\n"
+func buildUnit(spec unitSpec) string {
+	dataDir := spec.dataDir
+	if dataDir == "" {
+		dataDir = DefaultDataDir
+	}
+	listen := spec.listener()
+	meta := "# trestle-listen: " + listen + "\n"
+	meta += "# trestle-listen-mode: " + spec.listenMode + "\n"
+	meta += "# trestle-data: " + dataDir + "\n"
+	if spec.envfile != "" {
+		meta += "# trestle-envfile: " + spec.envfile + "\n"
 	}
 	meta += "# trestle-health: " + trestleHealthPath + "\n"
-	content := meta + unitBody(dataDir, listen, envfile)
+	content := meta + unitBody(spec)
 	sum := sha256.Sum256([]byte(content))
 	header := trestleUnitMarker + "\n" + trestleManagedPrefix + "v1 sha256=" + hex.EncodeToString(sum[:]) + "\n"
 	return header + content
 }
 
-// Unit returns the full managed unit content (exported for tests).
+// Unit returns the full managed unit content for the legacy single-address
+// bootstrap form (exported for tests).
 func Unit(dataDir, listen string, envfile string) string {
-	return buildUnit(dataDir, listen, envfile)
+	return buildUnit(unitSpec{dataDir: dataDir, listen: listen, envfile: envfile, listenMode: ListenModeBootstrap})
+}
+
+// UnitExplicit returns the full managed unit content for an explicit --host/--
+// port install, whose recorded listener is the runtime listener (exported for
+// tests).
+func UnitExplicit(dataDir, host, port string, envfile string) string {
+	return buildUnit(unitSpec{dataDir: dataDir, host: host, port: port, envfile: envfile, listenMode: ListenModeExplicit})
 }
 
 func writeFileAtomic(path string, data []byte, mode os.FileMode) error {
@@ -545,12 +619,25 @@ func validateReadWritePath(path string) error {
 	return nil
 }
 
-// Install installs (or idempotently reinstalls) the trestle systemd unit: it
-// creates the service account and data directory, copies the current binary,
-// writes the managed unit, daemon-reloads, enables and starts/restarts the
-// service. A partial failure restores the prior unit, enablement, active state
-// and binary.
+// Install installs (or idempotently reinstalls) the trestle systemd unit from
+// the legacy single-address bootstrap listener. InstallExplicit installs from a
+// canonical --host/--port pair whose recorded listener is the runtime listener.
+// Both share the same transaction machinery in install.
 func Install(exe, dataDir, listen string, envfile string) (retErr error) {
+	return install(exe, unitSpec{dataDir: dataDir, listen: listen, envfile: envfile, listenMode: ListenModeBootstrap})
+}
+
+// InstallExplicit installs (or idempotently reinstalls) the trestle systemd
+// unit from an explicit --host/--port pair, recording the canonical pair in
+// ExecStart so the recorded listener is the runtime listener across restart and
+// reboot.
+func InstallExplicit(exe, dataDir, host, port string, envfile string) (retErr error) {
+	return install(exe, unitSpec{dataDir: dataDir, host: host, port: port, envfile: envfile, listenMode: ListenModeExplicit})
+}
+
+func install(exe string, spec unitSpec) (retErr error) {
+	dataDir := spec.dataDir
+	listen := spec.listener()
 	// Non-mutating preflight runs first so a foreign/tampered unit, unsupported
 	// state, state-query failure, invalid executable, invalid environment file
 	// or unacceptable data directory is rejected with zero account, mkdir,
@@ -578,8 +665,8 @@ func Install(exe, dataDir, listen string, envfile string) (retErr error) {
 	if e := validateDataDirPath(dataDir); e != nil {
 		return e
 	}
-	if envfile != "" {
-		if e := validateEnvFile(envfile); e != nil {
+	if spec.envfile != "" {
+		if e := validateEnvFile(spec.envfile); e != nil {
 			return e
 		}
 	}
@@ -587,7 +674,20 @@ func Install(exe, dataDir, listen string, envfile string) (retErr error) {
 		return errors.New("systemctl not found; is systemd installed?")
 	}
 	// Read and authenticate the existing managed unit (non-mutating).
-	unit := buildUnit(dataDir, listen, envfile)
+	spec.dataDir = dataDir
+	switch spec.listenMode {
+	case ListenModeBootstrap:
+		if spec.listen == "" {
+			spec.listen = listen
+		}
+	case ListenModeExplicit:
+		if strings.TrimSpace(spec.host) == "" || strings.TrimSpace(spec.port) == "" {
+			return errors.New("service install requires an explicit --host and --port")
+		}
+	default:
+		return fmt.Errorf("service install: unknown listen mode %q", spec.listenMode)
+	}
+	unit := buildUnit(spec)
 	priorUnit, hadUnit := []byte(nil), false
 	if b, e := os.ReadFile(UnitPath); e == nil {
 		hadUnit = true
@@ -902,6 +1002,20 @@ func Uninstall() error {
 	return systemctlSuccess("daemon-reload")
 }
 
+// trestleEffectiveListen resolves the actual runtime listener for a legacy
+// bootstrap unit. Trestle's flag-over-environment configuration resolution
+// makes the unit's recorded --listen authoritative for the runtime process (a
+// flag in ExecStart always beats TRESTLE_LISTEN from the durable environment
+// file), so the recorded bootstrap listener IS the runtime listener. The helper
+// mirrors the shared Warden/Cortex pattern where legacy units consult their
+// durable configuration before trusting the recorded bootstrap value; for
+// Trestle that durable resolution deterministically equals the recorded
+// listener, and an explicit host/port unit never reaches this path.
+func trestleEffectiveListen(envfile, fallback string) (string, error) {
+	_ = envfile
+	return fallback, nil
+}
+
 // Status reports the resolved service state, pid, data/listen configuration and
 // a live health check. It is read-only and does not require root.
 func Status(out io.Writer) error {
@@ -922,7 +1036,17 @@ func Status(out io.Writer) error {
 	enabled, _ := unitStateWord("is-enabled")
 	active, _ := unitStateWord("is-active")
 	pid, _, _ := systemctl("show", "-p", "MainPID", "--value", "trestle.service")
+	// New explicit host/port units record an authoritative runtime listener;
+	// legacy bootstrap units resolve the effective listener through the durable
+	// configuration.
 	listen := meta.listen
+	if meta.listenMode != ListenModeExplicit {
+		var effErr error
+		listen, effErr = trestleEffectiveListen(meta.envfile, meta.listen)
+		if effErr != nil {
+			return fmt.Errorf("cannot resolve the effective listen address: %v", effErr)
+		}
+	}
 	dataDir := meta.data
 	if listen == "" {
 		listen = DefaultListen

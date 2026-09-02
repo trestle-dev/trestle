@@ -97,8 +97,66 @@ func TestHTTPBoundaryValidation(t *testing.T) {
 	}
 }
 
+func TestDefaultListener(t *testing.T) {
+	cfg, err := Load(nil, func(string) string { return "" })
+	if err != nil {
+		t.Fatal(err)
+	}
+	if cfg.Listen != "127.0.0.1:7333" {
+		t.Fatalf("default listener = %q want 127.0.0.1:7333", cfg.Listen)
+	}
+}
+
+func TestHostPortFlagsAcceptedButNotApplied(t *testing.T) {
+	// The durable config layer accepts --host/--port so the command line parses,
+	// but does not apply them: the CLI resolves the listener and overrides the
+	// durable config in memory when an explicit host/port was selected.
+	cfg, err := Load([]string{"--host", "0.0.0.0", "--port", "9000", "--data-dir", "./data"}, func(string) string { return "" })
+	if err != nil {
+		t.Fatal(err)
+	}
+	if cfg.Listen != "127.0.0.1:7333" {
+		t.Fatalf("durable listen must stay the default: %q", cfg.Listen)
+	}
+	// The legacy --listen flag keeps its durable-config behavior.
+	cfg, err = Load([]string{"--listen", "127.0.0.1:9001"}, func(string) string { return "" })
+	if err != nil {
+		t.Fatal(err)
+	}
+	if cfg.Listen != "127.0.0.1:9001" {
+		t.Fatalf("legacy --listen not applied: %q", cfg.Listen)
+	}
+}
+
+func TestExplicitHostPortOverridesLegacyListenEnv(t *testing.T) {
+	// An explicit --host/--port selection overrides a conflicting legacy
+	// TRESTLE_LISTEN durable value, so a malformed legacy value cannot break the
+	// explicit selection.
+	env := map[string]string{"TRESTLE_LISTEN": "not-a-listen", "TRESTLE_LOG_LEVEL": "warn"}
+	cfg, err := Load([]string{"--host", "0.0.0.0", "--port", "9000"}, func(key string) string { return env[key] })
+	if err != nil {
+		t.Fatalf("explicit host/port must override malformed TRESTLE_LISTEN: %v", err)
+	}
+	if cfg.Listen != "127.0.0.1:7333" {
+		t.Fatalf("durable listen = %q want default", cfg.Listen)
+	}
+	// TRESTLE_HOST/TRESTLE_PORT environment selects the new form too.
+	env = map[string]string{"TRESTLE_LISTEN": "not-a-listen", "TRESTLE_PORT": "9001"}
+	cfg, err = Load(nil, func(key string) string { return env[key] })
+	if err != nil {
+		t.Fatalf("TRESTLE_PORT env must override malformed TRESTLE_LISTEN: %v", err)
+	}
+	if cfg.Listen != "127.0.0.1:7333" {
+		t.Fatalf("durable listen = %q want default", cfg.Listen)
+	}
+	// Bare invocation with a malformed legacy value still fails (no fallback).
+	if _, err := Load(nil, func(key string) string { return map[string]string{"TRESTLE_LISTEN": "not-a-listen"}[key] }); err == nil {
+		t.Fatal("malformed TRESTLE_LISTEN on a bare invocation accepted")
+	}
+}
+
 func TestRejectsAmbiguousOrUnsafeValues(t *testing.T) {
-	tests := [][]string{{"--listen", ":8090"}, {"--listen", "localhost:0"}, {"--data-dir", ""}, {"--shutdown-timeout", "0s"}, {"--shutdown-timeout", (6 * time.Minute).String()}, {"--log-level", "verbose"}, {"--database-connect-timeout", "500ms"}}
+	tests := [][]string{{"--listen", ":7333"}, {"--listen", "localhost:0"}, {"--data-dir", ""}, {"--shutdown-timeout", "0s"}, {"--shutdown-timeout", (6 * time.Minute).String()}, {"--log-level", "verbose"}, {"--database-connect-timeout", "500ms"}}
 	for _, args := range tests {
 		if _, err := Load(args, func(string) string { return "" }); err == nil {
 			t.Errorf("Load(%q) succeeded", args)

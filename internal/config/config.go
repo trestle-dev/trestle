@@ -45,13 +45,24 @@ type Config struct {
 }
 
 func Defaults() Config {
-	return Config{Listen: "127.0.0.1:8090", DataDir: "./data", ShutdownTimeout: 10 * time.Second, LogLevel: "info", StorageBackend: "local", S3Region: "us-east-1", ReadHeaderTimeout: 5 * time.Second, ReadTimeout: 5 * time.Minute, IdleTimeout: 60 * time.Second, MaxHeaderBytes: 1 << 20, DatabaseProvider: "sqlite", DatabaseMaxOpen: 10, DatabaseMaxIdle: 2, DatabaseConnectTimeout: 10 * time.Second, DatabaseConnMaxLifetime: 30 * time.Minute}
+	return Config{Listen: "127.0.0.1:7333", DataDir: "./data", ShutdownTimeout: 10 * time.Second, LogLevel: "info", StorageBackend: "local", S3Region: "us-east-1", ReadHeaderTimeout: 5 * time.Second, ReadTimeout: 5 * time.Minute, IdleTimeout: 60 * time.Second, MaxHeaderBytes: 1 << 20, DatabaseProvider: "sqlite", DatabaseMaxOpen: 10, DatabaseMaxIdle: 2, DatabaseConnectTimeout: 10 * time.Second, DatabaseConnMaxLifetime: 30 * time.Minute}
 }
 
 func Load(args []string, getenv func(string) string) (Config, error) {
 	cfg := Defaults()
 	databaseEnvironment := false
-	if value := getenv("TRESTLE_LISTEN"); value != "" {
+	// When the explicit --host/--port form is selected (CLI flags or
+	// TRESTLE_HOST/TRESTLE_PORT environment), the legacy TRESTLE_LISTEN durable
+	// value is overridden and must not fail validation: the CLI applies the
+	// resolved host/port override after load.
+	newListenerForm := getenv("TRESTLE_HOST") != "" || getenv("TRESTLE_PORT") != ""
+	for _, a := range args {
+		if a == "--host" || a == "--port" || strings.HasPrefix(a, "--host=") || strings.HasPrefix(a, "--port=") {
+			newListenerForm = true
+			break
+		}
+	}
+	if value := getenv("TRESTLE_LISTEN"); value != "" && !newListenerForm {
 		cfg.Listen = value
 	}
 	if value := getenv("TRESTLE_DATA_DIR"); value != "" {
@@ -162,6 +173,14 @@ func Load(args []string, getenv func(string) string) (Config, error) {
 	set := flag.NewFlagSet("trestle", flag.ContinueOnError)
 	set.SetOutput(io.Discard)
 	set.StringVar(&cfg.Listen, "listen", cfg.Listen, "listen address")
+	// --host/--port are accepted here so the command line parses, but the config
+	// layer does not apply them: the CLI resolves the listener and, when an
+	// explicit host/port was selected, overrides the durable config listener in
+	// memory after load. The legacy --listen flag and TRESTLE_LISTEN environment
+	// variable keep their durable-config behavior.
+	var cliHost, cliPort string
+	set.StringVar(&cliHost, "host", "", "HTTP bind host")
+	set.StringVar(&cliPort, "port", "", "HTTP bind port, 1-65535")
 	set.StringVar(&cfg.DataDir, "data-dir", cfg.DataDir, "data directory")
 	set.DurationVar(&cfg.ShutdownTimeout, "shutdown-timeout", cfg.ShutdownTimeout, "graceful shutdown timeout")
 	set.StringVar(&cfg.LogLevel, "log-level", cfg.LogLevel, "debug, info, warn, or error")
