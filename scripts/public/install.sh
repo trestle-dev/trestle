@@ -122,6 +122,14 @@ set -eu
 # written. In a repository checkout this sources scripts/checksum.sh; the
 # standalone public copy served by the website inlines that helper so
 # `curl -fsSL https://trestle.cv/install.sh | sh` needs no local file.
+#
+# install.sh installs the binary only. Machine-service configuration (systemd
+# unit, dedicated trestle account, /var/lib/trestle, protected /etc/trestle
+# configuration) is owned by the Go CLI: `sudo trestle service install`. With
+# --system the binary is installed to /usr/local/bin and the canonical Go
+# service installer is invoked; the shell script contains no systemd logic.
+# Set TRESTLE_SKIP_SERVICE_INSTALL=1 to skip the service configuration step
+# (headless/non-systemd contexts and install-script smoke tests).
 
 system=false
 version=${TRESTLE_VERSION:-latest}
@@ -165,4 +173,12 @@ binary="$tmp/trestle_${version#v}_${os}_${arch}/trestle"
 mkdir -p "$install_dir"
 install -m 0755 "$binary" "$install_dir/trestle"
 echo "installed trestle $version ($os/$arch) to $install_dir/trestle"
+if $system && [ "${TRESTLE_SKIP_SERVICE_INSTALL:-0}" != 1 ]; then
+  if command -v systemctl >/dev/null 2>&1; then
+    echo "Configuring the trestle machine service..."
+    "$install_dir/trestle" service install
+  else
+    echo "systemd not found; run 'sudo trestle service install' on a systemd host to configure the service."
+  fi
+fi
 case ":$PATH:" in *":$install_dir:"*) ;; *) echo "add $install_dir to PATH" ;; esac

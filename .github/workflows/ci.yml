@@ -98,3 +98,73 @@ jobs:
           ./scripts/test-release-rehearsal.sh
       - name: Real Caddy and nginx TLS smoke tests
         run: ./scripts/test-proxies.sh
+  systemd-lifecycle:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-go@v5
+        with:
+          go-version-file: go.mod
+          cache: true
+      - name: Build the binary under test
+        run: CGO_ENABLED=0 go build -o /tmp/tr ./cmd/trestle
+      - name: Rehearse the systemd lifecycle (install -> health -> update -> rollback -> uninstall)
+        run: |
+          set -euxo pipefail
+          DATA=/var/lib/trestle
+          wait_health() {
+            for _ in $(seq 1 60); do
+              if curl -fsS http://127.0.0.1:8090/system/health >/dev/null 2>&1; then
+                return 0
+              fi
+              sleep 0.5
+            done
+            echo "health never became ready" >&2
+            return 1
+          }
+          sudo /tmp/tr service install
+          # account and data ownership are created by install
+          id trestle
+          sudo test -O "$DATA" -o "$(stat -c %U "$DATA")" = trestle || exit 1
+          systemctl is-active trestle.service
+          wait_health
+          # install is idempotent (byte-identical + enabled + active -> no-op)
+          sudo /tmp/tr service install
+          wait_health
+          # status is read-only, no sudo
+          /tmp/tr service status | grep -E 'health:  ok'
+          # start/stop/restart/enable/disable family
+          sudo /tmp/tr service stop
+          sudo /tmp/tr service stop   # repeated stop is safe
+          sudo /tmp/tr service start
+          wait_health
+          sudo /tmp/tr service restart
+          wait_health
+          sudo /tmp/tr service disable
+          sudo /tmp/tr service disable   # repeated disable is safe
+          test "$(systemctl is-enabled trestle.service)" = disabled
+          sudo /tmp/tr service enable
+          test "$(systemctl is-enabled trestle.service)" = enabled
+          # boot-enablement is asserted structurally (not a reboot claim)
+          grep -q 'WantedBy=multi-user.target' /etc/systemd/system/trestle.service
+          # update with a verified artifact
+          CGO_ENABLED=0 go build -o /tmp/tr2 ./cmd/trestle
+          SHA=$(sha256sum /tmp/tr2 | cut -d' ' -f1)
+          sudo /tmp/tr service update /tmp/tr2 "$SHA"
+          wait_health
+          # rollback restores the previous executable
+          sudo /tmp/tr service rollback
+          wait_health
+          # a deliberately stopped service stays stopped across update and rollback
+          sudo /tmp/tr service stop
+          CGO_ENABLED=0 go build -o /tmp/tr4 ./cmd/trestle
+          SHA4=$(sha256sum /tmp/tr4 | cut -d' ' -f1)
+          sudo /tmp/tr service update /tmp/tr4 "$SHA4"
+          test "$(systemctl is-active trestle.service)" = inactive
+          sudo /tmp/tr service rollback
+          test "$(systemctl is-active trestle.service)" = inactive
+          # stop -> uninstall removes the unit; data is preserved
+          sudo /tmp/tr service stop
+          sudo /tmp/tr service uninstall
+          test ! -f /etc/systemd/system/trestle.service
+          sudo test -d "$DATA"

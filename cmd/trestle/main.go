@@ -10,6 +10,7 @@ import (
 	"net/http"
 	"os"
 	"os/signal"
+	"strings"
 	"syscall"
 	"time"
 
@@ -31,6 +32,7 @@ import (
 	"github.com/trestle-dev/trestle/internal/records"
 	"github.com/trestle-dev/trestle/internal/rules"
 	"github.com/trestle-dev/trestle/internal/server"
+	"github.com/trestle-dev/trestle/internal/service"
 	"github.com/trestle-dev/trestle/internal/store"
 	"github.com/trestle-dev/trestle/internal/web"
 	"github.com/trestle-dev/trestle/internal/webhooks"
@@ -40,8 +42,10 @@ import (
 const defaultListen = "127.0.0.1:8090"
 
 func main() {
+	// Service-management commands must remain usable even when the application
+	// configuration is unhealthy, so dispatch before any runtime config load.
 	if len(os.Args) > 1 && os.Args[1] == "service" {
-		os.Exit(runService(os.Args[2:], buildinfo.Current().Version))
+		os.Exit(runService(os.Args[2:]))
 	}
 	if len(os.Args) > 1 && os.Args[1] == "serve" {
 		os.Args = append(os.Args[:1], os.Args[2:]...)
@@ -261,4 +265,173 @@ func main() {
 
 func printMigrateUsage() {
 	fmt.Fprintln(os.Stderr, "usage: trestle migrate --from-provider sqlite|postgres --from-dir DIR|--from-url URL --to-provider sqlite|postgres --to-dir DIR|--to-url URL [--dry-run] [--confirm-migration]")
+}
+
+// runService dispatches `trestle service <command>` operating the Trestle
+// systemd **system** unit. Exit codes: 0 success, 1 operational failure, 2
+// usage error (canonical Web Fleet convention).
+func runService(args []string) int {
+	cmd := "status"
+	var flags, positional []string
+	for _, a := range args {
+		if a != "" && !strings.HasPrefix(a, "-") {
+			if cmd == "status" && len(positional) == 0 {
+				cmd = a
+				continue
+			}
+			positional = append(positional, a)
+			continue
+		}
+		flags = append(flags, a)
+	}
+	usage := func(msg string) int {
+		fmt.Fprintf(os.Stderr, "trestle service %s: %s\n", cmd, msg)
+		return 2
+	}
+	if len(flags) > 0 {
+		switch cmd {
+		case "install":
+			for i := 0; i < len(flags); i++ {
+				switch flags[i] {
+				case "--data":
+					if i+1 < len(flags) {
+						i++
+					} else {
+						return usage("--data requires a path")
+					}
+				case "--listen":
+					if i+1 < len(flags) {
+						i++
+					} else {
+						return usage("--listen requires an address")
+					}
+				case "--env-file":
+					if i+1 < len(flags) {
+						i++
+					} else {
+						return usage("--env-file requires a path")
+					}
+				default:
+					return usage("unknown flag " + flags[i])
+				}
+			}
+		case "logs":
+			if len(flags) > 1 || flags[0] != "--follow" {
+				return usage("logs accepts only --follow")
+			}
+		default:
+			return usage("no flags are accepted for " + cmd)
+		}
+	}
+	switch cmd {
+	case "install":
+		if len(positional) != 0 {
+			return usage("install takes no positional arguments")
+		}
+		data, listen := service.DefaultDataDir, service.DefaultListen
+		envfile := ""
+		for i := 0; i < len(flags); i++ {
+			switch flags[i] {
+			case "--data":
+				if i+1 < len(flags) {
+					i++
+					data = flags[i]
+				}
+			case "--listen":
+				if i+1 < len(flags) {
+					i++
+					listen = flags[i]
+				}
+			case "--env-file":
+				if i+1 < len(flags) {
+					i++
+					envfile = flags[i]
+				}
+			}
+		}
+		if err := service.Install(service.Executable(), data, listen, envfile); err != nil {
+			fmt.Fprintln(os.Stderr, "trestle service install:", err)
+			return 1
+		}
+		fmt.Fprintln(os.Stdout, "trestle.service installed and active.")
+		return 0
+	case "uninstall":
+		if len(positional) != 0 {
+			return usage("uninstall takes no positional arguments")
+		}
+		if err := service.Uninstall(); err != nil {
+			fmt.Fprintln(os.Stderr, "trestle service uninstall:", err)
+			return 1
+		}
+		fmt.Fprintln(os.Stdout, "trestle.service uninstalled. Data in "+service.DefaultDataDir+" was preserved.")
+		return 0
+	case "start", "stop", "restart", "enable", "disable":
+		if len(positional) != 0 {
+			return usage(cmd + " takes no positional arguments")
+		}
+		if err := lifecycleErr(cmd); err != nil {
+			fmt.Fprintln(os.Stderr, "trestle service "+cmd+":", err)
+			return 1
+		}
+		fmt.Fprintln(os.Stdout, "trestle.service "+cmd+"ed.")
+		return 0
+	case "status":
+		if len(positional) != 0 {
+			return usage("status takes no positional arguments")
+		}
+		if err := service.Status(os.Stdout); err != nil {
+			fmt.Fprintln(os.Stderr, "trestle service status:", err)
+			return 1
+		}
+		return 0
+	case "logs":
+		if len(positional) != 0 {
+			return usage("logs takes no positional arguments")
+		}
+		follow := len(flags) > 0 && flags[0] == "--follow"
+		if err := service.Logs(follow, os.Stdout); err != nil {
+			fmt.Fprintln(os.Stderr, "trestle service logs:", err)
+			return 1
+		}
+		return 0
+	case "update":
+		if len(positional) != 2 {
+			return usage("usage: trestle service update ARTIFACT SHA256")
+		}
+		if err := service.Update(positional[0], positional[1]); err != nil {
+			fmt.Fprintln(os.Stderr, "trestle service update:", err)
+			return 1
+		}
+		fmt.Fprintln(os.Stdout, "trestle.service updated and restarted.")
+		return 0
+	case "rollback":
+		if len(positional) != 0 {
+			return usage("rollback takes no positional arguments")
+		}
+		if err := service.Rollback(); err != nil {
+			fmt.Fprintln(os.Stderr, "trestle service rollback:", err)
+			return 1
+		}
+		fmt.Fprintln(os.Stdout, "trestle.service rolled back and restarted.")
+		return 0
+	default:
+		fmt.Fprintf(os.Stderr, "trestle: unknown service command %q\n\nUsage: trestle service <install|uninstall|start|stop|restart|status|enable|disable|logs|update|rollback> [flags]\n", cmd)
+		return 2
+	}
+}
+
+func lifecycleErr(verb string) error {
+	switch verb {
+	case "start":
+		return service.Start()
+	case "stop":
+		return service.Stop()
+	case "restart":
+		return service.Restart()
+	case "enable":
+		return service.Enable()
+	case "disable":
+		return service.Disable()
+	}
+	return fmt.Errorf("unknown lifecycle verb")
 }
