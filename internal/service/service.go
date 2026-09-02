@@ -444,14 +444,27 @@ func validateEnvFile(path string) error {
 // existing directory is only reused if it is a non-symlink directory already
 // owned by the service account with no group/world-write bits; an unrelated
 // or root-owned existing directory is refused rather than silently adopted.
+// Parent directories are never created or adopted by the installer.
 func prepareDataDir(path string) error {
-	info, e := os.Lstat(path)
+	clean := filepath.Clean(path)
+	info, e := os.Lstat(clean)
 	if errors.Is(e, os.ErrNotExist) {
-		if e := mkdirData(path, 0o700); e != nil {
+		parent := filepath.Dir(clean)
+		pinfo, e := os.Lstat(parent)
+		if e != nil {
+			return fmt.Errorf("data directory parent %q does not exist; create the parent hierarchy and retry (the installer creates only the final data-directory leaf)", parent)
+		}
+		if pinfo.Mode()&os.ModeSymlink != 0 {
+			return fmt.Errorf("data directory parent %q must not be a symlink", parent)
+		}
+		if !pinfo.IsDir() {
+			return fmt.Errorf("data directory parent %q is not a directory", parent)
+		}
+		if e := mkdirData(clean, 0o700); e != nil {
 			return e
 		}
-		_ = os.Chmod(path, 0o700)
-		if e := chownData(path); e != nil {
+		_ = os.Chmod(clean, 0o700)
+		if e := chownData(clean); e != nil {
 			return e
 		}
 		return nil
@@ -475,21 +488,36 @@ func prepareDataDir(path string) error {
 	return nil
 }
 
-// systemDataRoots are filesystem and system-prefix directories the service
-// installer must never adopt as a data directory.
-var systemDataRoots = map[string]bool{
+// topLevelSystemRoots are filesystem roots that can never be a service data
+// directory even as a direct target (e.g. `--data /var`).
+var topLevelSystemRoots = map[string]bool{
 	"/": true, "/bin": true, "/boot": true, "/dev": true, "/etc": true,
 	"/home": true, "/lib": true, "/lib64": true, "/opt": true, "/proc": true,
 	"/root": true, "/run": true, "/sbin": true, "/srv": true, "/sys": true,
 	"/tmp": true, "/usr": true, "/var": true,
 }
 
+// protectedSystemTrees are system trees beneath which arbitrary application
+// data does not belong. /var and /srv are intentionally NOT in this set so
+// canonical /var/lib/<project> and /srv/<project> locations remain valid.
+var protectedSystemTrees = map[string]bool{
+	"/bin": true, "/boot": true, "/dev": true, "/etc": true, "/lib": true,
+	"/lib64": true, "/proc": true, "/root": true, "/run": true, "/sbin": true,
+	"/sys": true, "/usr": true,
+}
+
 // validateDataDirPath rejects data-directory paths that are dangerous system
-// roots. It must run before any ownership or mode mutation.
+// roots or live beneath protected system trees. It must run before any
+// ownership or mode mutation.
 func validateDataDirPath(path string) error {
 	clean := filepath.Clean(path)
-	if systemDataRoots[clean] {
+	if topLevelSystemRoots[clean] {
 		return fmt.Errorf("data directory %q is a system directory and cannot be adopted as a service data directory", path)
+	}
+	for p := clean; p != "/"; p = filepath.Dir(p) {
+		if protectedSystemTrees[p] {
+			return fmt.Errorf("data directory %q lives beneath protected system tree %q and cannot be used as a service data directory", path, p)
+		}
 	}
 	return nil
 }
@@ -682,17 +710,21 @@ func Install(exe, dataDir, listen string, envfile string) (retErr error) {
 		return e
 	}
 	unitChanged := !hadUnit || string(priorUnit) != unit
-	changed := unitChanged || binaryChanged
-	steps := [][]string{{"daemon-reload"}}
-	if changed {
+	// Forward path: a fresh install establishes the machine-service default
+	// (enabled + active). An EXISTING managed installation must preserve its
+	// exact prior enablement and activity states through the same canonical
+	// restoration helpers used by failed-install rollback, so a changed
+	// binary/unit can never silently convert a disabled+inactive service into
+	// enabled+active or a runtime-only enablement into a persistent one.
+	steps := [][]string{}
+	if unitChanged {
+		steps = append(steps, []string{"daemon-reload"})
+	}
+	if !hadUnit {
 		steps = append(steps, []string{"enable", "trestle.service"}, []string{"restart", "trestle.service"})
 	} else {
-		if priorEnabled != "enabled" {
-			steps = append(steps, []string{"enable", "trestle.service"})
-		}
-		if priorActive != "active" {
-			steps = append(steps, []string{"start", "trestle.service"})
-		}
+		steps = append(steps, enableRestoreSteps(priorEnabled, "trestle.service")...)
+		steps = append(steps, activeRestoreArgs(priorActive, "trestle.service"))
 	}
 	for _, a := range steps {
 		if out, code, err := systemctl(a...); err != nil || code != 0 {
