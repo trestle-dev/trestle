@@ -117,11 +117,19 @@ verify_archive() {
 set -eu
 
 # Canonical update.sh: verifies and atomically replaces the installed Trestle
-# executable, retaining the previous binary for rollback. It never modifies
-# instance data or configuration. In a repository checkout this sources
-# scripts/checksum.sh; the standalone public copy served by the website inlines
-# that helper so `curl -fsSL https://trestle.cv/update.sh | sh` needs no local
-# file.
+# executable, retaining the previous binary for a shell-level rollback. It never
+# modifies instance data or configuration.
+#
+# update.sh is the binary-update convenience path. When a machine service is
+# installed (systemd system unit managed by `trestle service`), --system defers
+# the service transition to the canonical Go CLI (`trestle service update`),
+# which owns the unit, restart, state preservation and rollback metadata. The
+# shell script contains no systemd implementation and never independently
+# restarts or rolls back a managed service.
+#
+# In a repository checkout this sources scripts/checksum.sh; the standalone
+# public copy served by the website inlines that helper so
+# `curl -fsSL https://trestle.cv/update.sh | sh` needs no local file.
 
 system=false
 version=${TRESTLE_VERSION:-latest}
@@ -149,6 +157,15 @@ fi
 [ ! -L "$binary" ] || { echo "refusing to replace symlinked installation: $binary" >&2; exit 1; }
 previous="$binary.previous"
 if $rollback; then
+  if $system && [ -f /etc/systemd/system/trestle.service ] && command -v systemctl >/dev/null 2>&1; then
+    # A managed machine service: the Go CLI owns service rollback. If the unit
+    # is trestle-managed, defer; otherwise fall back to the binary-only path.
+    if grep -q 'Managed by trestle. Do not edit manually.' /etc/systemd/system/trestle.service; then
+      $dry_run && { echo "would run 'trestle service rollback'"; exit 0; }
+      "$binary" service rollback
+      exit 0
+    fi
+  fi
   [ -f "$previous" ] || { echo "no rollback binary at $previous" >&2; exit 1; }
   $dry_run && { echo "would restore $previous to $binary"; exit 0; }
   staging="$binary.rollback.$$"
@@ -169,7 +186,6 @@ fi
 current=$($binary version 2>/dev/null | head -1 || true)
 echo "installed: ${current:-unknown}"
 echo "target: $version"
-$dry_run && { echo "would verify and atomically replace $binary; data and configuration are untouched"; exit 0; }
 archive="trestle_${version#v}_${os}_${arch}.tar.gz"
 tmp=$(mktemp -d "${TMPDIR:-/tmp}/trestle-update.XXXXXX")
 trap 'rm -rf "$tmp"' EXIT INT TERM
@@ -179,6 +195,19 @@ verify_archive "$tmp/$archive" "$tmp/SHA256SUMS"
 tar -xzf "$tmp/$archive" -C "$tmp"
 candidate="$tmp/trestle_${version#v}_${os}_${arch}/trestle"
 [ -f "$candidate" ] && [ ! -L "$candidate" ] || { echo "release archive did not contain $archive's expected executable" >&2; exit 1; }
+if $dry_run; then
+  echo "would update Trestle to $version; data and configuration are untouched"
+  exit 0
+fi
+if $system && [ -f /etc/systemd/system/trestle.service ] && command -v systemctl >/dev/null 2>&1 && grep -q 'Managed by trestle. Do not edit manually.' /etc/systemd/system/trestle.service; then
+  # A managed machine service: the Go CLI owns the binary replace, restart,
+  # state preservation and rollback metadata. update.sh only supplies the
+  # verified artifact and its checksum.
+  sha=$(sha256sum "$candidate" | awk '{print $1}')
+  echo "Configuring the trestle machine service update..."
+  "$binary" service update "$candidate" "$sha"
+  exit 0
+fi
 cp "$binary" "$previous.new"
 chmod 0755 "$previous.new"
 mv "$previous.new" "$previous"
