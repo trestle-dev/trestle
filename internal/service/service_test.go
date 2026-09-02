@@ -70,6 +70,7 @@ func setupService(t *testing.T) *fakeRunner {
 	oldRoot, oldAccount := isRoot, ensureAccount
 	oldUID := serviceUID
 	oldOpenParent, oldConsistent := openDataParentSeam, dataParentConsistentSeam
+	oldParentSafe := parentSafeSeam
 	oldStatLeaf, oldMkdirAt := statDataLeafSeam, mkdirAtLeafSeam
 	oldOpenAt, oldChmod, oldChown := openAtLeafSeam, fchmodLeafSeam, fchownLeafSeam
 	oldFstat, oldUnlink, oldClose := fstatLeafSeam, unlinkAtSeam, closeFdSeam
@@ -84,6 +85,7 @@ func setupService(t *testing.T) *fakeRunner {
 	serviceUID = func() (int, error) { return 4242, nil }
 	openDataParentSeam = func(string) (int, error) { return 1, nil }
 	dataParentConsistentSeam = func(int, string) bool { return true }
+	parentSafeSeam = func(int) error { return nil }
 	statDataLeafSeam = func(int, string) (dataLeafInfo, error) { return dataLeafInfo{}, os.ErrNotExist }
 	mkdirAtLeafSeam = func(int, string) error { return nil }
 	openAtLeafSeam = func(int, string) (int, error) { return 2, nil }
@@ -101,6 +103,7 @@ func setupService(t *testing.T) *fakeRunner {
 		isRoot, ensureAccount = oldRoot, oldAccount
 		serviceUID = oldUID
 		openDataParentSeam, dataParentConsistentSeam = oldOpenParent, oldConsistent
+		parentSafeSeam = oldParentSafe
 		statDataLeafSeam, mkdirAtLeafSeam = oldStatLeaf, oldMkdirAt
 		openAtLeafSeam, fchmodLeafSeam, fchownLeafSeam = oldOpenAt, oldChmod, oldChown
 		fstatLeafSeam, unlinkAtSeam, closeFdSeam = oldFstat, oldUnlink, oldClose
@@ -119,6 +122,7 @@ func useRealDataDirSeams(t *testing.T) {
 	t.Helper()
 	openDataParentSeam = openDataParentReal
 	dataParentConsistentSeam = dataParentConsistentReal
+	parentSafeSeam = parentSafeReal
 	statDataLeafSeam = statDataLeafReal
 	mkdirAtLeafSeam = mkdirAtLeafReal
 	openAtLeafSeam = openAtLeafReal
@@ -127,6 +131,14 @@ func useRealDataDirSeams(t *testing.T) {
 	fstatLeafSeam = fstatLeafReal
 	unlinkAtSeam = unlinkAtLeafReal
 	closeFdSeam = closeFdReal
+}
+
+// simulateSafeParent accepts the parent for tests that create real leaves under
+// a temporary (non-root, writable) parent, since the safe-parent contract would
+// refuse it; it keeps every other descriptor-relative seam real.
+func simulateSafeParent(t *testing.T) {
+	t.Helper()
+	parentSafeSeam = func(int) error { return nil }
 }
 
 // hasMutatingSystemctl reports whether the fake runner issued a mutating
