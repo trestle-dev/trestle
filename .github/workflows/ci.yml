@@ -125,7 +125,7 @@ jobs:
           sudo /tmp/tr service install
           # account and data ownership are created by install
           id trestle
-          sudo test -O "$DATA" -o "$(stat -c %U "$DATA")" = trestle || exit 1
+          test "$(stat -c %U "$DATA")" = trestle || exit 1
           systemctl is-active trestle.service
           wait_health
           # install is idempotent (byte-identical + enabled + active -> no-op)
