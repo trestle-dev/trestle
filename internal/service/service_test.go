@@ -67,10 +67,12 @@ func setupService(t *testing.T) *fakeRunner {
 	t.Helper()
 	dir := t.TempDir()
 	oldUnit, oldBin := UnitPath, BinaryPath
-	oldRoot, oldAccount, oldChown := isRoot, ensureAccount, chownData
-	oldMkdir := mkdirData
-	oldUID, oldOwned := serviceUID, requireServiceOwned
-	oldChmod := chmodPath
+	oldRoot, oldAccount := isRoot, ensureAccount
+	oldUID := serviceUID
+	oldOpenParent, oldConsistent := openDataParentSeam, dataParentConsistentSeam
+	oldStatLeaf, oldMkdirAt := statDataLeafSeam, mkdirAtLeafSeam
+	oldOpenAt, oldChmod, oldChown := openAtLeafSeam, fchmodLeafSeam, fchownLeafSeam
+	oldFstat, oldUnlink, oldClose := fstatLeafSeam, unlinkAtSeam, closeFdSeam
 	oldRunner := defaultRunner
 	oldHealth := healthWindow
 	oldPriorRead := priorStateFileRead
@@ -79,25 +81,68 @@ func setupService(t *testing.T) *fakeRunner {
 	os.WriteFile(BinaryPath, []byte("#!/bin/sh\nexit 0\n"), 0o755)
 	isRoot = func() bool { return true }
 	ensureAccount = func() error { return nil }
-	chownData = func(string) error { return nil }
-	mkdirData = func(string, os.FileMode) error { return nil }
-	chmodPath = func(string, os.FileMode) error { return nil }
 	serviceUID = func() (int, error) { return 4242, nil }
-	requireServiceOwned = func(string) error { return nil }
+	openDataParentSeam = func(string) (int, error) { return 1, nil }
+	dataParentConsistentSeam = func(int, string) bool { return true }
+	statDataLeafSeam = func(int, string) (dataLeafInfo, error) { return dataLeafInfo{}, os.ErrNotExist }
+	mkdirAtLeafSeam = func(int, string) error { return nil }
+	openAtLeafSeam = func(int, string) (int, error) { return 2, nil }
+	fchmodLeafSeam = func(int) error { return nil }
+	fchownLeafSeam = func(int) error { return nil }
+	fstatLeafSeam = func(int) (dataLeafInfo, error) {
+		return dataLeafInfo{isDir: true, mode: 0o700, uid: 4242}, nil
+	}
+	unlinkAtSeam = func(int, string) error { return nil }
+	closeFdSeam = func(int) error { return nil }
 	r := &fakeRunner{script: map[string]fakeResult{}, seq: map[string][]fakeResult{}}
 	defaultRunner = r
 	t.Cleanup(func() {
 		UnitPath, BinaryPath = oldUnit, oldBin
-		isRoot, ensureAccount, chownData = oldRoot, oldAccount, oldChown
-		mkdirData = oldMkdir
-		chmodPath = oldChmod
-		serviceUID, requireServiceOwned = oldUID, oldOwned
+		isRoot, ensureAccount = oldRoot, oldAccount
+		serviceUID = oldUID
+		openDataParentSeam, dataParentConsistentSeam = oldOpenParent, oldConsistent
+		statDataLeafSeam, mkdirAtLeafSeam = oldStatLeaf, oldMkdirAt
+		openAtLeafSeam, fchmodLeafSeam, fchownLeafSeam = oldOpenAt, oldChmod, oldChown
+		fstatLeafSeam, unlinkAtSeam, closeFdSeam = oldFstat, oldUnlink, oldClose
 		healthWindow = oldHealth
 		priorStateFileRead = oldPriorRead
 		healthCheckFunc = func(url string) error { return healthCheckReal(url) }
 		defaultRunner = oldRunner
 	})
 	return r
+}
+
+// useRealDataDirSeams switches the descriptor-relative data-dir seams to their
+// real syscall implementations so a test exercises the actual filesystem
+// establishment.
+func useRealDataDirSeams(t *testing.T) {
+	t.Helper()
+	openDataParentSeam = openDataParentReal
+	dataParentConsistentSeam = dataParentConsistentReal
+	statDataLeafSeam = statDataLeafReal
+	mkdirAtLeafSeam = mkdirAtLeafReal
+	openAtLeafSeam = openAtLeafReal
+	fchmodLeafSeam = fchmodLeafReal
+	fchownLeafSeam = func(fd int) error { return nil } // tests run unprivileged; ownership is simulated
+	fstatLeafSeam = fstatLeafReal
+	unlinkAtSeam = unlinkAtLeafReal
+	closeFdSeam = closeFdReal
+}
+
+// hasMutatingSystemctl reports whether the fake runner issued a mutating
+// lifecycle verb (enable/disable/start/stop/restart/daemon-reload).
+func hasMutatingSystemctl(log []string) bool {
+	for _, call := range log {
+		for _, prefix := range []string{
+			"systemctl enable ", "systemctl disable ", "systemctl start ",
+			"systemctl restart ", "systemctl stop ", "systemctl daemon-reload",
+		} {
+			if strings.HasPrefix(call, prefix) {
+				return true
+			}
+		}
+	}
+	return false
 }
 
 func installManagedUnit(t *testing.T) {
