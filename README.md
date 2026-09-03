@@ -26,7 +26,7 @@ For a complete external application, see
 application users, collection rules, typed records, realtime SSE and files
 without importing Trestle packages or opening the SQLite database.
 
-Trestle v0.1.1 is the current stable public-preview release: checkpoints CP00-CP22 and all
+Trestle v0.1.2 is the current stable public-preview release: checkpoints CP00-CP22 and all
 ten CP23 hardening campaigns are implemented,
 covering the process and SQLite foundation, embedded administration, typed
 collections and records, authentication and access rules, local and
@@ -248,7 +248,7 @@ curl -fsSL https://trestle.cv/download.sh | sh
 to overwrite an existing file:
 
 ```sh
-curl -fsSL https://trestle.cv/download.sh | sh -s -- --version v0.1.1
+curl -fsSL https://trestle.cv/download.sh | sh -s -- --version v0.1.2
 curl -fsSL https://trestle.cv/download.sh | sh -s -- --output ./some-name
 ```
 
@@ -388,9 +388,13 @@ arm64.
 
 ## Current safety boundary
 
-Trestle has no published stable release yet. CP23 is complete and its support
-boundary is recorded in `STABILITY.md`; a tagged stable release and independent
-field evidence remain distinct from completing the engineering campaign.
+Trestle's stable public-preview line is the v0.1.x contract; the current
+release is v0.1.2. The supported surfaces and explicit exclusions of that
+contract are recorded in `STABILITY.md`. A stable public-preview release
+establishes the installable download channel and the initial public
+compatibility contract; it is not a production-proven or battle-proven claim,
+and independent field evidence remains distinct from completing the
+engineering campaign.
 
 ## Project documents
 

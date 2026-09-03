@@ -15,7 +15,7 @@ Set and validate the exact tag being released before any command in this
 runbook; every example uses it:
 
 ```sh
-export VERSION="0.1.1"        # MAJOR.MINOR.PATCH, optionally -prerelease.suffix
+export VERSION="0.1.2"        # MAJOR.MINOR.PATCH, optionally -prerelease.suffix
 printf '%s' "$VERSION" | LC_ALL=C grep -Eq '^[0-9]+[.][0-9]+[.][0-9]+(-[0-9A-Za-z]+([.][0-9A-Za-z]+)*)?$' \
   || { echo "invalid VERSION '$VERSION'" >&2; exit 1; }
 case "$VERSION" in

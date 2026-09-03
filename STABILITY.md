@@ -1,9 +1,13 @@
-# Release-candidate contract
+# Stability and support contract
 
-CP23 closes the planned implementation and hardening programme. This commit is a
-release candidate, not a published stable release.
+Trestle's v0.1.x stable public-preview releases establish the normal,
+installable download channel and the initial public compatibility contract. A
+stable public-preview release is not a production-proven or battle-proven
+claim, and a stable tag is never itself a release candidate. The v0.1.x
+contract is young: later stable releases within the line may still require
+documented corrections while the product gains field evidence.
 
-## Candidate-supported surfaces
+## Supported surfaces (v0.1.x contract)
 
 - Linux and macOS on amd64 and arm64, and Windows on amd64 and arm64.
 - One Trestle process owning one configured database: an owned local SQLite
@@ -14,16 +18,19 @@ release candidate, not a published stable release.
 - Application users, administrator sessions, scoped service credentials,
   collection rules, typed records, local and S3-compatible files, SSE, jobs,
   audit, signed webhooks, AWS Lambda delivery, backups and offline restore.
-- Checksum-verified archives, user installs, updates and executable rollback.
+- Cross-provider migration between SQLite and PostgreSQL, with provider-specific
+  backup and restore procedures.
+- Checksum-verified archives, user installs, executable updates and explicit
+  rollback.
 
-## Explicitly outside the candidate contract
+## Explicitly outside the v0.1.x contract
 
-- Multi-writer clustering or SQLite on a shared/network filesystem.
+- Multiple Trestle processes sharing one database, or SQLite on a
+  shared/network filesystem.
+- Managed/serverless PostgreSQL topologies beyond the tested single-process
+  ownership model.
 - Automatic database downgrade during executable rollback.
 - Direct application-user file delivery through collection rules.
 - Target-aware relation foreign keys or automatic relation expansion.
 - Outbound email verification and self-service password recovery.
 - An official container image or managed service.
-
-Compatibility is frozen only when a stable version is published. Until then,
-release-candidate findings may still require a documented breaking correction.
