@@ -21,3 +21,5 @@ button,a,[role="button"],select,input[type="checkbox"],input[type="file"]{cursor
 .workspace:focus-visible{outline:0}
 /* JSON rendered inside dashboard cards stays left-aligned. */
 .json-block{text-align:left}
+
+html,*{scrollbar-color:#3a4140 #111413}*::-webkit-scrollbar{width:11px;height:11px}*::-webkit-scrollbar-track{background:#111413}*::-webkit-scrollbar-thumb{background:#3a4140;border:2px solid #111413;border-radius:8px}*::-webkit-scrollbar-thumb:hover{background:#555f5c}
