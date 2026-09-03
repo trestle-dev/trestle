@@ -133,6 +133,51 @@ func TestSetupLoginLogoutLifecycle(t *testing.T) {
 	}
 }
 
+func TestAdministratorCanChangeOwnPassword(t *testing.T) {
+	for _, provider := range storetest.Providers(t) {
+		t.Run(provider, func(t *testing.T) {
+			h := testHandler(t, provider)
+			setup := request(t, h, "POST", "/admin/v1/setup", credentials{Email: "admin@example.com", Password: "old password", ApplicationRegistrationPolicy: "closed"}, nil, "")
+			cookie := setup.Result().Cookies()[0]
+			var session sessionResponse
+			if err := json.NewDecoder(setup.Body).Decode(&session); err != nil {
+				t.Fatal(err)
+			}
+
+			second := request(t, h, "POST", "/admin/v1/session", credentials{Email: "admin@example.com", Password: "old password"}, nil, "")
+			secondCookie := second.Result().Cookies()[0]
+			withoutCSRF := request(t, h, "POST", "/admin/v1/password", passwordChange{CurrentPassword: "old password", NewPassword: "new password", ConfirmPassword: "new password"}, cookie, "")
+			if withoutCSRF.Code != http.StatusForbidden {
+				t.Fatalf("missing csrf: %d %s", withoutCSRF.Code, withoutCSRF.Body.String())
+			}
+			mismatch := request(t, h, "POST", "/admin/v1/password", passwordChange{CurrentPassword: "old password", NewPassword: "new password", ConfirmPassword: "different password"}, cookie, session.CSRFToken)
+			if mismatch.Code != http.StatusUnprocessableEntity {
+				t.Fatalf("confirmation mismatch: %d %s", mismatch.Code, mismatch.Body.String())
+			}
+			bad := request(t, h, "POST", "/admin/v1/password", passwordChange{CurrentPassword: "wrong", NewPassword: "new password", ConfirmPassword: "new password"}, cookie, session.CSRFToken)
+			if bad.Code != http.StatusUnauthorized {
+				t.Fatalf("wrong current password: %d %s", bad.Code, bad.Body.String())
+			}
+			changed := request(t, h, "POST", "/admin/v1/password", passwordChange{CurrentPassword: "old password", NewPassword: "new password", ConfirmPassword: "new password"}, cookie, session.CSRFToken)
+			if changed.Code != http.StatusNoContent {
+				t.Fatalf("change: %d %s", changed.Code, changed.Body.String())
+			}
+			if current := request(t, h, "GET", "/admin/v1/session", nil, cookie, ""); !strings.Contains(current.Body.String(), "true") {
+				t.Fatal("current session was revoked")
+			}
+			if other := request(t, h, "GET", "/admin/v1/session", nil, secondCookie, ""); !strings.Contains(other.Body.String(), "false") {
+				t.Fatal("other session remained active")
+			}
+			if oldLogin := request(t, h, "POST", "/admin/v1/session", credentials{Email: "admin@example.com", Password: "old password"}, nil, ""); oldLogin.Code != http.StatusUnauthorized {
+				t.Fatalf("old password login: %d", oldLogin.Code)
+			}
+			if newLogin := request(t, h, "POST", "/admin/v1/session", credentials{Email: "admin@example.com", Password: "new password"}, nil, ""); newLogin.Code != http.StatusOK {
+				t.Fatalf("new password login: %d %s", newLogin.Code, newLogin.Body.String())
+			}
+		})
+	}
+}
+
 func TestCompetingSetupCreatesOneAdministrator(t *testing.T) {
 	for _, provider := range storetest.Providers(t) {
 		t.Run(provider, func(t *testing.T) {

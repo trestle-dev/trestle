@@ -21,16 +21,22 @@ import (
 const cookieName = "trestle_admin_session"
 
 type Handler struct {
-	db         store.Executor
-	provider   string
-	now        func() time.Time
-	limiter    *limiter
-	setupGuard func(context.Context) error
+	db              store.Executor
+	provider        string
+	now             func() time.Time
+	limiter         *limiter
+	passwordLimiter *limiter
+	setupGuard      func(context.Context) error
 }
 type credentials struct {
 	Email                         string `json:"email"`
 	Password                      string `json:"password"`
 	ApplicationRegistrationPolicy string `json:"applicationRegistrationPolicy"`
+}
+type passwordChange struct {
+	CurrentPassword string `json:"currentPassword"`
+	NewPassword     string `json:"newPassword"`
+	ConfirmPassword string `json:"confirmPassword"`
 }
 type sessionResponse struct {
 	Authenticated bool   `json:"authenticated"`
@@ -51,7 +57,7 @@ func New(db any, provider ...string) *Handler {
 	if len(provider) > 0 {
 		name = provider[0]
 	}
-	return &Handler{db: store.Adapt(db), provider: name, now: time.Now, limiter: newLimiter(10, time.Minute)}
+	return &Handler{db: store.Adapt(db), provider: name, now: time.Now, limiter: newLimiter(10, time.Minute), passwordLimiter: newLimiter(10, time.Minute)}
 }
 
 func (h *Handler) SetSetupGuard(guard func(context.Context) error) {
@@ -71,9 +77,63 @@ func (h *Handler) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 		h.current(w, r)
 	case r.Method == http.MethodDelete && r.URL.Path == "/admin/v1/session":
 		h.logout(w, r)
+	case r.Method == http.MethodPost && r.URL.Path == "/admin/v1/password":
+		h.changePassword(w, r)
 	default:
 		http.NotFound(w, r)
 	}
+}
+
+func (h *Handler) changePassword(w http.ResponseWriter, r *http.Request) {
+	principal, ok := h.Authorize(r, true)
+	if !ok {
+		writeError(w, 403, "authorization_denied", "Authentication and a valid CSRF token are required.")
+		return
+	}
+	key := principal.AdminID + ":" + clientKey(r)
+	if !h.passwordLimiter.Allow(key, h.now()) {
+		writeError(w, 429, "rate_limited", "Too many attempts. Try again later.")
+		return
+	}
+	var input passwordChange
+	if !decodeJSON(w, r, &input) {
+		return
+	}
+	if input.NewPassword != input.ConfirmPassword {
+		writeError(w, 422, "validation_failed", "The new passwords do not match.")
+		return
+	}
+	hash, err := hashPassword(input.NewPassword)
+	if err != nil {
+		writeError(w, 422, "validation_failed", err.Error())
+		return
+	}
+	tx, err := h.db.BeginTx(r.Context(), nil)
+	if err != nil {
+		writeError(w, 500, "internal_error", "The request could not be completed.")
+		return
+	}
+	defer tx.Rollback()
+	var currentHash string
+	if err := tx.QueryRowContext(r.Context(), "SELECT password_hash FROM _trestle_admins WHERE id=?", principal.AdminID).Scan(&currentHash); err != nil || !verifyPassword(currentHash, input.CurrentPassword) {
+		writeError(w, 401, "invalid_credentials", "The current password is incorrect.")
+		return
+	}
+	now := h.now().UTC().Format(time.RFC3339Nano)
+	if _, err := tx.ExecContext(r.Context(), "UPDATE _trestle_admins SET password_hash=? WHERE id=?", hash, principal.AdminID); err != nil {
+		writeError(w, 500, "internal_error", "The request could not be completed.")
+		return
+	}
+	if _, err := tx.ExecContext(r.Context(), "UPDATE _trestle_admin_sessions SET revoked_at=? WHERE admin_id=? AND id<>? AND revoked_at IS NULL", now, principal.AdminID, principal.SessionID); err != nil {
+		writeError(w, 500, "internal_error", "The request could not be completed.")
+		return
+	}
+	if err := tx.Commit(); err != nil {
+		writeError(w, 500, "internal_error", "The request could not be completed.")
+		return
+	}
+	h.passwordLimiter.Clear(key)
+	w.WriteHeader(http.StatusNoContent)
 }
 
 func (h *Handler) setupStatus(w http.ResponseWriter, r *http.Request) {

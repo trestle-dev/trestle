@@ -22,7 +22,7 @@ function renderRealtime() {
   const host = document.getElementById("view-content");
   host.hidden = false;
   host.className = "record-view";
-  host.innerHTML = '<div class="record-toolbar"><div><p class="eyebrow">Durable event journal</p><h2>Realtime</h2></div><button type="button" data-pause>Pause</button></div><form class="query-bar realtime-filter"><label>Topic filter<input name="topic" placeholder="record.created"></label><button>Reconnect</button></form><p class="connection-state">Connecting…</p><div class="event-inspector" aria-live="polite"></div>';
+  host.innerHTML = '<div class="record-toolbar"><div><p class="eyebrow">Durable event journal</p><h2>Realtime</h2></div><button type="button" data-pause>Pause</button></div><form class="query-bar realtime-filter"><label>Topic filter<input name="topic" placeholder="record.created"><span>Leave empty to listen to record.created, record.updated and record.deleted.</span></label><button>Reconnect</button></form><p class="connection-state">Connecting…</p><div class="event-inspector" aria-live="polite"></div>';
   const inspector = host.querySelector(".event-inspector");
   // Paused is a per-visit choice (CP12R5): reset it at the start of every
   // Realtime visit so the controller always agrees with the fresh "Pause"
@@ -50,6 +50,12 @@ function renderRealtime() {
       host.querySelector(".connection-state").textContent = "Connected · replay resumes from the last delivered sequence";
     };
     source.onerror = () => host.querySelector(".connection-state").textContent = "Reconnecting…";
+    source.addEventListener("ready", () => {
+      mark();
+      host.querySelector(".connection-state").textContent = topic
+        ? "Connected · listening to " + topic
+        : "Connected · listening to all record topics";
+    });
     // Transport health: an observable heartbeat keeps the stream live without
     // polluting the event inspector. Business events refresh activity too.
     source.addEventListener("heartbeat", mark);

@@ -244,6 +244,11 @@ const harness = `
   __uiEl(".policy-form").elements = { policy: { value: "closed" } };
   __uiEl(".baseurl-form").elements = { baseurl: { value: "" } };
   __uiEl(".provision-form").elements = { email: { value: "person@example.com" } };
+  __uiEl(".admin-password-form").elements = {
+    currentPassword: { value: "old password" },
+    newPassword: { value: "new password" },
+    confirmPassword: { value: "new password" },
+  };
 
   // Pre-seed the rendered-list buttons so the real renderers attach their
   // handlers to registry elements we can later dispatch.
@@ -255,6 +260,14 @@ const harness = `
 
   // Render the registration view and let loadRegistration populate it.
   await renderUsers();
+
+  const passwordForm = host.querySelector(".admin-password-form");
+  passwordForm.dispatch("submit", { preventDefault() {} });
+  await settle();
+  const passwordCall = __uiFetched.find((f) => f.method === "POST" && f.url === "/admin/v1/password");
+  assert(!!passwordCall, "administrator password form must submit to the password endpoint");
+  assert(passwordCall && JSON.parse(passwordCall.body).currentPassword === "old password", "administrator password form must send the current password");
+  assert(passwordForm.querySelector(".password-note").textContent.indexOf("Password changed") === 0, "administrator password form must confirm success");
 
   // Provision form: set the email input and submit via the real handler.
   const provForm = host.querySelector(".provision-form");
@@ -619,7 +632,9 @@ await sandbox.__uiDone;
 
 // Static HTML/JS contract checks.
 const failures = sandbox.__uiFailures || [];
-if (!jsSource.includes('<form class="policy-form">')) failures.push("policy form must be a real <form>");
+if (!jsSource.includes('<form class="policy-form user-settings-form">')) failures.push("policy form must be a spaced, stacked <form>");
+if (!jsSource.includes('class="admin-password-form user-settings-form"')) failures.push("administrator password form must be present");
+if (!jsSource.includes('jsonRequest("/admin/v1/password"')) failures.push("administrator password form must use the authenticated password endpoint");
 if (!/policyForm\.addEventListener\(["']submit["'][^;]*?ev\.preventDefault\(\)/.test(jsSource)) failures.push("policy form must handle submit with preventDefault");
 if (jsSource.indexOf('data-dismiss-token') === -1) failures.push("one-time panel must have an explicit Dismiss action");
 if (jsSource.indexOf('function canIssueToken') === -1) failures.push("token-minting actions must be blocked while a token is pending");

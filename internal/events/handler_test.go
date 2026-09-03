@@ -82,6 +82,15 @@ func TestHeartbeatIsObservableEvent(t *testing.T) {
 	}
 }
 
+func TestReadyIsObservableEvent(t *testing.T) {
+	var buf strings.Builder
+	writeReady(&buf)
+	got := buf.String()
+	if got != "event: ready\ndata: {}\n\n" {
+		t.Fatalf("ready must be an immediately observable named SSE event, got %q", got)
+	}
+}
+
 func TestAuthorizedEventVisibility(t *testing.T) {
 	for _, provider := range storetest.Providers(t) {
 		t.Run(provider, func(t *testing.T) {

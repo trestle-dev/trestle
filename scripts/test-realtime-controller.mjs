@@ -178,6 +178,12 @@ eq("after leave visit2: source2 closed", source2.closed, true);
 renderRealtime(); // active visit 3 for the transport-health tests
 const source = FakeEventSource.instances.at(-1);
 
+// The server emits ready immediately, even when the journal is empty, so an
+// unfiltered visit becomes visibly connected without waiting for a heartbeat.
+source.fire("ready", {});
+eq("empty filter connects to all record topics", stateEl.textContent, "Connected · listening to all record topics");
+eq("empty filter sends no topic query", source.url, "/api/v1/realtime");
+
 // Heartbeat keeps an otherwise idle stream healthy, without polluting the
 // inspector.
 const inspectorBefore = inspector.children.length;

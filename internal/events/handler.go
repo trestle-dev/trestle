@@ -100,6 +100,11 @@ func (h *Handler) stream(w http.ResponseWriter, r *http.Request) {
 		}
 		flusher.Flush()
 	}
+	// Send an observable frame immediately, even when the journal is empty.
+	// Without it some browsers remain in "Connecting" until the first 15-second
+	// heartbeat because Flush has no bytes to deliver.
+	writeReady(w)
+	flusher.Flush()
 	send()
 	for {
 		select {
@@ -156,4 +161,8 @@ func writeJSON(w http.ResponseWriter, value any) {
 // client can refresh its activity time without adding an item to the UI.
 func writeHeartbeat(w io.Writer) {
 	fmt.Fprint(w, "event: heartbeat\ndata: {}\n\n")
+}
+
+func writeReady(w io.Writer) {
+	fmt.Fprint(w, "event: ready\ndata: {}\n\n")
 }
