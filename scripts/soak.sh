@@ -41,7 +41,7 @@ done
 setup() {
   curl -fsS -c "$work/cj" -X POST "$base/admin/v1/setup" \
     -H 'Content-Type: application/json' -H "Origin: $base" \
-    -d '{"email":"admin@example.com","password":"correct horse battery staple"}' >/dev/null
+    -d '{"email":"admin@example.com","password":"correct horse battery staple","applicationRegistrationPolicy":"closed"}' >/dev/null
   token=$(curl -fsS -b "$work/cj" -c "$work/cj" "$base/admin/v1/session" \
     | sed -E 's/.*"csrfToken":"([^"]+)".*/\1/' | tr -d '\r\n')
   curl -fsS -b "$work/cj" -X POST "$base/admin/v1/collections" \

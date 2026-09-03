@@ -42,7 +42,7 @@ stop_server() {
 setup_admin() {
   curl -fsS -c "$work/cj" -X POST "$base/admin/v1/setup" \
     -H 'Content-Type: application/json' -H "Origin: $base" \
-    -d '{"email":"admin@example.com","password":"correct horse battery staple"}' \
+    -d '{"email":"admin@example.com","password":"correct horse battery staple","applicationRegistrationPolicy":"closed"}' \
     >"$work/setup.json"
   sed -E 's/.*"csrfToken":"([^"]+)".*/\1/' "$work/setup.json" | tr -d '\r\n' > "$work/csrf"
 }
