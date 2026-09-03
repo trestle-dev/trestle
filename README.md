@@ -1,5 +1,19 @@
 # Trestle
 
+Trestle is a self-hosted application backend with collections, authentication, files, realtime events and administration.
+
+## Command line
+
+```sh
+trestle version
+trestle --version
+trestle service status
+```
+
+Unknown commands and unsupported options fail with a non-zero exit status.
+Run the binary without a subcommand to start the integrated server, or use
+`trestle serve` where that compatibility alias is supported.
+
 Trestle is an open-source, self-hosted backend platform with
 collections, authentication, access rules, files, realtime APIs, migrations,
 administration, backups, and event-driven integrations in one compact binary.

@@ -1,5 +1,14 @@
 # Trestle engineering handover
 
+## Frontend asset ownership
+
+Nift tracks and builds HTML pages only. CSS, JavaScript, images, icons and other
+static assets are canonical in the generated web root (`public/`, `web/dist/`
+or the repository's embedded-public directory). Edit those files directly.
+Do not recreate asset copies under `content/`, do not add asset entries to
+`.nift/tracked.json`, and do not let a Nift build overwrite them. After changing
+HTML templates or content, run Nift and verify that direct assets are unchanged.
+
 Trestle is an open-source, self-hosted application backend. It provides
 collections, authentication, access rules, files, realtime events, migrations,
 administration, audit, backups, and event-driven integrations from one compact

@@ -51,9 +51,14 @@ func main() {
 	if len(os.Args) > 1 && os.Args[1] == "serve" {
 		os.Args = append(os.Args[:1], os.Args[2:]...)
 	}
-	if len(os.Args) == 2 && os.Args[1] == "version" {
+	if len(os.Args) == 2 && (os.Args[1] == "version" || os.Args[1] == "--version") {
 		_ = json.NewEncoder(os.Stdout).Encode(buildinfo.Current())
 		return
+	}
+	if len(os.Args) > 1 && !strings.HasPrefix(os.Args[1], "-") &&
+		os.Args[1] != "restore" && os.Args[1] != "migrate" {
+		fmt.Fprintln(os.Stderr, "trestle: unknown command", os.Args[1])
+		os.Exit(2)
 	}
 	if len(os.Args) > 1 && os.Args[1] == "restore" {
 		set := flag.NewFlagSet("restore", flag.ContinueOnError)
