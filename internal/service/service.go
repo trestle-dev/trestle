@@ -390,7 +390,9 @@ func unitBody(spec unitSpec) string {
 	b.WriteString("[Unit]\n")
 	b.WriteString("Description=Trestle records service\n")
 	b.WriteString("After=network-online.target\n")
-	b.WriteString("Wants=network-online.target\n\n")
+	b.WriteString("Wants=network-online.target\n")
+	b.WriteString("StartLimitIntervalSec=60\n")
+	b.WriteString("StartLimitBurst=5\n\n")
 	b.WriteString("[Service]\n")
 	b.WriteString("Type=simple\n")
 	b.WriteString("User=" + ServiceUser + "\n")
@@ -749,6 +751,11 @@ func install(exe string, spec unitSpec) (retErr error) {
 	// leaf, so the service is already running the requested version in its prior
 	// state; nothing is rewritten, reloaded, enabled or started.
 	if hadUnit && string(priorUnit) == unit && !binaryChanged && dataPlan.status == dataDirAcceptExisting {
+		if priorActive == "active" {
+			if e := waitServiceReady(); e != nil {
+				return fmt.Errorf("installed trestle.service is not healthy: %w", e)
+			}
+		}
 		return nil
 	}
 	// ---- Mutation phase begins here ----
@@ -803,6 +810,11 @@ func install(exe string, spec unitSpec) (retErr error) {
 					break
 				}
 			}
+			if priorActive == "active" {
+				if e := systemctlSuccess("reset-failed", "trestle.service"); e != nil {
+					errs = append(errs, fmt.Sprintf("clear failed state before restoring active state: %v", e))
+				}
+			}
 			if e := systemctlSuccess(activeRestoreArgs(priorActive, "trestle.service")...); e != nil {
 				errs = append(errs, fmt.Sprintf("restore active state %q: %v", priorActive, e))
 			}
@@ -835,14 +847,23 @@ func install(exe string, spec unitSpec) (retErr error) {
 		steps = append(steps, []string{"daemon-reload"})
 	}
 	if !hadUnit {
-		steps = append(steps, []string{"enable", "trestle.service"}, []string{"restart", "trestle.service"})
+		steps = append(steps, []string{"enable", "trestle.service"}, []string{"reset-failed", "trestle.service"}, []string{"restart", "trestle.service"})
 	} else {
 		steps = append(steps, enableRestoreSteps(priorEnabled, "trestle.service")...)
+		if priorActive == "active" {
+			steps = append(steps, []string{"reset-failed", "trestle.service"})
+		}
 		steps = append(steps, activeRestoreArgs(priorActive, "trestle.service"))
 	}
 	for _, a := range steps {
 		if out, code, err := systemctl(a...); err != nil || code != 0 {
 			retErr = fmt.Errorf("systemctl %s: %s: %w (installation rolled back)", strings.Join(a, " "), bounded(strings.TrimSpace(out)), errorIfNil(err, code, a))
+			return retErr
+		}
+	}
+	if !hadUnit || priorActive == "active" {
+		if e := waitServiceReady(); e != nil {
+			retErr = fmt.Errorf("trestle.service did not become healthy after install: %w (installation rolled back)", e)
 			return retErr
 		}
 	}
@@ -960,8 +981,18 @@ func lifecycle(verb string) error {
 	if e := requireManaged(verb); e != nil {
 		return e
 	}
+	if verb == "start" || verb == "restart" {
+		if err := systemctlSuccess("reset-failed", "trestle.service"); err != nil {
+			return fmt.Errorf("clear previous failed state: %w", err)
+		}
+	}
 	if err := systemctlSuccess(verb, "trestle.service"); err != nil {
 		return err
+	}
+	if verb == "start" || verb == "restart" {
+		if err := waitServiceReady(); err != nil {
+			return fmt.Errorf("service %s did not become healthy: %w", verb, err)
+		}
 	}
 	return nil
 }
@@ -1097,6 +1128,9 @@ func healthCheckReal(url string) error {
 	if err := json.Unmarshal(body, &v); err != nil {
 		return fmt.Errorf("expected a JSON object response: %v", err)
 	}
+	if status, _ := v["status"].(string); status != "ok" {
+		return fmt.Errorf("health response does not identify Trestle")
+	}
 	return nil
 }
 
@@ -1225,6 +1259,10 @@ func verifyActiveAndHealthy() error {
 	}
 	return fmt.Errorf("service did not become active and healthy within %s", healthWindow)
 }
+
+// waitServiceReady is a seam for lifecycle unit tests. Production always uses
+// the same bounded active-and-health verification as update and recovery.
+var waitServiceReady = verifyActiveAndHealthy
 
 // restoreAfterFailedUpdate verifiably restores the previous version and its
 // operational state after a failed update. It fails closed if the prior-state

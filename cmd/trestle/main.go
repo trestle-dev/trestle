@@ -288,11 +288,12 @@ func printMigrateUsage() {
 }
 
 // serviceFlagTakesValue reports whether a `trestle service` flag consumes the
-// following argv token as its value. The install family (--data, --listen,
-// --host, --port, --env-file) does; --follow and the lifecycle commands do not.
+// following argv token as its value. The install family (--data-dir, the
+// legacy --data alias, --listen, --host, --port, --env-file) does; --follow
+// and the lifecycle commands do not.
 func serviceFlagTakesValue(name string) bool {
 	switch name {
-	case "--data", "--listen", "--host", "--port", "--env-file":
+	case "--data-dir", "--data", "--listen", "--host", "--port", "--env-file":
 		return true
 	}
 	return false
@@ -331,11 +332,11 @@ func runService(args []string) int {
 		case "install":
 			for i := 0; i < len(flags); i++ {
 				switch flags[i] {
-				case "--data":
+				case "--data-dir", "--data":
 					if i+1 < len(flags) {
 						i++
 					} else {
-						return usage("--data requires a path")
+						return usage(flags[i] + " requires a path")
 					}
 				case "--listen":
 					if i+1 < len(flags) {
@@ -384,7 +385,7 @@ func runService(args []string) int {
 		var hostSet, portSet, listenSet bool
 		for i := 0; i < len(flags); i++ {
 			switch flags[i] {
-			case "--data":
+			case "--data-dir", "--data":
 				if i+1 < len(flags) {
 					i++
 					data = flags[i]
@@ -441,7 +442,7 @@ func runService(args []string) int {
 				return 1
 			}
 		}
-		fmt.Fprintln(os.Stdout, "trestle.service installed and active.")
+		fmt.Fprintln(os.Stdout, "trestle.service installed.")
 		return 0
 	case "uninstall":
 		if len(positional) != 0 {
@@ -451,7 +452,7 @@ func runService(args []string) int {
 			fmt.Fprintln(os.Stderr, "trestle service uninstall:", err)
 			return 1
 		}
-		fmt.Fprintln(os.Stdout, "trestle.service uninstalled. Data in "+service.DefaultDataDir+" was preserved.")
+		fmt.Fprintln(os.Stdout, "trestle.service uninstalled. Trestle data was preserved.")
 		return 0
 	case "start", "stop", "restart", "enable", "disable":
 		if len(positional) != 0 {
@@ -461,7 +462,7 @@ func runService(args []string) int {
 			fmt.Fprintln(os.Stderr, "trestle service "+cmd+":", err)
 			return 1
 		}
-		fmt.Fprintln(os.Stdout, "trestle.service "+cmd+"ed.")
+		fmt.Fprintln(os.Stdout, serviceLifecycleSuccess(cmd))
 		return 0
 	case "status":
 		if len(positional) != 0 {
@@ -490,7 +491,7 @@ func runService(args []string) int {
 			fmt.Fprintln(os.Stderr, "trestle service update:", err)
 			return 1
 		}
-		fmt.Fprintln(os.Stdout, "trestle.service updated and restarted.")
+		fmt.Fprintln(os.Stdout, "trestle.service updated.")
 		return 0
 	case "rollback":
 		if len(positional) != 0 {
@@ -500,11 +501,28 @@ func runService(args []string) int {
 			fmt.Fprintln(os.Stderr, "trestle service rollback:", err)
 			return 1
 		}
-		fmt.Fprintln(os.Stdout, "trestle.service rolled back and restarted.")
+		fmt.Fprintln(os.Stdout, "trestle.service rolled back.")
 		return 0
 	default:
 		fmt.Fprintf(os.Stderr, "trestle: unknown service command %q\n\nUsage: trestle service <install|uninstall|start|stop|restart|status|enable|disable|logs|update|rollback> [flags]\n", cmd)
 		return 2
+	}
+}
+
+func serviceLifecycleSuccess(verb string) string {
+	switch verb {
+	case "start":
+		return "trestle.service started."
+	case "stop":
+		return "trestle.service stopped."
+	case "restart":
+		return "trestle.service restarted."
+	case "enable":
+		return "trestle.service enabled."
+	case "disable":
+		return "trestle.service disabled."
+	default:
+		return "trestle.service updated."
 	}
 }
 

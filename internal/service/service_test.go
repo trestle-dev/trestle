@@ -79,6 +79,7 @@ func setupService(t *testing.T) *fakeRunner {
 	oldFstat, oldUnlink, oldClose := fstatLeafSeam, unlinkAtSeam, closeFdSeam
 	oldRunner := defaultRunner
 	oldHealth := healthWindow
+	oldWaitReady := waitServiceReady
 	oldPriorRead := priorStateFileRead
 	UnitPath = filepath.Join(dir, "trestle.service")
 	BinaryPath = filepath.Join(dir, "trestle")
@@ -99,8 +100,9 @@ func setupService(t *testing.T) *fakeRunner {
 	}
 	unlinkAtSeam = func(int, string) error { return nil }
 	closeFdSeam = func(int) error { return nil }
-	r := &fakeRunner{script: map[string]fakeResult{}, seq: map[string][]fakeResult{}}
+	r := &fakeRunner{script: map[string]fakeResult{"systemctl reset-failed trestle.service": {}}, seq: map[string][]fakeResult{}}
 	defaultRunner = r
+	waitServiceReady = func() error { return nil }
 	t.Cleanup(func() {
 		UnitPath, BinaryPath = oldUnit, oldBin
 		isRoot, ensureAccount = oldRoot, oldAccount
@@ -111,6 +113,7 @@ func setupService(t *testing.T) *fakeRunner {
 		openAtLeafSeam, fchmodLeafSeam, fchownLeafSeam = oldOpenAt, oldChmod, oldChown
 		fstatLeafSeam, unlinkAtSeam, closeFdSeam = oldFstat, oldUnlink, oldClose
 		healthWindow = oldHealth
+		waitServiceReady = oldWaitReady
 		priorStateFileRead = oldPriorRead
 		healthCheckFunc = func(url string) error { return healthCheckReal(url) }
 		defaultRunner = oldRunner
@@ -210,7 +213,7 @@ func contains(hay []string, needle string) bool {
 func TestUnitHardeningAndManagedMarker(t *testing.T) {
 	setupService(t)
 	u := Unit(DefaultDataDir, "127.0.0.1:8090", "")
-	for _, x := range []string{"# Managed by trestle. Do not edit manually.", "NoNewPrivileges=true", "ProtectSystem=strict", "ReadWritePaths=\"/var/lib/trestle\"", "User=" + ServiceUser, "Group=" + ServiceGroup, "WantedBy=multi-user.target"} {
+	for _, x := range []string{"# Managed by trestle. Do not edit manually.", "StartLimitIntervalSec=60", "StartLimitBurst=5", "Restart=on-failure", "RestartSec=3", "NoNewPrivileges=true", "ProtectSystem=strict", "ReadWritePaths=\"/var/lib/trestle\"", "User=" + ServiceUser, "Group=" + ServiceGroup, "WantedBy=multi-user.target"} {
 		if !strings.Contains(u, x) {
 			t.Fatal("missing " + x)
 		}
@@ -246,12 +249,49 @@ func TestLifecycleVerbsRequireManagedUnit(t *testing.T) {
 		}
 	}
 	installManagedUnit(t)
+	r.script["systemctl is-active trestle.service"] = fakeResult{out: "active", code: 0}
 	r.script["systemctl start trestle.service"] = fakeResult{}
 	if err := lifecycle("start"); err != nil {
 		t.Fatal(err)
 	}
 	if !contains(r.log, "systemctl start trestle.service") {
 		t.Fatal("start did not call systemctl")
+	}
+	if !contains(r.log, "systemctl reset-failed trestle.service") {
+		t.Fatal("start did not clear the accumulated start-limit state")
+	}
+}
+
+func TestLifecycleStartAndRestartVerifyHealth(t *testing.T) {
+	r := setupService(t)
+	installManagedUnit(t)
+	r.script["systemctl start trestle.service"] = fakeResult{}
+	r.script["systemctl restart trestle.service"] = fakeResult{}
+	calls := 0
+	waitServiceReady = func() error { calls++; return nil }
+	if err := Start(); err != nil {
+		t.Fatal(err)
+	}
+	if err := Restart(); err != nil {
+		t.Fatal(err)
+	}
+	if calls != 2 {
+		t.Fatalf("readiness checks = %d want 2", calls)
+	}
+	if r.calls["systemctl reset-failed trestle.service"] != 2 {
+		t.Fatalf("reset-failed calls = %d want 2", r.calls["systemctl reset-failed trestle.service"])
+	}
+}
+
+func TestLifecycleResetFailurePreventsStart(t *testing.T) {
+	r := setupService(t)
+	installManagedUnit(t)
+	r.script["systemctl reset-failed trestle.service"] = fakeResult{out: "reset failed", code: 1}
+	if err := Start(); err == nil {
+		t.Fatal("start succeeded after reset-failed failed")
+	}
+	if contains(r.log, "systemctl start trestle.service") {
+		t.Fatal("start was attempted after reset-failed failed")
 	}
 }
 
@@ -273,6 +313,49 @@ func TestInstallRequiresRoot(t *testing.T) {
 	defer func() { isRoot = oldRoot }()
 	if e := Install("", t.TempDir(), "127.0.0.1:0", ""); e == nil {
 		t.Fatal("install succeeded without root")
+	}
+}
+
+func TestFreshInstallHealthFailureRollsBack(t *testing.T) {
+	r := setupService(t)
+	exe := filepath.Join(t.TempDir(), "tr")
+	if err := os.WriteFile(exe, []byte("#!/bin/sh\nexit 0\n"), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	r.script["systemctl daemon-reload"] = fakeResult{}
+	r.script["systemctl enable trestle.service"] = fakeResult{}
+	r.script["systemctl restart trestle.service"] = fakeResult{}
+	r.script["systemctl stop trestle.service"] = fakeResult{}
+	r.script["systemctl disable trestle.service"] = fakeResult{}
+	waitServiceReady = func() error { return fmt.Errorf("wrong listener") }
+	if err := Install(exe, "/var/lib/trestle", "127.0.0.1:8090", ""); err == nil {
+		t.Fatal("install reported success before Trestle became healthy")
+	}
+	if _, err := os.Stat(UnitPath); !os.IsNotExist(err) {
+		t.Fatal("failed fresh install left its unit installed")
+	}
+	if !contains(r.log, "systemctl stop trestle.service") || !contains(r.log, "systemctl disable trestle.service") {
+		t.Fatalf("failed install was not neutralized: %v", r.log)
+	}
+}
+
+func TestIdenticalActiveInstallStillChecksHealth(t *testing.T) {
+	r := setupService(t)
+	installManagedUnit(t)
+	setState(r, "enabled", "active")
+	statDataLeafSeam = func(int, string) (dataLeafInfo, error) {
+		return dataLeafInfo{isDir: true, mode: 0o700, uid: 4242}, nil
+	}
+	exe := filepath.Join(t.TempDir(), "tr")
+	if err := os.WriteFile(exe, mustRead(t, BinaryPath), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	waitServiceReady = func() error { return fmt.Errorf("foreign process") }
+	if err := Install(exe, "/var/lib/trestle", "127.0.0.1:8090", ""); err == nil {
+		t.Fatal("unhealthy active no-op install reported success")
+	}
+	if hasMutatingSystemctl(r.log) {
+		t.Fatalf("no-op health failure mutated systemd: %v", r.log)
 	}
 }
 
@@ -327,6 +410,17 @@ func TestStatusReportsStates(t *testing.T) {
 		if !strings.Contains(buf.String(), want) {
 			t.Fatalf("status output missing %q", want)
 		}
+	}
+}
+
+func TestHealthCheckRejectsForeignJSON(t *testing.T) {
+	h := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.Header().Set("Content-Type", "application/json")
+		_, _ = w.Write([]byte(`{"ok":true}`))
+	}))
+	defer h.Close()
+	if err := healthCheckReal(h.URL); err == nil {
+		t.Fatal("foreign JSON response was accepted as Trestle health")
 	}
 }
 

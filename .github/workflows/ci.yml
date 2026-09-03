@@ -147,6 +147,10 @@ jobs:
           test "$(systemctl is-enabled trestle.service)" = enabled
           # boot-enablement is asserted structurally (not a reboot claim)
           grep -q 'WantedBy=multi-user.target' /etc/systemd/system/trestle.service
+          grep -q '^StartLimitIntervalSec=60$' /etc/systemd/system/trestle.service
+          grep -q '^StartLimitBurst=5$' /etc/systemd/system/trestle.service
+          grep -q '^Restart=on-failure$' /etc/systemd/system/trestle.service
+          grep -q '^RestartSec=3$' /etc/systemd/system/trestle.service
           # update with a verified artifact
           CGO_ENABLED=0 go build -o /tmp/tr2 ./cmd/trestle
           SHA=$(sha256sum /tmp/tr2 | cut -d' ' -f1)

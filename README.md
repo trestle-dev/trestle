@@ -136,6 +136,14 @@ reloaded. `trestle service status` reports enabled/running state, PID, version,
 listen address and a live health check of the public `GET /system/health`
 endpoint, and exits nonzero when the service is failed or missing.
 
+Install does not report success until an active service answers Trestle's
+bounded health-and-identity check. The generated unit uses a finite crash-loop
+policy (`StartLimitIntervalSec=60`, `StartLimitBurst=5`,
+`Restart=on-failure`, `RestartSec=3`). Deliberate `service start`, `restart`
+and active install/reinstall operations clear accumulated start-limit state
+with `reset-failed` immediately before activation, while spontaneous repeated
+crashes remain rate-limited.
+
 The complete lifecycle family matches the Web Fleet convention:
 
 ```sh

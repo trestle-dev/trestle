@@ -386,4 +386,25 @@ func TestRunServiceInstallResolvesListenerOnly(t *testing.T) {
 	if code := runService([]string{"install", "--listen", "127.0.0.1:8080"}); code == 2 {
 		t.Fatal("valid legacy install must not fail listener resolution")
 	}
+	if code := runService([]string{"install", "--data-dir", "/var/lib/trestle-test", "--host", "127.0.0.1", "--port", "7403"}); code == 2 {
+		t.Fatal("documented --data-dir install must not be rejected as a usage error")
+	}
+	if code := runService([]string{"install", "--data", "/var/lib/trestle-test", "--host", "127.0.0.1", "--port", "7403"}); code == 2 {
+		t.Fatal("legacy --data install alias must remain accepted")
+	}
+}
+
+func TestServiceLifecycleSuccessMessages(t *testing.T) {
+	want := map[string]string{
+		"start":   "trestle.service started.",
+		"stop":    "trestle.service stopped.",
+		"restart": "trestle.service restarted.",
+		"enable":  "trestle.service enabled.",
+		"disable": "trestle.service disabled.",
+	}
+	for verb, expected := range want {
+		if got := serviceLifecycleSuccess(verb); got != expected {
+			t.Fatalf("%s success message = %q want %q", verb, got, expected)
+		}
+	}
 }
