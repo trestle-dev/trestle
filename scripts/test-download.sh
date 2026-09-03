@@ -77,7 +77,8 @@ else
 fi
 
 # snapshot PATH emits a stable single-line fingerprint proving non-mutation.
-# A symlink is reported by its target without dereferencing; a regular file is
+# A symlink is reported by its target without dereferencing and without a
+# link-metadata claim (only target preservation is asserted); a regular file is
 # hashed and sized; any other special file reports type/mode/mtime/owner only
 # (never dereferenced or hashed unsafely). An absent path reports MISSING.
 snapshot() {
@@ -100,6 +101,13 @@ snapshot() {
   else
     printf 'MISSING\n'
   fi
+}
+
+# fp_field FIELD FINGERPRINT extracts one name=value component from a regular-file
+# fingerprint, so negative controls assert a specific dimension (e.g. sha256,
+# mode) rather than merely that two fingerprints differ.
+fp_field() {
+  printf '%s' "$2" | sed -n "s/.* $1=\([^ ]*\).*/\1/p"
 }
 
 # --- 1. Latest-version resolution (via the local release API) ---------------
@@ -280,9 +288,9 @@ home="$tmp/sandbox-home"
 mkdir -p "$home"
 before_home=$(find "$home" -mindepth 1 | sort)
 # The protected system binary may legitimately exist (a running installed
-# Trestle). Snapshot its full state before and require byte-for-byte identical
-# state after: absence stays absence, a present regular file or symlink stays
-# the same object with unchanged size, checksum, mtime, mode and owner.
+# Trestle). Snapshot its full state before and require identical state after:
+# absence stays absence, a present regular file keeps unchanged size, checksum,
+# mtime, mode and owner, and a present symlink keeps its target.
 protected=${TRESTLE_TEST_SYSTEM_BINARY:-/usr/local/bin/trestle}
 before_sys=$(snapshot "$protected")
 new_dest
@@ -342,15 +350,42 @@ new_dest
 after=$(snapshot "$slink")
 [ "$before" = "$after" ] || fail "download mutated the sentinel symlink: before=[$before] after=[$after]"
 
-# 24d. Negative control: a genuine mutation must change the fingerprint, so the
-# preservation contract is not vacuous.
-cp "$sink" "$sink.new"
-printf '#!/bin/sh\necho tampered\n' >> "$sink.new"
-printf 'x' >> "$sink.new"
-mv "$sink.new" "$sink"
-tampered=$(snapshot "$sink")
-[ "$before" != "$tampered" ] || fail "preservation fingerprint did not detect a tampered installation"
-rm -f "$sink"
+# 24d. Negative control: content mutation with unchanged length must change the
+# checksum component. A fresh regular-file baseline is captured immediately
+# before tampering, so the assertion is not conflated with any earlier type.
+before_tamper=$(snapshot "$sink")
+before_sha=$(fp_field sha256 "$before_tamper")
+python3 - "$sink" <<'PY'
+import sys
+p = sys.argv[1]
+d = bytearray(open(p, "rb").read())
+d[0] ^= 0x01  # flip one byte; the length is unchanged
+open(p, "wb").write(d)
+PY
+after_tamper=$(snapshot "$sink")
+after_sha=$(fp_field sha256 "$after_tamper")
+[ "$before_sha" != "$after_sha" ] || fail "content tamper did not change the checksum component"
+
+# 24e. Negative control: mode-only mutation must change the mode component.
+before_mode=$(snapshot "$sink")
+chmod 0600 "$sink"
+after_mode=$(snapshot "$sink")
+[ "$(fp_field mode "$before_mode")" != "$(fp_field mode "$after_mode")" ] \
+  || fail "mode change was not detected by the fingerprint"
+
+# 24f. Negative control: symlink-target mutation must change the symlink
+# fingerprint. The claim is scoped to target preservation, so a repointed link
+# is expected to differ.
+slink2="$sysdir/link2/trestle"
+mkdir -p "$(dirname "$slink2")"
+ln -s "$sink" "$slink2"
+before_slink=$(snapshot "$slink2")
+case "$before_slink" in "symlink ->"*) ;; *) fail "symlink fingerprint: $before_slink" ;; esac
+rm "$slink2"
+ln -s "$sysdir/other-target" "$slink2"
+after_slink=$(snapshot "$slink2")
+[ "$before_slink" != "$after_slink" ] || fail "symlink target change was not detected"
+rm -f "$slink2" "$sink"
 
 if [ "$failures" -gt 0 ]; then
   echo "download.sh regression: $failures failure(s)" >&2
