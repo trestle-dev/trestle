@@ -26,6 +26,7 @@ requireText(html, /<form[^>]*id="auth-form"/, "the auth gate has no single first
 if ((html.match(/id="auth-form"/g) || []).length !== 1) failures.push("more than one auth form exists (first-run and sign-in must never both render)");
 if ((html.match(/id="auth-submit"/g) || []).length !== 1) failures.push("the auth form must have exactly one submit button");
 requireText(html, /id="auth-password"[^>]*minlength="7"/, "the seven-character password minimum is missing from the auth gate");
+requireText(html, /id="auth-policy"/, "the first-run application registration policy selector is missing from the auth gate");
 requireText(html, /id="database-apply"/, "the database test/apply button is missing from the auth gate");
 requireText(css, /button:disabled/, "disabled buttons have no visible disabled styling");
 requireText(css, /button:not\(:disabled\):hover/, "enabled buttons have no hover styling");
