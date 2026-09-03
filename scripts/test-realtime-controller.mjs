@@ -1,7 +1,7 @@
 // CP12R4 realtime lifecycle and heartbeat regression test.
 //
-// Loads the real realtime.js, realtime-controller.js and database-setup-state.js
-// into a VM sandbox with a counting EventSource and a real interval registry,
+// Extracts the real realtime and state-machine blocks from the canonical
+// embedded public bundle into a VM sandbox with a counting EventSource,
 // then proves:
 //
 //   Lifecycle (blocker 1): enter / reconnect repeatedly / leave / re-enter /
@@ -17,11 +17,20 @@
 import {readFile} from "node:fs/promises";
 import vm from "node:vm";
 
-const read = (name) => readFile(new URL("../content/assets/js/" + name, import.meta.url), "utf8");
+const bundle = await readFile(
+  new URL("../internal/web/public/assets/js/script.js", import.meta.url),
+  "utf8"
+);
+const block = (startText, endText) => {
+  const start = bundle.indexOf(startText);
+  const end = bundle.indexOf(endText, start);
+  if (start < 0 || end < 0) throw new Error(`public bundle block missing: ${startText}`);
+  return bundle.slice(start, end);
+};
 const sources = {
-  state: await read("database-setup-state.js"),
-  controller: await read("realtime-controller.js"),
-  realtime: await read("realtime.js"),
+  state: block("globalThis.TrestleDatabaseSetup = (() => {", "function applyConnection"),
+  controller: block("globalThis.TrestleRealtimeController = (() => {", "// Realtime transport view"),
+  realtime: block("// Realtime transport view", "async function renderAudit"),
 };
 
 let failures = 0;

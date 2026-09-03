@@ -1,17 +1,25 @@
 // CP2 first-run database-selection state-machine regression test.
 //
-// Drives the pure TrestleDatabaseSetup state machine (content/assets/js/
-// database-setup-state.js) through every first-run transition the checkpoint
+// Extracts the pure TrestleDatabaseSetup state machine from the canonical
+// embedded public bundle and drives every first-run transition the checkpoint
 // contract requires, without a browser. The DOM layer in database-setup.js and
 // script.js maps the computed state onto hidden/disabled attributes; the
 // browser-quality gate also asserts the structural guarantees.
 import {readFile} from "node:fs/promises";
 import vm from "node:vm";
 
-const source = await readFile(
-  new URL("../content/assets/js/database-setup-state.js", import.meta.url),
+const bundle = await readFile(
+  new URL("../internal/web/public/assets/js/script.js", import.meta.url),
   "utf8"
 );
+const start = bundle.indexOf("globalThis.TrestleDatabaseSetup = (() => {");
+const helpers = bundle.indexOf("function staleState", start);
+const end = bundle.indexOf("const statusCard", helpers);
+if (start < 0 || helpers < 0 || end < 0) {
+  throw new Error("TrestleDatabaseSetup block missing from public bundle");
+}
+const iifeEnd = bundle.indexOf("})();", start) + 5;
+const source = bundle.slice(helpers, end) + "\n" + bundle.slice(start, iifeEnd);
 vm.runInThisContext(source);
 const machine = globalThis.TrestleDatabaseSetup;
 if (!machine) {

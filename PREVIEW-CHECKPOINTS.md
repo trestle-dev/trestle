@@ -37,8 +37,9 @@ and recovery. It does not guarantee uptime.
 - One focused application commit per checkpoint; one corresponding website
   commit when public documentation changes. Report both hashes.
 - Keep the application README and this handover current.
-- Edit canonical Nift source only (`content/`). Rebuild generated output with
-  Nift. Never hand-edit generated pages as the source of truth.
+- Edit tracked Nift HTML source in `content/`; edit CSS, JavaScript and other
+  static assets directly in the canonical public tree. Rebuild tracked HTML
+  with Nift. Never hand-edit generated HTML as the source of truth.
 - Commit discipline for the website repository (see the model section):
   generated `public/` output commit first, then website source with its updated
   gitlink, when both change. This is the repository's documented convention.
