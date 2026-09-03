@@ -4,6 +4,12 @@
 # documented download.sh behavior, the standalone public copy the website
 # serves, portable checksum verification, platform mapping, overwrite safety,
 # atomic staging cleanup, and a packaged release run as ./trestle version.
+#
+# The protected system-binary path (default /usr/local/bin/trestle) is
+# preserved by a before/after fingerprint contract rather than an absence
+# assertion, so the suite passes on a machine where Trestle is legitimately
+# installed and running. Override with TRESTLE_TEST_SYSTEM_BINARY to exercise
+# the preservation helper against a disposable path.
 set -eu
 root=$(CDPATH= cd -- "$(dirname "$0")/.." && pwd)
 download="$root/scripts/public/download.sh"
@@ -55,6 +61,45 @@ new_dest() {
   dest_n=$((dest_n + 1))
   dest="$tmp/dest-$dest_n"
   mkdir -p "$dest"
+}
+
+# Portable stat probes. GNU stat uses -c, BSD/macOS stat uses -f; the field
+# selectors below produce equivalent octal-mode, epoch-second-mtime and
+# uid:gid output on both.
+if stat -c '%a' "$tmp" >/dev/null 2>&1; then
+  stat_mode() { stat -c '%a' "$1"; }
+  stat_mtime() { stat -c '%Y' "$1"; }
+  stat_owner() { stat -c '%u:%g' "$1"; }
+else
+  stat_mode() { stat -f '%Lp' "$1"; }
+  stat_mtime() { stat -f '%m' "$1"; }
+  stat_owner() { stat -f '%u:%g' "$1"; }
+fi
+
+# snapshot PATH emits a stable single-line fingerprint proving non-mutation.
+# A symlink is reported by its target without dereferencing; a regular file is
+# hashed and sized; any other special file reports type/mode/mtime/owner only
+# (never dereferenced or hashed unsafely). An absent path reports MISSING.
+snapshot() {
+  p=$1
+  if [ -L "$p" ]; then
+    printf 'symlink -> %s\n' "$(readlink "$p")"
+  elif [ -e "$p" ]; then
+    if [ -f "$p" ]; then
+      if command -v sha256sum >/dev/null 2>&1; then
+        h=$(sha256sum "$p" | awk '{print $1}')
+      else
+        h=$(shasum -a 256 "$p" | awk '{print $1}')
+      fi
+      printf 'regular sha256=%s size=%s mtime=%s mode=%s owner=%s\n' \
+        "$h" "$(wc -c < "$p")" "$(stat_mtime "$p")" "$(stat_mode "$p")" "$(stat_owner "$p")"
+    else
+      printf 'special mtime=%s mode=%s owner=%s\n' \
+        "$(stat_mtime "$p")" "$(stat_mode "$p")" "$(stat_owner "$p")"
+    fi
+  else
+    printf 'MISSING\n'
+  fi
 }
 
 # --- 1. Latest-version resolution (via the local release API) ---------------
@@ -234,12 +279,19 @@ wait "$pid" 2>/dev/null || true
 home="$tmp/sandbox-home"
 mkdir -p "$home"
 before_home=$(find "$home" -mindepth 1 | sort)
+# The protected system binary may legitimately exist (a running installed
+# Trestle). Snapshot its full state before and require byte-for-byte identical
+# state after: absence stays absence, a present regular file or symlink stays
+# the same object with unchanged size, checksum, mtime, mode and owner.
+protected=${TRESTLE_TEST_SYSTEM_BINARY:-/usr/local/bin/trestle}
+before_sys=$(snapshot "$protected")
 new_dest
 ( cd "$dest" && HOME="$home" TRESTLE_RELEASE_BASE="$release_base" sh "$download" --version "$ver" >/dev/null 2>&1 )
 after_home=$(find "$home" -mindepth 1 | sort)
 [ "$before_home" = "$after_home" ] || fail "download mutated HOME: $after_home"
 [ ! -e "$dest/trestle" ] || [ -x "$dest/trestle" ] || fail "destination binary not executable"
-[ ! -e /usr/local/bin/trestle ] || fail "download touched /usr/local/bin"
+after_sys=$(snapshot "$protected")
+[ "$before_sys" = "$after_sys" ] || fail "download mutated $protected: before=[$before_sys] after=[$after_sys]"
 
 # --- 23. Packaged test release: real binary runs as ./trestle version ---------
 pkg="$tmp/pkg"
@@ -251,8 +303,57 @@ new_dest
 (cd "$dest" && TRESTLE_RELEASE_BASE="file://$pkg" sh "$download" --version v1.0.0-test >/dev/null 2>&1) || fail "packaged release download failed"
 "$dest/trestle" version >/dev/null 2>&1 || fail "downloaded executable does not run as ./trestle version"
 
+# --- 24. Protected-binary preservation contract (injectable path) -------------
+# Exercises the before/after fingerprint on a disposable path so both initial
+# states are covered without writing a sentinel into /usr/local/bin.
+sysdir="$tmp/system-bin"
+mkdir -p "$sysdir"
+
+# 24a. Absent before -> must remain absent.
+absent_path="$sysdir/absent/trestle"
+mkdir -p "$(dirname "$absent_path")"
+before=$(snapshot "$absent_path")
+new_dest
+( cd "$dest" && TRESTLE_TEST_SYSTEM_BINARY="$absent_path" TRESTLE_RELEASE_BASE="$release_base" sh "$download" --version "$ver" >/dev/null 2>&1 )
+after=$(snapshot "$absent_path")
+[ "$before" = MISSING ] || fail "absent sentinel was not reported MISSING: $before"
+[ "$after" = MISSING ] || fail "download created the protected path $absent_path"
+
+# 24b. Sentinel regular file present -> identical object and metadata.
+sink="$sysdir/sink/trestle"
+mkdir -p "$(dirname "$sink")"
+printf '#!/bin/sh\necho preinstalled\n' > "$sink"
+chmod 0755 "$sink"
+before=$(snapshot "$sink")
+case "$before" in regular\ *) ;; *) fail "sentinel regular file fingerprint: $before" ;; esac
+new_dest
+( cd "$dest" && TRESTLE_TEST_SYSTEM_BINARY="$sink" TRESTLE_RELEASE_BASE="$release_base" sh "$download" --version "$ver" >/dev/null 2>&1 )
+after=$(snapshot "$sink")
+[ "$before" = "$after" ] || fail "download mutated the sentinel installation: before=[$before] after=[$after]"
+
+# 24c. Sentinel symlink present -> same link target, never dereferenced.
+slink="$sysdir/link/trestle"
+mkdir -p "$(dirname "$slink")"
+ln -s "$sink" "$slink"
+before=$(snapshot "$slink")
+case "$before" in "symlink ->"*) ;; *) fail "sentinel symlink fingerprint: $before" ;; esac
+new_dest
+( cd "$dest" && TRESTLE_TEST_SYSTEM_BINARY="$slink" TRESTLE_RELEASE_BASE="$release_base" sh "$download" --version "$ver" >/dev/null 2>&1 )
+after=$(snapshot "$slink")
+[ "$before" = "$after" ] || fail "download mutated the sentinel symlink: before=[$before] after=[$after]"
+
+# 24d. Negative control: a genuine mutation must change the fingerprint, so the
+# preservation contract is not vacuous.
+cp "$sink" "$sink.new"
+printf '#!/bin/sh\necho tampered\n' >> "$sink.new"
+printf 'x' >> "$sink.new"
+mv "$sink.new" "$sink"
+tampered=$(snapshot "$sink")
+[ "$before" != "$tampered" ] || fail "preservation fingerprint did not detect a tampered installation"
+rm -f "$sink"
+
 if [ "$failures" -gt 0 ]; then
   echo "download.sh regression: $failures failure(s)" >&2
   exit 1
 fi
-echo "download.sh regression passed: latest/explicit version, platform mapping, portable verification, fail-closed paths, overwrite safety, atomic staging, no mutation"
+echo "download.sh regression passed: latest/explicit version, platform mapping, portable verification, fail-closed paths, overwrite safety, atomic staging, no mutation, protected-binary preservation (absent/present/symlink)"
