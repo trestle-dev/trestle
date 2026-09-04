@@ -209,6 +209,20 @@ If neither script changes during a release, no installer deployment is required
 for that release, but the invariant still governs any future release that does
 change them.
 
+## Current release state
+
+- Released: **v0.1.2** (stable public preview), annotated tag at commit
+  `91c644139c40d48d8f48b2a6bd805c3747ff9da7`. Release, read-only verification,
+  website deployment and public dogfood (including the genuine v0.1.1 -> v0.1.2
+  upgrade with byte-identical rollback) are complete.
+- Development: **0.1.3** on `main`. An ordinary development build reports
+  0.1.3 with commit `unknown`; release builds override the default via ldflags
+  and are never confused with the development identity.
+- After publishing a stable release, advance the buildinfo default and its
+  exact-version test to the next patch, record the released/development
+  versions here, and leave public website claims on the actual released
+  version until the next release is published.
+
 ---
 
 # Nift project handover

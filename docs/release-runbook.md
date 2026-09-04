@@ -15,7 +15,7 @@ Set and validate the exact tag being released before any command in this
 runbook; every example uses it:
 
 ```sh
-export VERSION="0.1.2"        # MAJOR.MINOR.PATCH, optionally -prerelease.suffix
+export VERSION="0.1.3"        # MAJOR.MINOR.PATCH, optionally -prerelease.suffix
 printf '%s' "$VERSION" | LC_ALL=C grep -Eq '^[0-9]+[.][0-9]+[.][0-9]+(-[0-9A-Za-z]+([.][0-9A-Za-z]+)*)?$' \
   || { echo "invalid VERSION '$VERSION'" >&2; exit 1; }
 case "$VERSION" in
@@ -23,6 +23,11 @@ case "$VERSION" in
   *)   echo "releasing stable tag v$VERSION (normal GitHub release, stable public preview)" ;;
 esac
 ```
+
+The example `VERSION` is the next prospective release version (currently
+0.1.3). It is not an already authorized release: the tag, publication and
+public announcement all require separate human review later in this runbook.
+Every example below uses `$VERSION`.
 
 The validation accepts exactly a stable `MAJOR.MINOR.PATCH` or a prerelease
 `MAJOR.MINOR.PATCH-<identifier>` (with optional dot-separated identifiers). It
@@ -199,3 +204,26 @@ release exists:**
 Do not announce Trestle publicly, and do not treat `latest` as authoritative
 for anything beyond the previous step, until a separate human review of the
 published release, hosted scripts and smoke results has been completed.
+
+### 6. Post-release development transition
+
+After a stable release is published and accepted, move development to the next
+patch version so an ordinary (non-release) build never presents itself as the
+released version:
+
+1. Advance the default development identity in
+   `internal/buildinfo/buildinfo.go` from the released version to the next
+   patch (for example after v0.1.2, set `0.1.3`).
+2. Update `internal/buildinfo/buildinfo_test.go` so the exact-version test
+   requires that next patch version, and confirms an ordinary build reports
+   commit `unknown`.
+3. Record the released version and commit and the new development version in
+   `HANDOVER.md` (Current release state) and note the release, verification,
+   website deployment and public dogfood are complete.
+4. Keep public website claims on the actual published release until the next
+   release is actually published; never advertise the development line.
+5. Do not move, amend or republish the released tag or its assets, and do not
+   advance the public website to the new development version.
+
+Commit and push this transition to `main` and wait for a green CI run on the
+exact pushed commit before beginning the next release cycle.
