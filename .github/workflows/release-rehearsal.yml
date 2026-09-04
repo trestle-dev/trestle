@@ -46,13 +46,33 @@ jobs:
             || { echo "invalid version '$version': not an exact vMAJOR.MINOR.PATCH-rc.N value" >&2; exit 1; }
           echo "version=$version" >> "$GITHUB_ENV"
 
+      - name: Select the rehearsal repository identity
+        run: |
+          set -euo pipefail
+          # Fail-closed legacy mapping: v0.1.0-rc.1 was published under the
+          # former github.com/trestle-dev/trestle identity. Everything after the
+          # v0.1.3 migration must rehearse against the canonical trestle-cv.
+          # No caller-controlled repository or signer identity is accepted.
+          case "$INPUT_VERSION" in
+            v0.1.0-rc.1)
+              echo "VERIFY_REPO=trestle-dev/trestle" >> "$GITHUB_ENV"
+              echo "identity: legacy trestle-dev/trestle ($INPUT_VERSION)"
+              ;;
+            *)
+              echo "VERIFY_REPO=trestle-cv/trestle" >> "$GITHUB_ENV"
+              echo "identity: canonical trestle-cv/trestle ($INPUT_VERSION)"
+              ;;
+          esac
+        env:
+          INPUT_VERSION: ${{ inputs.version }}
+
       - name: Resolve tag to commit
         run: |
           set -euo pipefail
           # Peel the selected tag to its commit via the GitHub API (handles
           # annotated and lightweight tags without checking out the repository).
           expected_commit=$(curl -fsSL --max-time 30 \
-            "https://api.github.com/repos/trestle-dev/trestle/commits/${version}" | jq -r '.sha')
+            "https://api.github.com/repos/${VERIFY_REPO}/commits/${version}" | jq -r '.sha')
           printf '%s\n' "$expected_commit" | LC_ALL=C grep -q '^[0-9a-f]\{40\}$' \
             || { echo "could not resolve tag ${version} to a commit (got '$expected_commit')" >&2; exit 1; }
           echo "expected_commit=$expected_commit" >> "$GITHUB_ENV"
@@ -71,7 +91,7 @@ jobs:
         run: |
           set -euo pipefail
           mkdir -p artifacts
-          base="https://github.com/trestle-dev/trestle/releases/download/${version}"
+          base="https://github.com/${VERIFY_REPO}/releases/download/${version}"
           curl -fsSL --max-time 60 -o artifacts/SHA256SUMS "$base/SHA256SUMS"
           for a in \
             "trestle_${version#v}_linux_amd64.tar.gz" \
@@ -114,8 +134,8 @@ jobs:
           for a in trestle_*; do
             echo "=== gh attestation verify: $a ==="
             json=$(gh attestation verify "$a" \
-              --repo trestle-dev/trestle \
-              --signer-workflow "trestle-dev/trestle/.github/workflows/release.yml" \
+              --repo "${VERIFY_REPO}" \
+              --signer-workflow "${VERIFY_REPO}/.github/workflows/release.yml" \
               --source-ref "refs/tags/${version}" \
               --source-digest "${expected_commit}" \
               --deny-self-hosted-runners \

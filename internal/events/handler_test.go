@@ -8,9 +8,9 @@ import (
 	"strings"
 	"testing"
 
-	"github.com/trestle-dev/trestle/internal/adminauth"
-	"github.com/trestle-dev/trestle/internal/identities"
-	"github.com/trestle-dev/trestle/internal/storetest"
+	"github.com/trestle-cv/trestle/internal/adminauth"
+	"github.com/trestle-cv/trestle/internal/identities"
+	"github.com/trestle-cv/trestle/internal/storetest"
 )
 
 func emitOne(t *testing.T, h *Handler, n int) {

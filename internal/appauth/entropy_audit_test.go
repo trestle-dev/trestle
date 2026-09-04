@@ -11,9 +11,9 @@ import (
 	"sync"
 	"testing"
 
-	"github.com/trestle-dev/trestle/internal/adminauth"
-	"github.com/trestle-dev/trestle/internal/store"
-	"github.com/trestle-dev/trestle/internal/storetest"
+	"github.com/trestle-cv/trestle/internal/adminauth"
+	"github.com/trestle-cv/trestle/internal/store"
+	"github.com/trestle-cv/trestle/internal/storetest"
 )
 
 // shortReader returns n/2 bytes without error, proving the checked helper

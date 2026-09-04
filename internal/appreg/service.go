@@ -13,8 +13,8 @@ import (
 	"sync/atomic"
 	"time"
 
-	"github.com/trestle-dev/trestle/internal/audit"
-	"github.com/trestle-dev/trestle/internal/store"
+	"github.com/trestle-cv/trestle/internal/audit"
+	"github.com/trestle-cv/trestle/internal/store"
 )
 
 // Fixed initial lifetimes for application registration (first implementation).

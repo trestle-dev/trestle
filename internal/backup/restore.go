@@ -15,7 +15,7 @@ import (
 	"strings"
 	"time"
 
-	"github.com/trestle-dev/trestle/internal/store"
+	"github.com/trestle-cv/trestle/internal/store"
 )
 
 const maxRestoreBytes int64 = 16 << 30

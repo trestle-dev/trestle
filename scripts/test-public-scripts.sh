@@ -14,7 +14,7 @@
 #     canonical standalone public copies exactly;
 #   - the deterministic download/install/update regressions pass.
 #
-# Website paths default to the sibling trestle-dev.github.io repository and can
+# Website paths default to the sibling trestle-cv.github.io repository and can
 # be overridden with TRESTLE_WEBSITE_SOURCE / TRESTLE_WEBSITE_OUTPUT.
 set -eu
 root=$(CDPATH= cd -- "$(dirname "$0")/.." && pwd)
@@ -48,7 +48,7 @@ done
 
 # Website parity: source copies and generated website-root copies must match the
 # canonical standalone public copies byte-for-byte.
-website_source=${TRESTLE_WEBSITE_SOURCE:-"$root/../trestle-dev.github.io"}
+website_source=${TRESTLE_WEBSITE_SOURCE:-"$root/../trestle-cv.github.io"}
 website_output=${TRESTLE_WEBSITE_OUTPUT:-"$website_source/public"}
 for name in install download update; do
   if [ -f "$website_source/$name.sh" ]; then

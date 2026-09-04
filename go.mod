@@ -1,4 +1,4 @@
-module github.com/trestle-dev/trestle
+module github.com/trestle-cv/trestle
 
 go 1.22.0
 

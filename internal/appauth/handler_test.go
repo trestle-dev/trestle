@@ -9,9 +9,9 @@ import (
 	"sync"
 	"testing"
 
-	"github.com/trestle-dev/trestle/internal/adminauth"
-	"github.com/trestle-dev/trestle/internal/audit"
-	"github.com/trestle-dev/trestle/internal/storetest"
+	"github.com/trestle-cv/trestle/internal/adminauth"
+	"github.com/trestle-cv/trestle/internal/audit"
+	"github.com/trestle-cv/trestle/internal/storetest"
 )
 
 func setup(t *testing.T, provider string) *Handler {

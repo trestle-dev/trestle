@@ -9,7 +9,7 @@ import (
 	"testing"
 	"time"
 
-	"github.com/trestle-dev/trestle/internal/storetest"
+	"github.com/trestle-cv/trestle/internal/storetest"
 )
 
 func authRequest(accessToken string) *http.Request {

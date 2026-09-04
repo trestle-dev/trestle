@@ -7,7 +7,7 @@ import (
 	"fmt"
 	"strings"
 
-	"github.com/trestle-dev/trestle/internal/store"
+	"github.com/trestle-cv/trestle/internal/store"
 )
 
 func PhysicalTableName(collectionID string) string {

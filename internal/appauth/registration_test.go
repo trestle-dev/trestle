@@ -16,11 +16,11 @@ import (
 	"testing"
 	"time"
 
-	"github.com/trestle-dev/trestle/internal/adminauth"
-	"github.com/trestle-dev/trestle/internal/appreg"
-	"github.com/trestle-dev/trestle/internal/audit"
-	"github.com/trestle-dev/trestle/internal/store"
-	"github.com/trestle-dev/trestle/internal/storetest"
+	"github.com/trestle-cv/trestle/internal/adminauth"
+	"github.com/trestle-cv/trestle/internal/appreg"
+	"github.com/trestle-cv/trestle/internal/audit"
+	"github.com/trestle-cv/trestle/internal/store"
+	"github.com/trestle-cv/trestle/internal/storetest"
 )
 
 // setup builds a full appauth handler on the named provider with a running

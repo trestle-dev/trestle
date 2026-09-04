@@ -86,8 +86,17 @@ if "--source-sha" in text:
     issues.append("forbidden --source-sha flag is present")
 if "@refs/" in re.search(r"--signer-workflow[^\n]*", text).group(0) or "@" in text.split("--signer-workflow")[1].split("\n")[0]:
     issues.append("signer-workflow value contains an @ref suffix")
-if "trestle-dev/trestle/.github/workflows/release.yml" not in text:
-    issues.append("signer-workflow does not name the release workflow path")
+# The signer workflow is selected by the fail-closed legacy mapping: the
+# workflow path is expressed through the VERIFY_REPO variable, the canonical
+# identity is trestle-cv/trestle, and the known historical tags are explicitly
+# mapped to the former trestle-dev/trestle identity rather than being accepted
+# from a caller-controlled argument.
+if "${VERIFY_REPO}/.github/workflows/release.yml" not in text:
+    issues.append("signer-workflow does not use the mapped repository identity")
+if "VERIFY_REPO=trestle-cv/trestle" not in text:
+    issues.append("canonical identity is not the default")
+if "VERIFY_REPO=trestle-dev/trestle" not in text or "v0.1.0-rc.1" not in text:
+    issues.append("known historical tags are not mapped to the legacy identity")
 # Tag-to-commit resolution and binary commit comparison.
 if "commits/${version}" not in text or "expected_commit" not in text:
     issues.append("tag-to-commit resolution is missing")

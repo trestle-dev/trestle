@@ -10,10 +10,10 @@ import (
 	"strings"
 	"testing"
 
-	"github.com/trestle-dev/trestle/internal/adminauth"
-	"github.com/trestle-dev/trestle/internal/audit"
-	"github.com/trestle-dev/trestle/internal/store"
-	"github.com/trestle-dev/trestle/internal/storetest"
+	"github.com/trestle-cv/trestle/internal/adminauth"
+	"github.com/trestle-cv/trestle/internal/audit"
+	"github.com/trestle-cv/trestle/internal/store"
+	"github.com/trestle-cv/trestle/internal/storetest"
 )
 
 // faultExecutor wraps a store.Executor and fails the first ExecContext whose

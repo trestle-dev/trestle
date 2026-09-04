@@ -28,7 +28,7 @@ that compilation succeeds.
 
 ## Continuous website contract
 
-The sibling `../trestle-dev.github.io` repository is a product deliverable, not a
+The sibling `../trestle-cv.github.io` repository is a product deliverable, not a
 late marketing task. It must become a multi-page, content-rich public site as the
 product grows:
 

@@ -12,9 +12,9 @@ import (
 	"sync/atomic"
 	"time"
 
-	"github.com/trestle-dev/trestle/internal/buildinfo"
-	"github.com/trestle-dev/trestle/internal/httperr"
-	"github.com/trestle-dev/trestle/internal/requestmeta"
+	"github.com/trestle-cv/trestle/internal/buildinfo"
+	"github.com/trestle-cv/trestle/internal/httperr"
+	"github.com/trestle-cv/trestle/internal/requestmeta"
 )
 
 type Options struct{ TrustedProxies []netip.Prefix }

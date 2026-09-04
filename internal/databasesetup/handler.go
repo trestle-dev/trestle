@@ -7,11 +7,11 @@ import (
 	"strings"
 	"time"
 
-	"github.com/trestle-dev/trestle/internal/adminauth"
-	"github.com/trestle-dev/trestle/internal/config"
-	"github.com/trestle-dev/trestle/internal/httperr"
-	"github.com/trestle-dev/trestle/internal/requestmeta"
-	"github.com/trestle-dev/trestle/internal/store"
+	"github.com/trestle-cv/trestle/internal/adminauth"
+	"github.com/trestle-cv/trestle/internal/config"
+	"github.com/trestle-cv/trestle/internal/httperr"
+	"github.com/trestle-cv/trestle/internal/requestmeta"
+	"github.com/trestle-cv/trestle/internal/store"
 )
 
 type Options struct {

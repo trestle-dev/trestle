@@ -7,8 +7,8 @@ import (
 	"sync"
 	"testing"
 
-	"github.com/trestle-dev/trestle/internal/store"
-	"github.com/trestle-dev/trestle/internal/storetest"
+	"github.com/trestle-cv/trestle/internal/store"
+	"github.com/trestle-cv/trestle/internal/storetest"
 )
 
 // dataTableCount returns the number of physical collection tables present.

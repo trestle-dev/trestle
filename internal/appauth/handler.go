@@ -18,12 +18,12 @@ import (
 	"sync"
 	"time"
 
-	"github.com/trestle-dev/trestle/internal/adminauth"
-	"github.com/trestle-dev/trestle/internal/appreg"
-	"github.com/trestle-dev/trestle/internal/audit"
-	"github.com/trestle-dev/trestle/internal/httperr"
-	"github.com/trestle-dev/trestle/internal/requestmeta"
-	"github.com/trestle-dev/trestle/internal/store"
+	"github.com/trestle-cv/trestle/internal/adminauth"
+	"github.com/trestle-cv/trestle/internal/appreg"
+	"github.com/trestle-cv/trestle/internal/audit"
+	"github.com/trestle-cv/trestle/internal/httperr"
+	"github.com/trestle-cv/trestle/internal/requestmeta"
+	"github.com/trestle-cv/trestle/internal/store"
 	"golang.org/x/crypto/argon2"
 )
 

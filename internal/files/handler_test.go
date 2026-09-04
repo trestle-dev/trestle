@@ -3,9 +3,9 @@ package files
 import (
 	"bytes"
 	"encoding/json"
-	"github.com/trestle-dev/trestle/internal/adminauth"
-	"github.com/trestle-dev/trestle/internal/identities"
-	"github.com/trestle-dev/trestle/internal/storetest"
+	"github.com/trestle-cv/trestle/internal/adminauth"
+	"github.com/trestle-cv/trestle/internal/identities"
+	"github.com/trestle-cv/trestle/internal/storetest"
 	"io"
 	"mime/multipart"
 	"net/http"

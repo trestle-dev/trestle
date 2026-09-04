@@ -9,7 +9,7 @@ import (
 	"time"
 
 	_ "github.com/lib/pq"
-	"github.com/trestle-dev/trestle/internal/store"
+	"github.com/trestle-cv/trestle/internal/store"
 )
 
 // OwnershipLock is the advisory lock key that serializes real-PostgreSQL test

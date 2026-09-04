@@ -13,9 +13,9 @@ import (
 	"sync"
 	"time"
 
-	"github.com/trestle-dev/trestle/internal/httperr"
-	"github.com/trestle-dev/trestle/internal/requestmeta"
-	"github.com/trestle-dev/trestle/internal/store"
+	"github.com/trestle-cv/trestle/internal/httperr"
+	"github.com/trestle-cv/trestle/internal/requestmeta"
+	"github.com/trestle-cv/trestle/internal/store"
 )
 
 const cookieName = "trestle_admin_session"

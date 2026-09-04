@@ -10,7 +10,7 @@ import (
 	"strings"
 	"testing"
 
-	"github.com/trestle-dev/trestle/internal/store"
+	"github.com/trestle-cv/trestle/internal/store"
 )
 
 func TestBackupRestoreDrillPreservesDatabaseAndFiles(t *testing.T) {

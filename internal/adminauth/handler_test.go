@@ -11,8 +11,8 @@ import (
 	"strings"
 	"testing"
 
-	"github.com/trestle-dev/trestle/internal/requestmeta"
-	"github.com/trestle-dev/trestle/internal/storetest"
+	"github.com/trestle-cv/trestle/internal/requestmeta"
+	"github.com/trestle-cv/trestle/internal/storetest"
 )
 
 func TestSetupGuardBlocksAdministratorCreationUntilDatabaseRestart(t *testing.T) {

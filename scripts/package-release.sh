@@ -56,7 +56,7 @@ if [ -n "${TRESTLE_BUILD_DATE:-}" ]; then
 else
   build_date=$(format_epoch "$SOURCE_DATE_EPOCH")
 fi
-ldflags="-s -w -X github.com/trestle-dev/trestle/internal/buildinfo.version=$version -X github.com/trestle-dev/trestle/internal/buildinfo.commit=$commit -X github.com/trestle-dev/trestle/internal/buildinfo.date=$build_date"
+ldflags="-s -w -X github.com/trestle-cv/trestle/internal/buildinfo.version=$version -X github.com/trestle-cv/trestle/internal/buildinfo.commit=$commit -X github.com/trestle-cv/trestle/internal/buildinfo.date=$build_date"
 
 # normalize_mtimes PATH: pins every mtime under PATH to SOURCE_DATE_EPOCH so
 # Info-ZIP (which does not honor SOURCE_DATE_EPOCH) stores a fixed DOS time.

@@ -40,10 +40,31 @@ jobs:
             || { echo "invalid release tag '$release'" >&2; exit 1; }
           echo "release=$release" >> "$GITHUB_ENV"
 
+      - name: Select the verification repository identity
+        run: |
+          set -euo pipefail
+          # Fail-closed legacy mapping: releases through v0.1.2 were published
+          # under the former github.com/trestle-dev/trestle identity, so their
+          # attestations are bound to that signer. Everything after the v0.1.3
+          # migration must verify against the canonical trestle-cv/trestle.
+          # No caller-controlled repository or signer identity is accepted.
+          case "$INPUT_RELEASE" in
+            v0.1.0|v0.1.1|v0.1.2|v0.1.0-rc.1)
+              echo "VERIFY_REPO=trestle-dev/trestle" >> "$GITHUB_ENV"
+              echo "identity: legacy trestle-dev/trestle ($INPUT_RELEASE)"
+              ;;
+            *)
+              echo "VERIFY_REPO=trestle-cv/trestle" >> "$GITHUB_ENV"
+              echo "identity: canonical trestle-cv/trestle ($INPUT_RELEASE)"
+              ;;
+          esac
+        env:
+          INPUT_RELEASE: ${{ inputs.release }}
+
       - name: Resolve the release tag to its commit
         run: |
           set -euo pipefail
-          commit=$(curl -fsSL --max-time 30 "https://api.github.com/repos/trestle-dev/trestle/commits/${release}" | jq -r '.sha')
+          commit=$(curl -fsSL --max-time 30 "https://api.github.com/repos/${VERIFY_REPO}/commits/${release}" | jq -r '.sha')
           printf '%s\n' "$commit" | LC_ALL=C grep -q '^[0-9a-f]\{40\}$' \
             || { echo "could not resolve ${release} to a commit" >&2; exit 1; }
           echo "commit=$commit" >> "$GITHUB_ENV"
@@ -59,7 +80,7 @@ jobs:
               "trestle_${release#v}_linux_arm64.tar.gz" \
               "trestle_${release#v}_windows_amd64.zip" \
               "trestle_${release#v}_windows_arm64.zip"; do printf '%s\n' "$a"; done; } | LC_ALL=C sort > expected.txt
-          actual=$(gh api "repos/trestle-dev/trestle/releases/tags/${release}" --jq '.assets[].name' | LC_ALL=C sort)
+          actual=$(gh api "repos/${VERIFY_REPO}/releases/tags/${release}" --jq '.assets[].name' | LC_ALL=C sort)
           if ! diff -u expected.txt <(printf '%s\n' "$actual"); then
             echo "release asset set does not match the expected set" >&2
             exit 1
@@ -73,7 +94,7 @@ jobs:
         run: |
           set -euo pipefail
           mkdir -p artifacts
-          base="https://github.com/trestle-dev/trestle/releases/download/${release}"
+          base="https://github.com/${VERIFY_REPO}/releases/download/${release}"
           for a in \
             SHA256SUMS \
             "trestle_${release#v}_linux_amd64.tar.gz" \
@@ -127,8 +148,8 @@ jobs:
           for a in trestle_*; do
             echo "=== gh attestation verify: $a ==="
             gh attestation verify "$a" \
-              --repo trestle-dev/trestle \
-              --signer-workflow "trestle-dev/trestle/.github/workflows/release.yml" \
+              --repo "${VERIFY_REPO}" \
+              --signer-workflow "${VERIFY_REPO}/.github/workflows/release.yml" \
               --source-ref "refs/tags/${release}" \
               --source-digest "${commit}" \
               --deny-self-hosted-runners
@@ -140,7 +161,7 @@ jobs:
       - name: Verify release-body wording matches the release kind (read-only)
         run: |
           set -euo pipefail
-          body=$(gh api "repos/trestle-dev/trestle/releases/tags/${release}" --jq .body)
+          body=$(gh api "repos/${VERIFY_REPO}/releases/tags/${release}" --jq .body)
           case "${release#v}" in
             *-*)
               printf '%s' "$body" | grep -qi "preview / release candidate" \

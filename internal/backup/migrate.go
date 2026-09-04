@@ -16,8 +16,8 @@ import (
 	"strings"
 	"time"
 
-	"github.com/trestle-dev/trestle/internal/collections"
-	"github.com/trestle-dev/trestle/internal/store"
+	"github.com/trestle-cv/trestle/internal/collections"
+	"github.com/trestle-cv/trestle/internal/store"
 )
 
 type MigrateOptions struct {

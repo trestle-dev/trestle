@@ -6,8 +6,8 @@ import (
 	"net/netip"
 	"time"
 
-	"github.com/trestle-dev/trestle/internal/adminauth"
-	"github.com/trestle-dev/trestle/internal/buildinfo"
+	"github.com/trestle-cv/trestle/internal/adminauth"
+	"github.com/trestle-cv/trestle/internal/buildinfo"
 )
 
 type Options struct {

@@ -18,7 +18,7 @@ PostgreSQL as an available external-database option.
 The canonical module and repository are intended to be:
 
 ```text
-github.com/trestle-dev/trestle
+github.com/trestle-cv/trestle
 ```
 
 The project is in pre-release hardening in preparation for an honest public
@@ -50,7 +50,7 @@ the same definition of done. Do not silently combine checkpoints or mark later
 work complete because an early abstraction appears capable of supporting it.
 
 The public site is developed continuously in the sibling
-`../trestle-dev.github.io` repository. It must be a substantial multi-page Nift
+`../trestle-cv.github.io` repository. It must be a substantial multi-page Nift
 site using minimalist dark-mode design and vanilla CSS/JavaScript. Add or deepen
 the relevant documentation when each product capability becomes real. Do not
 write the whole future manual at the beginning, and do not defer the website to
@@ -181,7 +181,7 @@ migration.
 
 ## Repository neighbours
 
-The public website source is the sibling `trestle-dev.github.io` repository;
+The public website source is the sibling `trestle-cv.github.io` repository;
 its generated deployment output is a nested `public/` repository. Website
 claims must match implemented and verified milestones here.
 

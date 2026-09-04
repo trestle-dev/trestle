@@ -13,7 +13,7 @@ import (
 	"sync/atomic"
 	"testing"
 
-	"github.com/trestle-dev/trestle/internal/requestmeta"
+	"github.com/trestle-cv/trestle/internal/requestmeta"
 )
 
 func TestHealthReadinessAndRequestID(t *testing.T) {

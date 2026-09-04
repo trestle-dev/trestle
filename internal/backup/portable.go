@@ -12,8 +12,8 @@ import (
 	"strings"
 	"time"
 
-	"github.com/trestle-dev/trestle/internal/collections"
-	"github.com/trestle-dev/trestle/internal/store"
+	"github.com/trestle-cv/trestle/internal/collections"
+	"github.com/trestle-cv/trestle/internal/store"
 )
 
 // PortableFormat is the versioned logical archive used for PostgreSQL backup

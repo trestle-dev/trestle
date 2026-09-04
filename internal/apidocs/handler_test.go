@@ -6,7 +6,7 @@ import (
 	"net/http/httptest"
 	"testing"
 
-	"github.com/trestle-dev/trestle/internal/storetest"
+	"github.com/trestle-cv/trestle/internal/storetest"
 )
 
 // TestSchemaReportsFieldFlagsOnBothProviders ensures the API schema reports

@@ -11,9 +11,9 @@ import (
 	"strings"
 	"time"
 
-	"github.com/trestle-dev/trestle/internal/adminauth"
-	"github.com/trestle-dev/trestle/internal/httperr"
-	"github.com/trestle-dev/trestle/internal/store"
+	"github.com/trestle-cv/trestle/internal/adminauth"
+	"github.com/trestle-cv/trestle/internal/httperr"
+	"github.com/trestle-cv/trestle/internal/store"
 )
 
 var namePattern = regexp.MustCompile(`^[a-z][a-z0-9_]{0,62}$`)

@@ -4,11 +4,11 @@ import (
 	"strings"
 	"testing"
 
-	"github.com/trestle-dev/trestle/internal/adminauth"
-	"github.com/trestle-dev/trestle/internal/functions"
-	"github.com/trestle-dev/trestle/internal/jobs"
-	"github.com/trestle-dev/trestle/internal/storetest"
-	"github.com/trestle-dev/trestle/internal/webhooks"
+	"github.com/trestle-cv/trestle/internal/adminauth"
+	"github.com/trestle-cv/trestle/internal/functions"
+	"github.com/trestle-cv/trestle/internal/jobs"
+	"github.com/trestle-cv/trestle/internal/storetest"
+	"github.com/trestle-cv/trestle/internal/webhooks"
 )
 
 // TestWebhookFunctionTargetLifecycle exercises webhook and function target

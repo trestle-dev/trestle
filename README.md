@@ -22,9 +22,20 @@ Its stable HTTP/JSON/SSE contracts are intended to work from browsers, mobile
 applications, and trusted backends written in any language.
 
 For a complete external application, see
-[Incident Desk](https://github.com/trestle-dev/trestle-example). It combines
+[Incident Desk](https://github.com/trestle-cv/trestle-example). It combines
 application users, collection rules, typed records, realtime SSE and files
 without importing Trestle packages or opening the SQLite database.
+
+## Module path migration
+
+Releases through v0.1.2 used the module identity `github.com/trestle-dev/trestle`.
+Development from v0.1.3 uses `github.com/trestle-cv/trestle`.
+
+- Downstream Go imports must use the new `github.com/trestle-cv/trestle` path
+  when upgrading.
+- Binary installation users are unaffected apart from the corrected download
+  URLs; `install.sh`, `download.sh` and `update.sh` now default to the
+  `trestle-cv` release channel.
 
 Trestle v0.1.2 is the current stable public-preview release: checkpoints CP00-CP22 and all
 ten CP23 hardening campaigns are implemented,

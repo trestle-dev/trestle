@@ -14,16 +14,16 @@ import (
 	"strings"
 	"time"
 
-	"github.com/trestle-dev/trestle/internal/adminauth"
-	"github.com/trestle-dev/trestle/internal/appauth"
-	"github.com/trestle-dev/trestle/internal/audit"
-	"github.com/trestle-dev/trestle/internal/collections"
-	"github.com/trestle-dev/trestle/internal/events"
-	"github.com/trestle-dev/trestle/internal/httperr"
-	"github.com/trestle-dev/trestle/internal/identities"
-	querylang "github.com/trestle-dev/trestle/internal/query"
-	"github.com/trestle-dev/trestle/internal/rules"
-	"github.com/trestle-dev/trestle/internal/store"
+	"github.com/trestle-cv/trestle/internal/adminauth"
+	"github.com/trestle-cv/trestle/internal/appauth"
+	"github.com/trestle-cv/trestle/internal/audit"
+	"github.com/trestle-cv/trestle/internal/collections"
+	"github.com/trestle-cv/trestle/internal/events"
+	"github.com/trestle-cv/trestle/internal/httperr"
+	"github.com/trestle-cv/trestle/internal/identities"
+	querylang "github.com/trestle-cv/trestle/internal/query"
+	"github.com/trestle-cv/trestle/internal/rules"
+	"github.com/trestle-cv/trestle/internal/store"
 )
 
 type Handler struct {

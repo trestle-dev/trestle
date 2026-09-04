@@ -11,17 +11,17 @@ import (
 	"strings"
 	"testing"
 
-	"github.com/trestle-dev/trestle/internal/adminauth"
-	"github.com/trestle-dev/trestle/internal/appauth"
-	"github.com/trestle-dev/trestle/internal/audit"
-	"github.com/trestle-dev/trestle/internal/collections"
-	"github.com/trestle-dev/trestle/internal/functions"
-	"github.com/trestle-dev/trestle/internal/identities"
-	"github.com/trestle-dev/trestle/internal/jobs"
-	"github.com/trestle-dev/trestle/internal/rules"
-	"github.com/trestle-dev/trestle/internal/store"
-	"github.com/trestle-dev/trestle/internal/storetest"
-	"github.com/trestle-dev/trestle/internal/webhooks"
+	"github.com/trestle-cv/trestle/internal/adminauth"
+	"github.com/trestle-cv/trestle/internal/appauth"
+	"github.com/trestle-cv/trestle/internal/audit"
+	"github.com/trestle-cv/trestle/internal/collections"
+	"github.com/trestle-cv/trestle/internal/functions"
+	"github.com/trestle-cv/trestle/internal/identities"
+	"github.com/trestle-cv/trestle/internal/jobs"
+	"github.com/trestle-cv/trestle/internal/rules"
+	"github.com/trestle-cv/trestle/internal/store"
+	"github.com/trestle-cv/trestle/internal/storetest"
+	"github.com/trestle-cv/trestle/internal/webhooks"
 )
 
 // faultingExecutor fails the first ExecContext (including inside a

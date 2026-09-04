@@ -143,8 +143,8 @@ done
 case $(uname -s) in Linux) os=linux ;; Darwin) os=darwin ;; *) echo "use the Windows release archive on this platform" >&2; exit 1 ;; esac
 case $(uname -m) in x86_64|amd64) arch=amd64 ;; arm64|aarch64) arch=arm64 ;; *) echo "unsupported architecture" >&2; exit 1 ;; esac
 
-release_api=${TRESTLE_RELEASE_API_URL:-https://api.github.com/repos/trestle-dev/trestle/releases/latest}
-release_base=${TRESTLE_RELEASE_BASE:-https://github.com/trestle-dev/trestle/releases/download}
+release_api=${TRESTLE_RELEASE_API_URL:-https://api.github.com/repos/trestle-cv/trestle/releases/latest}
+release_base=${TRESTLE_RELEASE_BASE:-https://github.com/trestle-cv/trestle/releases/download}
 if [ "$version" = latest ]; then
   version=$(curl -fsSL "$release_api" | sed -n 's/.*"tag_name":[[:space:]]*"\([^"]*\)".*/\1/p' | head -1)
   [ -n "$version" ] || { echo "could not resolve the latest release" >&2; exit 1; }

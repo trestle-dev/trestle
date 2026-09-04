@@ -10,9 +10,9 @@ import (
 	"testing"
 	"time"
 
-	"github.com/trestle-dev/trestle/internal/adminauth"
-	"github.com/trestle-dev/trestle/internal/config"
-	"github.com/trestle-dev/trestle/internal/store"
+	"github.com/trestle-cv/trestle/internal/adminauth"
+	"github.com/trestle-cv/trestle/internal/config"
+	"github.com/trestle-cv/trestle/internal/store"
 )
 
 func TestFirstRunDatabaseSelectionPersistsSQLite(t *testing.T) {

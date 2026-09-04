@@ -1,7 +1,7 @@
 #!/bin/sh
 set -eu
 
-site=../trestle-dev.github.io
+site=../trestle-cv.github.io
 actual=$(rg -o 'TRESTLE_[A-Z0-9_]+' internal/config/config.go | sort -u)
 documented=$({ rg -o 'TRESTLE_[A-Z0-9_]+' README.md "$site/content"; } | sed 's/.*://' | sort -u)
 # POSIX shells cannot portably feed two generated streams to comm, so compare
