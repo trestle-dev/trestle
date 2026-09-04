@@ -119,6 +119,10 @@ if "trap cleanup EXIT" not in text:
 # Exactly-seven-character password acceptance exercised.
 if 'pw="1234567"' not in text:
     issues.append("exactly-seven-character password acceptance is not exercised")
+# First-run setup must supply the application registration policy the API
+# requires; a stale payload would make the rehearsal fail on the fresh runner.
+if "applicationRegistrationPolicy" not in text or '"closed"' not in text:
+    issues.append("first-run setup does not provide the application registration policy")
 # No secret/token printed.
 for bad in 'echo "$pw"', 'echo "$GH_TOKEN"', 'cat cj', 'cat setup.json', 'curl -v':
     if bad in text:

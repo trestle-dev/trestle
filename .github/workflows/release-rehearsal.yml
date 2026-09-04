@@ -203,12 +203,12 @@ jobs:
           [ "$(curl -fsS --max-time 3 "$base/admin/v1/setup/status")" = '{"setupRequired":true}' ] || { echo "setupRequired unexpected" >&2; exit 1; }
           # Six-character password rejected; exactly seven-character accepted.
           reject=$(curl -s --max-time 5 -o /dev/null -w '%{http_code}' -X POST "$base/admin/v1/setup" \
-            -H 'Content-Type: application/json' -H "Origin: $base" -d '{"email":"a@example.com","password":"123456"}')
+            -H 'Content-Type: application/json' -H "Origin: $base" -d '{"email":"a@example.com","password":"123456","applicationRegistrationPolicy":"closed"}')
           [ "$reject" = "422" ] || { echo "six-char password not rejected (status $reject)" >&2; exit 1; }
           pw="1234567"
           curl -fsS --max-time 5 -c cj -X POST "$base/admin/v1/setup" \
             -H 'Content-Type: application/json' -H "Origin: $base" \
-            -d "{\"email\":\"admin@example.com\",\"password\":\"$pw\"}" > setup.json
+            -d "{\"email\":\"admin@example.com\",\"password\":\"$pw\",\"applicationRegistrationPolicy\":\"closed\"}" > setup.json
           csrf() { curl -fsS --max-time 3 -b cj "$base/admin/v1/session" | sed -E 's/.*"csrfToken":"([^"]+)".*/\1/' | tr -d '\r\n'; }
           curl -fsS --max-time 3 -b cj "$base/admin/v1/session" | grep -q '"authenticated":true' || { echo "not authenticated after setup" >&2; exit 1; }
           CSRF=$(csrf)
