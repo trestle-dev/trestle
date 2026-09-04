@@ -77,6 +77,13 @@ if "INPUT_VERSION: ${{ inputs.version }}" not in text and "INPUT_VERSION: ${{ gi
     issues.append("version input is not passed through the step environment")
 if "version=$INPUT_VERSION" not in text:
     issues.append("version is not read from the environment variable")
+# The required version input must carry NO default: the operator must enter the
+# exact candidate tag deliberately. A default (e.g. a historical v0.1.0-rc.1)
+# would make the rehearsal runnable without a deliberate choice.
+if "default:" in re.sub(r"description:.*", "", text.split("workflow_dispatch")[1] if "workflow_dispatch" in text else text):
+    issues.append("the rehearsal version input declares a default value")
+if "default: v0.1.0-rc.1" in text:
+    issues.append("the rehearsal version input still defaults to the historical v0.1.0-rc.1")
 # Attestation policy flags: supported set required, --source-sha forbidden,
 # signer-workflow is only the workflow path.
 for flag in "--signer-workflow" "--source-ref" "--source-digest" "--deny-self-hosted-runners":

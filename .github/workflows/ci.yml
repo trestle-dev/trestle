@@ -32,8 +32,8 @@ jobs:
     env:
       TRESTLE_TEST_POSTGRES_URL: postgres://postgres:postgres@127.0.0.1:5432/trestle_test?sslmode=disable
     steps:
-      - uses: actions/checkout@v4
-      - uses: actions/setup-go@v5
+      - uses: actions/checkout@11bd71901bbe5b1630ceea73d27597364c9af683 # v4.2.2
+      - uses: actions/setup-go@0a12ed9d6a96ab950c8f026ed9f722fe0da7ef32 # v5.0.0
         with:
           go-version-file: go.mod
           cache: true
@@ -46,16 +46,20 @@ jobs:
     name: Format, vet, builds and proxy gate
     runs-on: ubuntu-latest
     steps:
-      - uses: actions/checkout@v4
-      - uses: actions/setup-go@v5
+      - uses: actions/checkout@11bd71901bbe5b1630ceea73d27597364c9af683 # v4.2.2
+      - uses: actions/setup-go@0a12ed9d6a96ab950c8f026ed9f722fe0da7ef32 # v5.0.0
         with:
           go-version-file: go.mod
           cache: true
-      - uses: actions/setup-node@v4
+      - uses: actions/setup-node@49933ea5288caeca8642d1e84afbd3f7d6820020 # v4
         with:
           node-version: 24
       - name: Format
         run: test -z "$(gofmt -l .)"
+      - name: Action pins
+        run: sh scripts/action-pins.sh
+      - name: Action pins negative tests
+        run: sh scripts/test-action-pins.sh
       - name: Vet
         run: go vet ./...
       - name: Frontend checks
@@ -101,8 +105,8 @@ jobs:
   systemd-lifecycle:
     runs-on: ubuntu-latest
     steps:
-      - uses: actions/checkout@v4
-      - uses: actions/setup-go@v5
+      - uses: actions/checkout@11bd71901bbe5b1630ceea73d27597364c9af683 # v4.2.2
+      - uses: actions/setup-go@0a12ed9d6a96ab950c8f026ed9f722fe0da7ef32 # v5.0.0
         with:
           go-version-file: go.mod
           cache: true
