@@ -211,12 +211,13 @@ change them.
 
 ## Current release state
 
-- Released: **v0.1.2** (stable public preview), annotated tag at commit
-  `91c644139c40d48d8f48b2a6bd805c3747ff9da7`. Release, read-only verification,
-  website deployment and public dogfood (including the genuine v0.1.1 -> v0.1.2
-  upgrade with byte-identical rollback) are complete.
-- Development: **0.1.3** on `main`. An ordinary development build reports
-  0.1.3 with commit `unknown`; release builds override the default via ldflags
+- Released: **v0.1.3** (stable public preview), annotated tag at commit
+  `7f59ea42eb68629f6277b52ba82064849728883f`. Release, read-only rehearsal and
+  verification, website deployment and public dogfood (clean-host install of
+  `v0.1.3`) are complete. The migration to module identity
+  `github.com/trestle-cv/trestle` takes effect with this release.
+- Development: **0.1.4** on `main`. An ordinary development build reports
+  0.1.4 with commit `unknown`; release builds override the default via ldflags
   and are never confused with the development identity.
 - After publishing a stable release, advance the buildinfo default and its
   exact-version test to the next patch, record the released/development
